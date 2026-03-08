@@ -1,5 +1,5 @@
 [package]
-name = "RueRust"
+name = "rue-rust"
 version = "0.1.0"
 edition = "2024"
 

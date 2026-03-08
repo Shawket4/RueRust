@@ -50,7 +50,7 @@ pub async fn create_user(
 
     // Permission checks
     require_manager(&claims)?;
-    require_same_org(&claims, body.org_id)?;
+    require_same_org(&claims, Some(body.org_id))?;
 
     // branch_managers can only create tellers
     if claims.role == UserRole::BranchManager && body.role != UserRole::Teller {
@@ -171,7 +171,7 @@ pub async fn list_users(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     require_org_admin(&claims)?;
-    require_same_org(&claims, query.org_id)?;
+    require_same_org(&claims, Some(query.org_id))?;
 
     let users = sqlx::query_as::<_, User>(
         r#"

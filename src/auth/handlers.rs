@@ -135,7 +135,7 @@ pub async fn login(
     let token = create_token(
         &secret,
         user.id,
-        user.org_id,         // already Option<Uuid> now
+        user.org_id,         // Option<Uuid> — jwt.rs expects Option now
         user.role.clone(),
         token_branch_id,
         hours,

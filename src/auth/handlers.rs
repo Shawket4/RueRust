@@ -13,7 +13,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    pub org_id:    Uuid,
+    pub org_id:    Option<Uuid>,   // None for super_admin
     pub email:     Option<String>,
     pub password:  Option<String>, // for managers/admins
     pub pin:       Option<String>, // for tellers
@@ -54,13 +54,13 @@ pub async fn login(
                        is_active, last_login_at,
                        created_at, updated_at, deleted_at
                 FROM users
-                WHERE org_id    = $1
-                  AND email     = $2
+                WHERE email = $1
+                  AND ($2::uuid IS NULL OR org_id = $2)
                   AND deleted_at IS NULL
                 "#,
             )
-            .bind(body.org_id)
             .bind(email)
+            .bind(body.org_id)
             .fetch_optional(pool.get_ref())
             .await?
             .ok_or_else(|| AppError::Unauthorized("Invalid credentials".into()))?;
@@ -135,7 +135,7 @@ pub async fn login(
     let token = create_token(
         &secret,
         user.id,
-        user.org_id,
+        user.org_id,         // already Option<Uuid> now
         user.role.clone(),
         token_branch_id,
         hours,

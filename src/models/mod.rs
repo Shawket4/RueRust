@@ -1,0 +1,60 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::Type;
+use uuid::Uuid;
+
+// ── Enums ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[sqlx(type_name = "user_role", rename_all = "snake_case")]
+pub enum UserRole {
+    SuperAdmin,
+    OrgAdmin,
+    BranchManager,
+    Teller,
+}
+
+// ── User ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct User {
+    pub id:            Uuid,
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub email:         Option<String>,
+    pub phone:         Option<String>,
+    pub password_hash: Option<String>,
+    pub pin_hash:      Option<String>,
+    pub role:          UserRole,
+    pub is_active:     bool,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at:    DateTime<Utc>,
+    pub updated_at:    DateTime<Utc>,
+    pub deleted_at:    Option<DateTime<Utc>>,
+}
+
+// Safe public representation — no hashes
+#[derive(Debug, Serialize)]
+pub struct UserPublic {
+    pub id:        Uuid,
+    pub org_id:    Uuid,
+    pub name:      String,
+    pub email:     Option<String>,
+    pub phone:     Option<String>,
+    pub role:      UserRole,
+    pub is_active: bool,
+}
+
+impl From<User> for UserPublic {
+    fn from(u: User) -> Self {
+        Self {
+            id:        u.id,
+            org_id:    u.org_id,
+            name:      u.name,
+            email:     u.email,
+            phone:     u.phone,
+            role:      u.role,
+            is_active: u.is_active,
+        }
+    }
+}

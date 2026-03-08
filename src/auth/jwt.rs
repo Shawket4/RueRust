@@ -7,10 +7,10 @@ use crate::models::UserRole;
 
 pub struct JwtSecret(pub String);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]  // Clone added
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub:       String,
-    pub org_id:    String,
+    pub org_id:    Option<String>, // None for super_admin
     pub role:      UserRole,
     pub branch_id: Option<String>,
     pub exp:       usize,
@@ -18,14 +18,18 @@ pub struct Claims {
 }
 
 impl Claims {
-    pub fn user_id(&self) -> Uuid { Uuid::parse_str(&self.sub).unwrap() }
-    pub fn org_id(&self)   -> Uuid { Uuid::parse_str(&self.org_id).unwrap() }
+    pub fn user_id(&self) -> Uuid {
+        Uuid::parse_str(&self.sub).unwrap()
+    }
+    pub fn org_id(&self) -> Option<Uuid> {
+        self.org_id.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+    }
 }
 
 pub fn create_token(
     secret:    &JwtSecret,
     user_id:   Uuid,
-    org_id:    Uuid,
+    org_id:    Option<Uuid>,
     role:      UserRole,
     branch_id: Option<Uuid>,
     hours:     i64,
@@ -33,7 +37,7 @@ pub fn create_token(
     let now = Utc::now();
     let claims = Claims {
         sub:       user_id.to_string(),
-        org_id:    org_id.to_string(),
+        org_id:    org_id.map(|o| o.to_string()),
         role,
         branch_id: branch_id.map(|b| b.to_string()),
         iat:       now.timestamp() as usize,

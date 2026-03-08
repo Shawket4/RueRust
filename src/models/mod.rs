@@ -19,7 +19,7 @@ pub enum UserRole {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id:            Uuid,
-    pub org_id:        Uuid,
+    pub org_id:        Option<Uuid>,  // NULL for super_admin
     pub name:          String,
     pub email:         Option<String>,
     pub phone:         Option<String>,
@@ -37,7 +37,7 @@ pub struct User {
 #[derive(Debug, Serialize)]
 pub struct UserPublic {
     pub id:        Uuid,
-    pub org_id:    Uuid,
+    pub org_id:    Option<Uuid>,  // NULL for super_admin
     pub name:      String,
     pub email:     Option<String>,
     pub phone:     Option<String>,

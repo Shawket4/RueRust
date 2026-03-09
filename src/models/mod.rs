@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "user_role", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]   // ← add this
+
 pub enum UserRole {
     SuperAdmin,
     OrgAdmin,

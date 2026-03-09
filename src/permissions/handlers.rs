@@ -4,8 +4,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    auth::{guards::require_super_admin, jwt::Claims},
+    auth::{guards::{require_super_admin, require_same_org}, jwt::Claims},
     errors::AppError,
+    models::UserRole,
     permissions::checker::check_permission,
 };
 
@@ -46,7 +47,6 @@ pub struct UpsertRolePermissionRequest {
 }
 
 // ── GET /permissions/user/:user_id ────────────────────────────
-// Get all permission overrides for a specific user
 
 pub async fn get_user_permissions(
     req:     HttpRequest,
@@ -55,6 +55,7 @@ pub async fn get_user_permissions(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "permissions", "read").await?;
+    require_same_org_as_target(pool.get_ref(), &claims, *user_id).await?;
 
     let perms = sqlx::query_as::<_, Permission>(
         "SELECT id, user_id, resource::text, action::text, granted
@@ -68,7 +69,6 @@ pub async fn get_user_permissions(
 }
 
 // ── GET /permissions/matrix/:user_id ─────────────────────────
-// Full resolved matrix: role defaults merged with user overrides
 
 #[derive(Serialize)]
 pub struct PermissionMatrix {
@@ -86,8 +86,8 @@ pub async fn get_permission_matrix(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "permissions", "read").await?;
+    require_same_org_as_target(pool.get_ref(), &claims, *user_id).await?;
 
-    // Get the user's role
     let role: String = sqlx::query_scalar(
         "SELECT role::text FROM users WHERE id = $1 AND deleted_at IS NULL"
     )
@@ -96,7 +96,6 @@ pub async fn get_permission_matrix(
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".into()))?;
 
-    // Get role defaults
     let role_defaults = sqlx::query_as::<_, RolePermission>(
         "SELECT role::text, resource::text, action::text, granted
          FROM role_permissions WHERE role = $1::user_role",
@@ -105,7 +104,6 @@ pub async fn get_permission_matrix(
     .fetch_all(pool.get_ref())
     .await?;
 
-    // Get user overrides
     let user_overrides = sqlx::query_as::<_, Permission>(
         "SELECT id, user_id, resource::text, action::text, granted
          FROM permissions WHERE user_id = $1",
@@ -114,7 +112,6 @@ pub async fn get_permission_matrix(
     .fetch_all(pool.get_ref())
     .await?;
 
-    // All possible resource+action combos
     let resources = [
         "orgs", "branches", "users", "categories",
         "menu_items", "addon_groups", "shifts",
@@ -134,9 +131,7 @@ pub async fn get_permission_matrix(
                 .find(|p| p.resource == resource && p.action == action)
                 .map(|p| p.granted);
 
-            let effective = user_override
-                .or(role_default)
-                .unwrap_or(false);
+            let effective = user_override.or(role_default).unwrap_or(false);
 
             matrix.push(PermissionMatrix {
                 resource: resource.to_string(),
@@ -152,7 +147,6 @@ pub async fn get_permission_matrix(
 }
 
 // ── PUT /permissions/user/:user_id ────────────────────────────
-// Upsert a single permission override for a user
 
 pub async fn upsert_user_permission(
     req:     HttpRequest,
@@ -162,6 +156,7 @@ pub async fn upsert_user_permission(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "permissions", "update").await?;
+    require_same_org_as_target(pool.get_ref(), &claims, *user_id).await?;
 
     let perm = sqlx::query_as::<_, Permission>(
         r#"
@@ -183,7 +178,6 @@ pub async fn upsert_user_permission(
 }
 
 // ── DELETE /permissions/user/:user_id/resource/:resource/action/:action
-// Remove a user override (falls back to role default)
 
 pub async fn delete_user_permission(
     req:  HttpRequest,
@@ -192,8 +186,8 @@ pub async fn delete_user_permission(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "permissions", "delete").await?;
-
     let (user_id, resource, action) = path.into_inner();
+    require_same_org_as_target(pool.get_ref(), &claims, user_id).await?;
 
     sqlx::query(
         "DELETE FROM permissions WHERE user_id = $1
@@ -210,7 +204,6 @@ pub async fn delete_user_permission(
 }
 
 // ── GET /permissions/roles ────────────────────────────────────
-// Get all role defaults
 
 pub async fn get_role_permissions(
     req:  HttpRequest,
@@ -230,7 +223,6 @@ pub async fn get_role_permissions(
 }
 
 // ── PUT /permissions/roles  (super_admin only) ────────────────
-// Update a role default
 
 pub async fn upsert_role_permission(
     req:  HttpRequest,
@@ -259,11 +251,33 @@ pub async fn upsert_role_permission(
     Ok(HttpResponse::Ok().json(perm))
 }
 
-// ── Helper ────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
     req.extensions()
         .get::<Claims>()
         .cloned()
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
+}
+
+/// Ensure the target user belongs to the same org as the caller.
+/// super_admin bypasses this check entirely.
+async fn require_same_org_as_target(
+    pool:    &PgPool,
+    claims:  &Claims,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    if claims.role == UserRole::SuperAdmin {
+        return Ok(());
+    }
+
+    let target_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM users WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    require_same_org(claims, target_org)
 }

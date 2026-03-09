@@ -164,37 +164,61 @@ pub async fn create_user(
 
 // ── GET /users?org_id=  ───────────────────────────────────────
 
+#[derive(Deserialize)]
+pub struct ListUsersQuery {
+    pub org_id: Option<Uuid>,  // optional — super_admin can omit to get all
+}
+
 pub async fn list_users(
-    req:    HttpRequest,
-    pool:   web::Data<PgPool>,
-    query:  web::Query<ListUsersQuery>,
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    query: web::Query<ListUsersQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     require_org_admin(&claims)?;
-    require_same_org(&claims, Some(query.org_id))?;
 
-    let users = sqlx::query_as::<_, User>(
-        r#"
-        SELECT id, org_id, name, email, phone,
-               password_hash, pin_hash, role,
-               is_active, last_login_at,
-               created_at, updated_at, deleted_at
-        FROM users
-        WHERE org_id = $1 AND deleted_at IS NULL
-        ORDER BY name
-        "#,
-    )
-    .bind(query.org_id)
-    .fetch_all(pool.get_ref())
-    .await?;
+    // Non-super-admins must be scoped to their own org
+    let org_id = if claims.role == UserRole::SuperAdmin {
+        query.org_id  // can be None (all orgs) or Some (filtered)
+    } else {
+        let own = claims.org_id()
+            .ok_or_else(|| AppError::Forbidden("No org assigned".into()))?;
+        Some(own)
+    };
+
+    let users = match org_id {
+        Some(oid) => sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, org_id, name, email, phone,
+                   password_hash, pin_hash, role,
+                   is_active, last_login_at,
+                   created_at, updated_at, deleted_at
+            FROM users
+            WHERE org_id = $1 AND deleted_at IS NULL
+            ORDER BY name
+            "#,
+        )
+        .bind(oid)
+        .fetch_all(pool.get_ref())
+        .await?,
+
+        None => sqlx::query_as::<_, User>(
+            r#"
+            SELECT id, org_id, name, email, phone,
+                   password_hash, pin_hash, role,
+                   is_active, last_login_at,
+                   created_at, updated_at, deleted_at
+            FROM users
+            WHERE deleted_at IS NULL
+            ORDER BY name
+            "#,
+        )
+        .fetch_all(pool.get_ref())
+        .await?,
+    };
 
     let public: Vec<UserPublic> = users.into_iter().map(Into::into).collect();
     Ok(HttpResponse::Ok().json(public))
-}
-
-#[derive(Deserialize)]
-pub struct ListUsersQuery {
-    pub org_id: Uuid,
 }
 
 // ── GET /users/:id  ───────────────────────────────────────────

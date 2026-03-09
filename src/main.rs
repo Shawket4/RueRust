@@ -3,8 +3,10 @@ mod db;
 mod errors;
 mod models;
 mod orgs;
+mod permissions;
 mod users;
 
+use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
@@ -31,15 +33,23 @@ async fn main() -> std::io::Result<()> {
     let pool       = web::Data::new(pool);
     let jwt_secret = web::Data::new(auth::jwt::JwtSecret(jwt_secret));
 
-    tracing::info!("Starting rue-rust on 0.0.0.0:8080");
+    tracing::info!("Starting rue-rust on 0.0.0.0:8081");
 
     HttpServer::new(move || {
+        let cors = Cors::default()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .app_data(pool.clone())
             .app_data(jwt_secret.clone())
             .configure(auth::routes::configure)
             .configure(orgs::routes::configure)
             .configure(users::routes::configure)
+            .configure(permissions::routes::configure)
     })
     .bind("0.0.0.0:8080")?
     .run()

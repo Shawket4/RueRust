@@ -654,13 +654,13 @@ pub async fn create_option_group(
     require_same_org(&claims, Some(item.org_id))?;
 
     let row = sqlx::query_as::<_, DrinkOptionGroup>(
-        r#"
-        INSERT INTO drink_option_groups
-            (menu_item_id, type, selection_type, is_required, min_selections, display_order)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, menu_item_id, type as group_type, selection_type::text,
-                  is_required, min_selections, display_order
-        "#,
+       r#"
+INSERT INTO drink_option_groups
+    (menu_item_id, type, selection_type, is_required, min_selections, display_order)
+VALUES ($1, $2::text::addon_selection, $3::text::addon_selection, $4, $5, $6)
+RETURNING id, menu_item_id, type as group_type, selection_type::text,
+          is_required, min_selections, display_order
+"#,
     )
     .bind(*id)
     .bind(&body.group_type)
@@ -690,7 +690,7 @@ pub async fn update_option_group(
     let row = sqlx::query_as::<_, DrinkOptionGroup>(
         r#"
         UPDATE drink_option_groups SET
-            selection_type = COALESCE($3::addon_selection, selection_type),
+            selection_type = COALESCE($3::text::addon_selection, selection_type),
             is_required    = COALESCE($4, is_required),
             min_selections = COALESCE($5, min_selections),
             display_order  = COALESCE($6, display_order)

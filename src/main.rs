@@ -6,6 +6,7 @@ mod orgs;
 mod permissions;
 mod users;
 mod branches;
+mod menu;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
@@ -52,6 +53,7 @@ async fn main() -> std::io::Result<()> {
             .configure(users::routes::configure)
             .configure(permissions::routes::configure)
             .configure(branches::routes::configure)
+            .configure(menu::routes::configure)
     })
     .bind("0.0.0.0:8080")?
     .run()

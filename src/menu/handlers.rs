@@ -657,7 +657,7 @@ pub async fn create_option_group(
        r#"
 INSERT INTO drink_option_groups
     (menu_item_id, type, selection_type, is_required, min_selections, display_order)
-VALUES ($1, $2::text::addon_selection, $3::text::addon_selection, $4, $5, $6)
+VALUES ($1, $2, $3::text::addon_selection, $4, $5, $6)
 RETURNING id, menu_item_id, type as group_type, selection_type::text,
           is_required, min_selections, display_order
 "#,

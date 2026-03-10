@@ -27,7 +27,9 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/{item_id}/option-groups/{group_id}",               web::delete().to(delete_option_group))
                 .route("/{item_id}/option-groups/{group_id}/items",         web::post().to(add_option_item))
                 .route("/{item_id}/option-groups/{group_id}/items/{oi_id}", web::patch().to(update_option_item))
-                .route("/{item_id}/option-groups/{group_id}/items/{oi_id}", web::delete().to(delete_option_item)),
+                .route("/{item_id}/option-groups/{group_id}/items/{oi_id}", web::delete().to(delete_option_item))
+                .route("/{id}/sizes",          web::post().to(upsert_size))
+                .route("/{id}/sizes/{sid}",    web::delete().to(delete_size))
         )
         // Addon items
         .service(

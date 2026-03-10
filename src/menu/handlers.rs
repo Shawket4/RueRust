@@ -104,6 +104,13 @@ pub struct DrinkOptionItemFull {
     pub addon_type:     String,
 }
 
+#[derive(Deserialize)]
+pub struct UpsertSizeRequest {
+    pub label:          String,
+    pub price_override: i32,
+    pub display_order:  Option<i32>,
+}
+
 // ── Request types ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -920,4 +927,58 @@ async fn fetch_option_groups_full(
     }
 
     Ok(result)
+}
+
+pub async fn upsert_size(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<UpsertSizeRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    let row = sqlx::query_as::<_, ItemSize>(
+        r#"
+        INSERT INTO item_sizes (menu_item_id, label, price_override, display_order)
+        VALUES ($1, $2::item_size, $3, $4)
+        ON CONFLICT (menu_item_id, label) DO UPDATE SET
+            price_override = EXCLUDED.price_override,
+            display_order  = EXCLUDED.display_order,
+            is_active      = TRUE
+        RETURNING id, menu_item_id, label::text, price_override, display_order, is_active
+        "#,
+    )
+    .bind(*id)
+    .bind(&body.label)
+    .bind(body.price_override)
+    .bind(body.display_order.unwrap_or(0))
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+pub async fn delete_size(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, AppError> {
+    let claims         = extract_claims(&req)?;
+    let (item_id, sid) = path.into_inner();
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    sqlx::query("DELETE FROM item_sizes WHERE id = $1 AND menu_item_id = $2")
+        .bind(sid)
+        .bind(item_id)
+        .execute(pool.get_ref())
+        .await?;
+
+    Ok(HttpResponse::NoContent().finish())
 }

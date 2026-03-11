@@ -351,6 +351,71 @@ pub async fn initiate_transfer(
 
     tx.commit().await?;
 
+    // Auto-confirm if caller is org_admin or super_admin —
+    // they manage both branches so no confirmation needed
+    if claims.role == UserRole::OrgAdmin || claims.role == UserRole::SuperAdmin {
+        let mut tx2 = pool.get_ref().begin().await?;
+
+        // Add stock to destination
+        sqlx::query(
+            r#"
+            INSERT INTO inventory_items (branch_id, name, unit, current_stock, reorder_threshold)
+            SELECT $2, name, unit, 0, reorder_threshold
+            FROM inventory_items WHERE id = $1
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(body.inventory_item_id)
+        .bind(body.destination_branch_id)
+        .execute(&mut *tx2)
+        .await?;
+
+        sqlx::query(
+            "UPDATE inventory_items SET current_stock = current_stock + $1 WHERE id = $2 AND branch_id = $3"
+        )
+        .bind(body.quantity)
+        .bind(body.inventory_item_id)
+        .bind(body.destination_branch_id)
+        .execute(&mut *tx2)
+        .await?;
+
+        // Mark transfer as completed
+        sqlx::query(
+            r#"
+            UPDATE inventory_transfers SET
+                status             = 'completed'::transfer_status,
+                quantity_confirmed = $2,
+                confirmed_by       = $3,
+                confirmed_at       = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(transfer.id)
+        .bind(body.quantity)
+        .bind(claims.user_id())
+        .execute(&mut *tx2)
+        .await?;
+
+        // Log transfer_in adjustment on destination
+        sqlx::query(
+            r#"
+            INSERT INTO inventory_adjustments
+                (branch_id, inventory_item_id, type, quantity, note, transfer_id, adjusted_by)
+            VALUES ($1, $2, 'transfer_in'::inventory_adjustment_type, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(body.destination_branch_id)
+        .bind(body.inventory_item_id)
+        .bind(body.quantity)
+        .bind(format!("Auto-confirmed transfer from branch {}", body.source_branch_id))
+        .bind(transfer.id)
+        .bind(claims.user_id())
+        .execute(&mut *tx2)
+        .await?;
+
+        tx2.commit().await?;
+    }
+
     Ok(HttpResponse::Created().json(transfer))
 }
 

@@ -612,12 +612,26 @@ pub async fn confirm_transfer(
     .await?
     .flatten();
 
-    let dest_item_id = dest_item_id.ok_or_else(|| {
-        AppError::BadRequest(
-            "No matching inventory item found on destination branch. \
-             Please create the item there first.".into(),
-        )
-    })?;
+    let dest_item_id = match dest_item_id {
+        Some(id) => id,
+        None => {
+            // Auto-create the item on the destination branch, copying name/unit/thresholds
+            sqlx::query_scalar(
+                r#"
+                INSERT INTO inventory_items
+                    (branch_id, name, unit, current_stock, reorder_threshold, cost_per_unit)
+                SELECT $2, name, unit, 0, reorder_threshold, cost_per_unit
+                FROM inventory_items
+                WHERE id = $1
+                RETURNING id
+                "#,
+            )
+            .bind(transfer.inventory_item_id)
+            .bind(transfer.destination_branch_id)
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
 
     // Add to destination stock
     sqlx::query(

@@ -1,5 +1,4 @@
 use sqlx::PgPool;
-use uuid::Uuid;
 use crate::{auth::jwt::Claims, errors::AppError, models::UserRole};
 
 /// Check if a user has permission for a resource+action.

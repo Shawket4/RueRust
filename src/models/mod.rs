@@ -18,6 +18,7 @@ pub enum UserRole {
 
 // ── User ─────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id:            Uuid,

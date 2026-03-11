@@ -1,5 +1,4 @@
 mod auth;
-mod db;
 mod errors;
 mod models;
 mod orgs;
@@ -7,6 +6,13 @@ mod permissions;
 mod users;
 mod branches;
 mod menu;
+mod inventory;
+mod recipes;
+mod adjustments;
+mod soft_serve;
+mod shifts;
+mod orders;
+mod reports;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
@@ -54,6 +60,13 @@ async fn main() -> std::io::Result<()> {
             .configure(permissions::routes::configure)
             .configure(branches::routes::configure)
             .configure(menu::routes::configure)
+            .configure(inventory::routes::configure)
+            .configure(recipes::routes::configure)
+            .configure(adjustments::routes::configure)
+            .configure(soft_serve::routes::configure)
+            .configure(shifts::routes::configure)
+            .configure(orders::routes::configure)
+            .configure(reports::routes::configure)
     })
     .bind("0.0.0.0:8080")?
     .run()

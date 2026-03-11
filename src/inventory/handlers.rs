@@ -147,13 +147,13 @@ pub async fn update_item(
 
     let item = sqlx::query_as::<_, InventoryItem>(
         r#"
-       UPDATE inventory_items SET
-    name              = COALESCE($2, name),
-    unit              = COALESCE($3::inventory_unit, unit),
-    current_stock     = COALESCE($4, current_stock),   // ← add this
-    reorder_threshold = COALESCE($5, reorder_threshold),
-    cost_per_unit     = COALESCE($6, cost_per_unit),
-    is_active         = COALESCE($7, is_active)
+        UPDATE inventory_items SET
+            name              = COALESCE($2, name),
+            unit              = COALESCE($3::inventory_unit, unit),
+            current_stock     = COALESCE($4, current_stock),
+            reorder_threshold = COALESCE($5, reorder_threshold),
+            cost_per_unit     = COALESCE($6, cost_per_unit),
+            is_active         = COALESCE($7, is_active)
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, branch_id, name, unit::text, current_stock,
                   reorder_threshold, cost_per_unit, is_active,

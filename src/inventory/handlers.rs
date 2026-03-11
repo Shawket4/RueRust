@@ -30,7 +30,8 @@ pub struct InventoryItem {
 #[derive(Deserialize)]
 pub struct CreateItemRequest {
     pub name:              String,
-    pub unit:              String,   // g | kg | ml | l | pcs
+    pub unit:              String,
+    pub current_stock:     Option<f64>,   // ← add this
     pub reorder_threshold: Option<f64>,
     pub cost_per_unit:     Option<i32>,
 }
@@ -39,6 +40,7 @@ pub struct CreateItemRequest {
 pub struct UpdateItemRequest {
     pub name:              Option<String>,
     pub unit:              Option<String>,
+    pub current_stock:     Option<f64>,   // ← add this
     pub reorder_threshold: Option<f64>,
     pub cost_per_unit:     Option<i32>,
     pub is_active:         Option<bool>,
@@ -61,8 +63,8 @@ pub async fn create_item(
     let item = sqlx::query_as::<_, InventoryItem>(
         r#"
         INSERT INTO inventory_items
-            (branch_id, name, unit, reorder_threshold, cost_per_unit)
-        VALUES ($1, $2, $3::inventory_unit, $4, $5)
+    (branch_id, name, unit, current_stock, reorder_threshold, cost_per_unit)
+VALUES ($1, $2, $3::inventory_unit, $4, $5, $6)
         RETURNING id, branch_id, name, unit::text, current_stock,
                   reorder_threshold, cost_per_unit, is_active,
                   created_at, updated_at
@@ -71,6 +73,7 @@ pub async fn create_item(
     .bind(*branch_id)
     .bind(&body.name)
     .bind(&body.unit)
+    .bind(body.current_stock.unwrap_or(0.0))
     .bind(body.reorder_threshold.unwrap_or(0.0))
     .bind(body.cost_per_unit.unwrap_or(0))
     .fetch_one(pool.get_ref())
@@ -144,12 +147,13 @@ pub async fn update_item(
 
     let item = sqlx::query_as::<_, InventoryItem>(
         r#"
-        UPDATE inventory_items SET
-            name              = COALESCE($2, name),
-            unit              = COALESCE($3::inventory_unit, unit),
-            reorder_threshold = COALESCE($4, reorder_threshold),
-            cost_per_unit     = COALESCE($5, cost_per_unit),
-            is_active         = COALESCE($6, is_active)
+       UPDATE inventory_items SET
+    name              = COALESCE($2, name),
+    unit              = COALESCE($3::inventory_unit, unit),
+    current_stock     = COALESCE($4, current_stock),   // ← add this
+    reorder_threshold = COALESCE($5, reorder_threshold),
+    cost_per_unit     = COALESCE($6, cost_per_unit),
+    is_active         = COALESCE($7, is_active)
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, branch_id, name, unit::text, current_stock,
                   reorder_threshold, cost_per_unit, is_active,
@@ -159,6 +163,7 @@ pub async fn update_item(
     .bind(*item_id)
     .bind(&body.name)
     .bind(&body.unit)
+    .bind(body.current_stock)
     .bind(body.reorder_threshold)
     .bind(body.cost_per_unit)
     .bind(body.is_active)

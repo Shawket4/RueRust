@@ -41,6 +41,7 @@ pub struct User {
 pub struct UserPublic {
     pub id:        Uuid,
     pub org_id:    Option<Uuid>,  // NULL for super_admin
+    pub branch_id: Option<Uuid>,
     pub name:      String,
     pub email:     Option<String>,
     pub phone:     Option<String>,
@@ -53,6 +54,7 @@ impl From<User> for UserPublic {
         Self {
             id:        u.id,
             org_id:    u.org_id,
+            branch_id: None,       // ← add (populated after query)
             name:      u.name,
             email:     u.email,
             phone:     u.phone,

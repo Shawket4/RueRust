@@ -13,11 +13,12 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
-    pub org_id:    Option<Uuid>,   // None for super_admin
+    pub org_id:    Option<Uuid>,
     pub email:     Option<String>,
-    pub password:  Option<String>, // for managers/admins
-    pub pin:       Option<String>, // for tellers
-    pub branch_id: Option<Uuid>,
+    pub password:  Option<String>,
+    pub pin:       Option<String>,
+    pub name:      Option<String>,  // ← add this
+    pub branch_id: Option<Uuid>,    // keep optional, unused for teller login now
 }
 
 #[derive(Serialize)]
@@ -77,32 +78,27 @@ pub async fn login(
 
         // PIN login (tellers only)
         (None, Some(pin)) => {
-            let branch_id = body.branch_id.ok_or_else(|| {
-                AppError::BadRequest("branch_id is required for PIN login".into())
+            let name = body.name.as_deref().ok_or_else(|| {
+                AppError::BadRequest("name is required for PIN login".into())
             })?;
-
-            // Load all active tellers for this branch and find the matching PIN
+        
             let tellers = sqlx::query_as::<_, User>(
                 r#"
-                SELECT u.id, u.org_id, u.name, u.email, u.phone,
-                       u.password_hash, u.pin_hash, u.role,
-                       u.is_active, u.last_login_at,
-                       u.created_at, u.updated_at, u.deleted_at
-                FROM users u
-                JOIN user_branch_assignments uba ON uba.user_id = u.id
-                WHERE u.org_id     = $1
-                  AND uba.branch_id = $2
-                  AND u.role        = 'teller'
-                  AND u.pin_hash   IS NOT NULL
-                  AND u.is_active  = TRUE
-                  AND u.deleted_at IS NULL
+                SELECT id, org_id, name, email, phone,
+                       password_hash, pin_hash, role,
+                       is_active, last_login_at,
+                       created_at, updated_at, deleted_at
+                FROM users
+                WHERE LOWER(name) = LOWER($1)
+                  AND pin_hash    IS NOT NULL
+                  AND is_active   = TRUE
+                  AND deleted_at  IS NULL
                 "#,
             )
-            .bind(body.org_id)
-            .bind(branch_id)
+            .bind(name)
             .fetch_all(pool.get_ref())
             .await?;
-
+        
             tellers
                 .into_iter()
                 .find(|u| {
@@ -148,10 +144,20 @@ pub async fn login(
         .execute(pool.get_ref())
         .await?;
 
-    Ok(HttpResponse::Ok().json(LoginResponse {
-        token,
-        user: user.into(),
-    }))
+        let branch_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT branch_id FROM user_branch_assignments WHERE user_id = $1 LIMIT 1"
+        )
+        .bind(user.id)
+        .fetch_optional(pool.get_ref())
+        .await?;
+        
+        let mut user_public = UserPublic::from(user);
+        user_public.branch_id = branch_id;
+        
+        Ok(HttpResponse::Ok().json(LoginResponse {
+            token,
+            user: user_public,
+        }))
 }
 
 // ── GET /auth/me ─────────────────────────────────────────────
@@ -181,5 +187,15 @@ pub async fn me(
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".into()))?;
 
-    Ok(HttpResponse::Ok().json(MeResponse { user: user.into() }))
+    let branch_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT branch_id FROM user_branch_assignments WHERE user_id = $1 LIMIT 1"
+    )
+    .bind(user.id)
+    .fetch_optional(pool.get_ref())
+    .await?;
+
+    let mut user_public = UserPublic::from(user);
+    user_public.branch_id = branch_id;
+
+    Ok(HttpResponse::Ok().json(MeResponse { user: user_public }))
 }

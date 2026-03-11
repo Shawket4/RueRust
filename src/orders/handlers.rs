@@ -273,39 +273,42 @@ pub async fn create_order(
             let is_large = size == "large" || size == "extra_large";
 
             // Check pool exists and has serves
-            let pool_row: Option<(Uuid, i32, i32, bool)> = sqlx::query_as(
-                "SELECT id, small_serves, large_serves, low_stock_flag FROM soft_serve_serve_pools WHERE branch_id = $1 AND menu_item_id = $2"
+            let pool_row: Option<(Uuid, sqlx::types::BigDecimal, sqlx::types::BigDecimal, bool)> = sqlx::query_as(
+                "SELECT id, total_units, large_ratio, low_stock_flag FROM soft_serve_serve_pools WHERE branch_id = $1 AND menu_item_id = $2"
             )
             .bind(body.branch_id)
             .bind(item_input.menu_item_id)
             .fetch_optional(pool.get_ref())
             .await?;
-
             if pool_row.is_none() {
                 return Err(AppError::BadRequest(format!(
                     "No serve pool found for soft serve item {}. Please log a batch first.",
                     item_input.menu_item_id
                 )));
             }
-
-            let (_, small_serves, large_serves, _) = pool_row.unwrap();
-            let available = if is_large { large_serves } else { small_serves };
-
-            if available < item_input.quantity {
+            let (_, total_units, large_ratio, _) = pool_row.unwrap();
+            let total_units_f: f64 = total_units.to_string().parse().unwrap_or(0.0);
+            let large_ratio_f: f64 = large_ratio.to_string().parse().unwrap_or(1.5);
+            let units_per_serve = if is_large { large_ratio_f } else { 1.0 };
+            let units_needed = units_per_serve * item_input.quantity as f64;
+            if total_units_f < units_needed {
+                let available = if is_large {
+                    (total_units_f / large_ratio_f).floor() as i32
+                } else {
+                    total_units_f.floor() as i32
+                };
                 return Err(AppError::BadRequest(format!(
                     "Insufficient serves in pool. Available: {}, Requested: {}",
                     available, item_input.quantity
                 )));
             }
-
             // Mark for pool deduction (handled after order insert)
             item_deductions.push(InventoryDeduction {
-                inventory_item_id: item_input.menu_item_id, // use menu_item_id as placeholder
-                quantity:          item_input.quantity as f64,
+                inventory_item_id: item_input.menu_item_id,
+                quantity:          units_needed,
                 source:            if is_large { "soft_serve_pool_large".into() } else { "soft_serve_pool_small".into() },
             });
         }
-
         // ── Resolve addons ────────────────────────────────────
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
@@ -530,38 +533,20 @@ pub async fn create_order(
         for deduction in &resolved.deductions {
             if deduction.source.starts_with("soft_serve_pool") {
                 // Deduct from serve pool
-                let is_large = deduction.source == "soft_serve_pool_large";
-                if is_large {
-                    sqlx::query(
-                        r#"
-                        UPDATE soft_serve_serve_pools
-                        SET large_serves   = GREATEST(0, large_serves - $1),
-                            low_stock_flag = (GREATEST(0, large_serves - $1) = 0 AND small_serves = 0),
-                            updated_at     = NOW()
-                        WHERE branch_id = $2 AND menu_item_id = $3
-                        "#,
-                    )
-                    .bind(deduction.quantity as i32)
-                    .bind(body.branch_id)
-                    .bind(resolved.menu_item_id)
-                    .execute(&mut *tx)
-                    .await?;
-                } else {
-                    sqlx::query(
-                        r#"
-                        UPDATE soft_serve_serve_pools
-                        SET small_serves   = GREATEST(0, small_serves - $1),
-                            low_stock_flag = (GREATEST(0, small_serves - $1) = 0 AND large_serves = 0),
-                            updated_at     = NOW()
-                        WHERE branch_id = $2 AND menu_item_id = $3
-                        "#,
-                    )
-                    .bind(deduction.quantity as i32)
-                    .bind(body.branch_id)
-                    .bind(resolved.menu_item_id)
-                    .execute(&mut *tx)
-                    .await?;
-                }
+                sqlx::query(
+                    r#"
+                    UPDATE soft_serve_serve_pools
+                    SET total_units    = GREATEST(0, total_units - $1),
+                        low_stock_flag = (GREATEST(0, total_units - $1) < large_ratio),
+                        updated_at     = NOW()
+                    WHERE branch_id = $2 AND menu_item_id = $3
+                    "#,
+                )
+                .bind(deduction.quantity)
+                .bind(body.branch_id)
+                .bind(resolved.menu_item_id)
+                .execute(&mut *tx)
+                .await?;
 
                 // Log to deduction log using order_item_id as reference
                 sqlx::query(

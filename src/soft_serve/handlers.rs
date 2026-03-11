@@ -14,28 +14,30 @@ use crate::{
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ServePool {
-    pub id:            Uuid,
-    pub branch_id:     Uuid,
-    pub menu_item_id:  Uuid,
-    pub item_name:     String,
-    pub small_serves:  i32,
-    pub large_serves:  i32,
+    pub id:             Uuid,
+    pub branch_id:      Uuid,
+    pub menu_item_id:   Uuid,
+    pub item_name:      String,
+    pub total_units:    sqlx::types::BigDecimal,
+    pub large_ratio:    sqlx::types::BigDecimal,
     pub low_stock_flag: bool,
-    pub updated_at:    chrono::DateTime<chrono::Utc>,
+    pub updated_at:     chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SoftServeBatch {
-    pub id:           Uuid,
-    pub branch_id:    Uuid,
-    pub menu_item_id: Uuid,
-    pub item_name:    String,
-    pub small_serves: i32,
-    pub large_serves: i32,
-    pub logged_by:    Uuid,
+    pub id:             Uuid,
+    pub branch_id:      Uuid,
+    pub menu_item_id:   Uuid,
+    pub item_name:      String,
+    pub small_serves:   i32,
+    pub large_serves:   i32,
+    pub large_ratio:    sqlx::types::BigDecimal,
+    pub total_units:    sqlx::types::BigDecimal,
+    pub logged_by:      Uuid,
     pub logged_by_name: String,
-    pub notes:        Option<String>,
-    pub created_at:   chrono::DateTime<chrono::Utc>,
+    pub notes:          Option<String>,
+    pub created_at:     chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -187,17 +189,24 @@ pub async fn log_batch(
     let mut tx = pool.get_ref().begin().await?;
 
     // Create batch record
+    let large_ratio = if large_serves > 0 {
+        small_serves as f64 / large_serves as f64
+    } else {
+        1.0
+    };
+    let total_units = small_serves as f64 + (large_serves as f64 * large_ratio);
+
     let batch = sqlx::query_as::<_, SoftServeBatch>(
         r#"
         INSERT INTO soft_serve_batches
-            (branch_id, menu_item_id, small_serves, large_serves, logged_by, notes)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (branch_id, menu_item_id, small_serves, large_serves, large_ratio, total_units, logged_by, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING
             id, branch_id, menu_item_id,
             (SELECT name FROM menu_items WHERE id = $2) AS item_name,
-            small_serves, large_serves,
+            small_serves, large_serves, large_ratio, total_units,
             logged_by,
-            (SELECT name FROM users WHERE id = $5) AS logged_by_name,
+            (SELECT name FROM users WHERE id = $7) AS logged_by_name,
             notes, created_at
         "#,
     )
@@ -205,6 +214,8 @@ pub async fn log_batch(
     .bind(body.menu_item_id)
     .bind(small_serves)
     .bind(large_serves)
+    .bind(large_ratio)
+    .bind(total_units)
     .bind(claims.user_id())
     .bind(&body.notes)
     .fetch_one(&mut *tx)
@@ -234,7 +245,7 @@ pub async fn log_batch(
         .bind(*branch_id)
         .bind(inv_item_id)
         .bind(qty)
-        .bind(format!("Soft serve batch — {} serves ({} small, {} large)", small_serves + large_serves, small_serves, large_serves))
+        .bind(format!("Soft serve batch — {:.1} units ({} small, {} large, ratio 1:{:.2})", total_units, small_serves, large_serves, large_ratio))
         .bind(claims.user_id())
         .execute(&mut *tx)
         .await?;
@@ -265,20 +276,20 @@ pub async fn log_batch(
     sqlx::query(
         r#"
         INSERT INTO soft_serve_serve_pools
-            (branch_id, menu_item_id, small_serves, large_serves, low_stock_flag)
+            (branch_id, menu_item_id, total_units, large_ratio, low_stock_flag)
         VALUES ($1, $2, $3, $4, false)
         ON CONFLICT (branch_id, menu_item_id)
         DO UPDATE SET
-            small_serves   = soft_serve_serve_pools.small_serves + EXCLUDED.small_serves,
-            large_serves   = soft_serve_serve_pools.large_serves + EXCLUDED.large_serves,
+            total_units    = soft_serve_serve_pools.total_units + EXCLUDED.total_units,
+            large_ratio    = EXCLUDED.large_ratio,
             low_stock_flag = false,
             updated_at     = NOW()
         "#,
     )
     .bind(*branch_id)
     .bind(body.menu_item_id)
-    .bind(small_serves)
-    .bind(large_serves)
+    .bind(total_units)
+    .bind(large_ratio)
     .execute(&mut *tx)
     .await?;
 
@@ -340,7 +351,7 @@ pub async fn list_serve_pools(
         SELECT
             p.id, p.branch_id, p.menu_item_id,
             m.name AS item_name,
-            p.small_serves, p.large_serves,
+           p.total_units, p.large_ratio,
             p.low_stock_flag, p.updated_at
         FROM soft_serve_serve_pools p
         JOIN menu_items m ON m.id = p.menu_item_id
@@ -373,7 +384,7 @@ pub async fn get_serve_pool(
         SELECT
             p.id, p.branch_id, p.menu_item_id,
             m.name AS item_name,
-            p.small_serves, p.large_serves,
+           p.total_units, p.large_ratio,
             p.low_stock_flag, p.updated_at
         FROM soft_serve_serve_pools p
         JOIN menu_items m ON m.id = p.menu_item_id

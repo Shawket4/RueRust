@@ -317,7 +317,7 @@ pub async fn list_batches(
         SELECT
             b.id, b.branch_id, b.menu_item_id,
             m.name AS item_name,
-            b.small_serves, b.large_serves,
+            b.small_serves, b.large_serves, b.large_ratio, b.total_units,
             b.logged_by,
             u.name AS logged_by_name,
             b.notes, b.created_at

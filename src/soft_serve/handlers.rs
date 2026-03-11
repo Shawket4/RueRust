@@ -194,7 +194,7 @@ pub async fn log_batch(
     } else {
         1.0
     };
-    let total_units = small_serves as f64 + (large_serves as f64 * large_ratio);
+    let total_units = small_serves as f64;
 
     let batch = sqlx::query_as::<_, SoftServeBatch>(
         r#"

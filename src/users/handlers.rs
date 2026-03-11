@@ -346,3 +346,116 @@ fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
         .cloned()
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
+
+#[derive(Deserialize)]
+pub struct UpdateUserRequest {
+    pub name:     Option<String>,
+    pub email:    Option<String>,
+    pub phone:    Option<String>,
+    pub password: Option<String>,
+    pub pin:      Option<String>,
+    pub role:     Option<UserRole>,
+    pub is_active: Option<bool>,
+}
+
+pub async fn update_user(
+    req:     HttpRequest,
+    pool:    web::Data<PgPool>,
+    user_id: web::Path<Uuid>,
+    body:    web::Json<UpdateUserRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    require_manager(&claims)?;
+
+    let existing = sqlx::query_as::<_, User>(
+        "SELECT id, org_id, name, email, phone, password_hash, pin_hash, role,
+                is_active, last_login_at, created_at, updated_at, deleted_at
+         FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(*user_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+
+    require_same_org(&claims, existing.org_id)?;
+
+    // Only org_admin+ can change roles
+    if body.role.is_some() {
+        require_org_admin(&claims)?;
+    }
+
+    // Cannot promote to super_admin unless you are one
+    if body.role == Some(UserRole::SuperAdmin) {
+        require_super_admin(&claims)?;
+    }
+
+    let password_hash = body.password.as_deref()
+        .map(|p| bcrypt::hash(p, bcrypt::DEFAULT_COST))
+        .transpose()
+        .map_err(|_| AppError::Internal)?;
+
+    let pin_hash = body.pin.as_deref()
+        .map(|p| bcrypt::hash(p, bcrypt::DEFAULT_COST))
+        .transpose()
+        .map_err(|_| AppError::Internal)?;
+
+    let user = sqlx::query_as::<_, User>(
+        r#"
+        UPDATE users SET
+            name          = COALESCE($2, name),
+            email         = COALESCE($3, email),
+            phone         = COALESCE($4, phone),
+            role          = COALESCE($5, role),
+            is_active     = COALESCE($6, is_active),
+            password_hash = COALESCE($7, password_hash),
+            pin_hash      = COALESCE($8, pin_hash)
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, org_id, name, email, phone,
+                  password_hash, pin_hash, role,
+                  is_active, last_login_at,
+                  created_at, updated_at, deleted_at
+        "#,
+    )
+    .bind(*user_id)
+    .bind(&body.name)
+    .bind(&body.email)
+    .bind(&body.phone)
+    .bind(&body.role)
+    .bind(body.is_active)
+    .bind(password_hash)
+    .bind(pin_hash)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(UserPublic::from(user)))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct UserBranch {
+    pub branch_id:   Uuid,
+    pub branch_name: String,
+}
+
+pub async fn list_user_branches(
+    req:     HttpRequest,
+    pool:    web::Data<PgPool>,
+    user_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    require_manager(&claims)?;
+
+    let rows = sqlx::query_as::<_, UserBranch>(
+        r#"
+        SELECT uba.branch_id, b.name as branch_name
+        FROM user_branch_assignments uba
+        JOIN branches b ON b.id = uba.branch_id
+        WHERE uba.user_id = $1
+        "#,
+    )
+    .bind(*user_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
+}

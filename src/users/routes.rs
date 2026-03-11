@@ -10,6 +10,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/{id}",                             web::get().to(handlers::get_user))
             .route("/{id}",                             web::delete().to(handlers::delete_user))
             .route("/{id}/branches",                    web::post().to(handlers::assign_branch))
+            .route("/{id}", web::patch().to(handlers::update_user))
+            .route("/{id}/branches", web::get().to(handlers::list_user_branches))
             .route("/{id}/branches/{branch_id}",        web::delete().to(handlers::unassign_branch)),
     );
 }

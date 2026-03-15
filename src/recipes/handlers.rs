@@ -128,8 +128,8 @@ pub async fn upsert_drink_recipe(
         DO UPDATE SET quantity_used = EXCLUDED.quantity_used
         RETURNING id, menu_item_id, size_label::text,
                   inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS unit,
+                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
+                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
                   quantity_used
         "#,
     )
@@ -229,8 +229,8 @@ pub async fn upsert_addon_ingredient(
         DO UPDATE SET quantity_used = EXCLUDED.quantity_used
         RETURNING id, addon_item_id,
                   inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS unit,
+                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
+                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
                   quantity_used
         "#,
     )
@@ -325,8 +325,8 @@ pub async fn upsert_override(
         RETURNING id, drink_option_item_id,
                   size_label::text,
                   inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = EXCLUDED.inventory_item_id) AS unit,
+                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
+                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
                   quantity_used
         "#,
     )

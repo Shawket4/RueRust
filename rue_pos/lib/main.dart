@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'providers/auth_provider.dart';
-import 'providers/shift_provider.dart';
-import 'providers/cart_provider.dart';
-import 'providers/menu_provider.dart';
-import 'router.dart';
+import 'core/providers/auth_provider.dart';
+import 'core/providers/cart_provider.dart';
+import 'core/providers/menu_provider.dart';
+import 'core/providers/order_history_provider.dart';
+import 'core/providers/shift_provider.dart';
+import 'core/router/router.dart';
+import 'core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Force landscape on tablets
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
+    DeviceOrientation.portraitUp,
   ]);
   runApp(const RuePOS());
 }
@@ -29,37 +30,30 @@ class RuePOS extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ShiftProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => MenuProvider()),
+        ChangeNotifierProvider(create: (_) => OrderHistoryProvider()),
       ],
-      child: Builder(
-        builder: (context) {
-          final auth = context.watch<AuthProvider>();
-          if (auth.loading) {
-            return MaterialApp(
-              debugShowCheckedModeBanner: false,
-              home: Scaffold(
-                backgroundColor: const Color(0xFFF9FAFB),
-                body: Center(
-                  child: CircularProgressIndicator(
-                    color: const Color(0xFF1a56db),
-                  ),
-                ),
-              ),
-            );
-          }
-          final router = createRouter(auth);
-          return MaterialApp.router(
+      child: Builder(builder: (ctx) {
+        final auth = ctx.watch<AuthProvider>();
+
+        if (auth.loading) {
+          return MaterialApp(
             debugShowCheckedModeBanner: false,
-            title: 'Rue POS',
-            theme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                  seedColor: const Color(0xFF1a56db)),
-              textTheme: GoogleFonts.interTextTheme(),
-              useMaterial3: true,
+            theme: AppTheme.light,
+            home: const Scaffold(
+              backgroundColor: AppColors.bg,
+              body: Center(child: CircularProgressIndicator(
+                  color: AppColors.primary)),
             ),
-            routerConfig: router,
           );
-        },
-      ),
+        }
+
+        return MaterialApp.router(
+          debugShowCheckedModeBanner: false,
+          title: 'Rue POS',
+          theme: AppTheme.light,
+          routerConfig: buildRouter(auth),
+        );
+      }),
     );
   }
 }

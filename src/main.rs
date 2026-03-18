@@ -45,8 +45,6 @@ async fn main() -> std::io::Result<()> {
     let pool          = web::Data::new(pool);
     let uploads_clone = uploads_dir.clone();
     let bind_addr     = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let https_port    = env::var("HTTPS_PORT").unwrap_or_else(|_| "8443".to_string());
-    let https_addr    = format!("0.0.0.0:{}", https_port);
 
     let tls_config = build_tls_config();
 
@@ -81,9 +79,8 @@ async fn main() -> std::io::Result<()> {
     });
 
     if let Some(tls) = tls_config {
-        tracing::info!("HTTPS on {}", https_addr);
-        tracing::info!("HTTP  on {}", bind_addr);
-        server.bind(&bind_addr)?.bind_rustls_0_23(&https_addr, tls)?.run().await
+        tracing::info!("HTTPS on {}", bind_addr);
+        server.bind_rustls_0_23(&bind_addr, tls)?.run().await
     } else {
         tracing::info!("HTTP on {} (no TLS certs found)", bind_addr);
         server.bind(&bind_addr)?.run().await
@@ -128,4 +125,3 @@ fn build_tls_config() -> Option<rustls::ServerConfig> {
         .map_err(|e| { tracing::warn!("TLS config error: {}", e); e })
         .ok()
 }
-

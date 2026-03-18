@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
+import 'core/providers/branch_provider.dart';
 import 'core/providers/cart_provider.dart';
 import 'core/providers/menu_provider.dart';
 import 'core/providers/order_history_provider.dart';
@@ -24,9 +25,15 @@ class RuePOS extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // BranchProvider is created first so AuthProvider can receive it
+    final branchProvider = BranchProvider();
+
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
+        ChangeNotifierProvider<BranchProvider>.value(value: branchProvider),
+        ChangeNotifierProvider<AuthProvider>(
+          create: (_) => AuthProvider(branchProvider)..init(),
+        ),
         ChangeNotifierProvider(create: (_) => ShiftProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => MenuProvider()),
@@ -41,8 +48,9 @@ class RuePOS extends StatelessWidget {
             theme: AppTheme.light,
             home: const Scaffold(
               backgroundColor: AppColors.bg,
-              body: Center(child: CircularProgressIndicator(
-                  color: AppColors.primary)),
+              body: Center(
+                child: CircularProgressIndicator(color: AppColors.primary),
+              ),
             ),
           );
         }
@@ -57,3 +65,4 @@ class RuePOS extends StatelessWidget {
     );
   }
 }
+

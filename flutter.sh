@@ -508,7 +508,7 @@ Dio _build() {
   d.interceptors.add(InterceptorsWrapper(
     onRequest: (options, handler) {
       if (authToken != null) {
-        options.headers['Authorization'] = 'Bearer \$authToken';
+        options.headers['Authorization'] = 'Bearer $authToken';
       }
       handler.next(options);
     },

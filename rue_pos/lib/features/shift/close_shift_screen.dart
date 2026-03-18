@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../core/api/inventory_api.dart';
 import '../../core/api/shift_api.dart';
@@ -145,6 +144,7 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
   @override
   Widget build(BuildContext context) {
     final shift = context.watch<ShiftProvider>().shift;
+    final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -153,265 +153,442 @@ class _CloseShiftScreenState extends State<CloseShiftScreen> {
           icon: const Icon(Icons.arrow_back_rounded),
           onPressed: () => context.go('/home'),
         ),
-        title: Text('Close Shift',
-            style: cairo(
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
-            )),
+        title: Text(
+          'Close Shift',
+          style:
+              cairo(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: const Color(0xFFF0F0F0)),
+        ),
       ),
       body: shift == null
           ? const Center(child: Text('No open shift'))
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 640),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // ── Shift summary ─────────────────────────
-                      CardContainer(
-                          child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Shift Summary',
-                              style: cairo(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              )),
-                          const SizedBox(height: 12),
-                          LabelValue('Teller', shift.tellerName),
-                          LabelValue('Opening Cash', egp(shift.openingCash)),
-                          LabelValue('Opened At', dateTime(shift.openedAt)),
-                        ],
-                      )),
-                      const SizedBox(height: 16),
-
-                      // ── Cash section ──────────────────────────
-                      CardContainer(
-                          child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Cash Count',
-                              style: cairo(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              )),
-                          const SizedBox(height: 16),
-
-                          // System cash row
-                          Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF8F8F8),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(children: [
-                              Expanded(
-                                  child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('System Cash',
-                                      style: cairo(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.textSecondary,
-                                      )),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Opening + cash orders + movements',
-                                    style: cairo(
-                                      fontSize: 11,
-                                      color: AppColors.textMuted,
-                                    ),
-                                  ),
-                                ],
-                              )),
-                              _loadingCash
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: AppColors.primary,
-                                      ),
-                                    )
-                                  : Text(
-                                      egp(_systemCash),
-                                      style: cairo(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.textPrimary,
-                                      ),
-                                    ),
-                            ]),
-                          ),
-                          const SizedBox(height: 14),
-
-                          // Declared cash input
-                          Text('Actual Cash in Drawer',
-                              style: cairo(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textSecondary,
-                                letterSpacing: 0.3,
-                              )),
-                          const SizedBox(height: 8),
-                          TextField(
-                            controller: _cashCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(
-                                  RegExp(r'^\d+\.?\d{0,2}')),
-                            ],
-                            style: cairo(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary,
-                            ),
-                            decoration: InputDecoration(
-                              prefixText: 'EGP ',
-                              prefixStyle: cairo(
-                                  fontSize: 20, color: AppColors.textSecondary),
-                            ),
-                          ),
-
-                          // Discrepancy indicator
-                          if (!_loadingCash && _cashCtrl.text.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            _DiscrepancyRow(discrepancy: _cashDiscrepancy),
-                          ],
-
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _noteCtrl,
-                            decoration: const InputDecoration(
-                                hintText: 'Cash note (optional)'),
-                          ),
-                        ],
-                      )),
-                      const SizedBox(height: 16),
-
-                      // ── Inventory count ───────────────────────
-                      CardContainer(
-                          child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Inventory Count',
-                              style: cairo(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              )),
-                          const SizedBox(height: 14),
-                          if (_loadingInv)
-                            const Center(
-                              child: Padding(
-                                padding: EdgeInsets.all(16),
-                                child: CircularProgressIndicator(
-                                    color: AppColors.primary),
-                              ),
-                            )
-                          else if (_inv.isEmpty)
-                            Text('No inventory items',
-                                style: cairo(
-                                    fontSize: 13, color: AppColors.textMuted))
-                          else
-                            ..._inv.map((item) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: Row(children: [
-                                    Expanded(
-                                        child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(item.name,
-                                            style: cairo(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.textPrimary,
-                                            )),
-                                        Text(
-                                          'System: ${item.currentStock} ${item.unit}',
-                                          style: cairo(
-                                              fontSize: 12,
-                                              color: AppColors.textSecondary),
-                                        ),
-                                      ],
-                                    )),
-                                    const SizedBox(width: 12),
-                                    SizedBox(
-                                      width: 130,
-                                      child: TextField(
-                                        controller: _ctrs[item.id],
-                                        keyboardType: const TextInputType
-                                            .numberWithOptions(decimal: true),
-                                        textAlign: TextAlign.center,
-                                        style: cairo(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600),
-                                        decoration: InputDecoration(
-                                          suffixText: item.unit,
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 10, vertical: 10),
-                                        ),
-                                      ),
-                                    ),
-                                  ]),
-                                )),
-                        ],
-                      )),
-                      const SizedBox(height: 16),
-
-                      // ── Error ─────────────────────────────────
-                      if (_error != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: AppColors.danger.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(_error!,
-                              style: cairo(
-                                  fontSize: 13, color: AppColors.danger)),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-
-                      // ── Submit ────────────────────────────────
-                      AppButton(
-                        label: 'Close Shift',
-                        variant: BtnVariant.danger,
-                        loading: _submitting,
-                        width: double.infinity,
-                        icon: Icons.lock_outline_rounded,
-                        onTap: _close,
-                      ),
-                      const SizedBox(height: 32),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          : isTablet
+              ? _TabletLayout(state: this, shift: shift)
+              : _PhoneLayout(state: this, shift: shift),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-//  DISCREPANCY ROW
+//  PHONE LAYOUT  (single column)
+// ─────────────────────────────────────────────────────────────
+class _PhoneLayout extends StatelessWidget {
+  final _CloseShiftScreenState state;
+  final dynamic shift;
+  const _PhoneLayout({required this.state, required this.shift});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ShiftSummaryCard(shift: shift),
+              const SizedBox(height: 16),
+              _CashCard(state: state),
+              const SizedBox(height: 16),
+              _InventoryCard(state: state),
+              const SizedBox(height: 16),
+              _SubmitSection(state: state),
+              const SizedBox(height: 32),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TABLET LAYOUT  (two columns)
+// ─────────────────────────────────────────────────────────────
+class _TabletLayout extends StatelessWidget {
+  final _CloseShiftScreenState state;
+  final dynamic shift;
+  const _TabletLayout({required this.state, required this.shift});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(28),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Left column — summary + cash
+          Expanded(
+            child: Column(children: [
+              _ShiftSummaryCard(shift: shift),
+              const SizedBox(height: 16),
+              _CashCard(state: state),
+              const SizedBox(height: 16),
+              _SubmitSection(state: state),
+            ]),
+          ),
+          const SizedBox(width: 20),
+          // Right column — inventory
+          Expanded(
+            child: _InventoryCard(state: state),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SHIFT SUMMARY CARD
+// ─────────────────────────────────────────────────────────────
+class _ShiftSummaryCard extends StatelessWidget {
+  final dynamic shift;
+  const _ShiftSummaryCard({required this.shift});
+
+  @override
+  Widget build(BuildContext context) => CardContainer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(Icons.summarize_outlined,
+                    color: AppColors.primary, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Shift Summary',
+                style: cairo(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            LabelValue('Teller', shift.tellerName),
+            LabelValue('Opening Cash', egp(shift.openingCash)),
+            LabelValue('Opened At', dateTime(shift.openedAt)),
+          ],
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  CASH CARD
+// ─────────────────────────────────────────────────────────────
+class _CashCard extends StatelessWidget {
+  final _CloseShiftScreenState state;
+  const _CashCard({required this.state});
+
+  @override
+  Widget build(BuildContext context) => CardContainer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.success.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(Icons.payments_outlined,
+                    color: AppColors.success, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Cash Count',
+                style: cairo(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 18),
+
+            // System cash info row
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F8F8),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('System Cash',
+                          style: cairo(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary,
+                          )),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Opening + cash orders + movements',
+                        style: cairo(fontSize: 11, color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                state._loadingCash
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.primary,
+                        ),
+                      )
+                    : Text(
+                        egp(state._systemCash),
+                        style: cairo(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+              ]),
+            ),
+            const SizedBox(height: 16),
+
+            Text(
+              'ACTUAL CASH IN DRAWER',
+              style: cairo(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textMuted,
+                letterSpacing: 1.0,
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: state._cashCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}')),
+              ],
+              style: cairo(
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary,
+              ),
+              decoration: InputDecoration(
+                prefixText: 'EGP  ',
+                prefixStyle:
+                    cairo(fontSize: 20, color: AppColors.textSecondary),
+                hintText: '0',
+                hintStyle: cairo(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.border,
+                ),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+              ),
+            ),
+
+            // Discrepancy indicator
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+              child: !state._loadingCash && state._cashCtrl.text.isNotEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: _DiscrepancyRow(
+                        discrepancy: state._cashDiscrepancy,
+                        systemCash: state._systemCash,
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+
+            const SizedBox(height: 14),
+            TextField(
+              controller: state._noteCtrl,
+              decoration: InputDecoration(
+                hintText: 'Cash note (optional)',
+                hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
+                prefixIcon: const Icon(Icons.notes_rounded,
+                    size: 16, color: AppColors.textMuted),
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  INVENTORY CARD
+// ─────────────────────────────────────────────────────────────
+class _InventoryCard extends StatelessWidget {
+  final _CloseShiftScreenState state;
+  const _InventoryCard({required this.state});
+
+  @override
+  Widget build(BuildContext context) => CardContainer(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(Icons.inventory_2_outlined,
+                    color: AppColors.warning, size: 18),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Inventory Count',
+                style: cairo(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            if (state._loadingInv)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
+              )
+            else if (state._inv.isEmpty)
+              Text('No inventory items',
+                  style: cairo(fontSize: 13, color: AppColors.textMuted))
+            else
+              ...state._inv.map(
+                (item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Row(children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(item.name,
+                              style: cairo(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              )),
+                          Text(
+                            'System: ${item.currentStock} ${item.unit}',
+                            style: cairo(
+                                fontSize: 12, color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 130,
+                      child: TextField(
+                        controller: state._ctrs[item.id],
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        textAlign: TextAlign.center,
+                        style: cairo(fontSize: 14, fontWeight: FontWeight.w600),
+                        decoration: InputDecoration(
+                          suffixText: item.unit,
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 10),
+                        ),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+          ],
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  SUBMIT SECTION
+// ─────────────────────────────────────────────────────────────
+class _SubmitSection extends StatelessWidget {
+  final _CloseShiftScreenState state;
+  const _SubmitSection({required this.state});
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            child: state._error != null
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: AppColors.danger.withOpacity(0.2)),
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.error_outline_rounded,
+                            size: 15, color: AppColors.danger),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(state._error!,
+                              style:
+                                  cairo(fontSize: 13, color: AppColors.danger)),
+                        ),
+                      ]),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          AppButton(
+            label: 'Close Shift',
+            variant: BtnVariant.danger,
+            loading: state._submitting,
+            width: double.infinity,
+            icon: Icons.lock_outline_rounded,
+            onTap: state._close,
+          ),
+        ],
+      );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  DISCREPANCY ROW  — now takes systemCash as param (no ancestor lookup)
 // ─────────────────────────────────────────────────────────────
 class _DiscrepancyRow extends StatelessWidget {
   final int discrepancy;
-  const _DiscrepancyRow({required this.discrepancy});
+  final int systemCash;
+  const _DiscrepancyRow({required this.discrepancy, required this.systemCash});
 
   @override
   Widget build(BuildContext context) {
     final isOver = discrepancy > 0;
-    final isUnder = discrepancy < 0;
     final isExact = discrepancy == 0;
 
     final color = isExact
@@ -432,11 +609,12 @@ class _DiscrepancyRow extends StatelessWidget {
             ? 'Over by ${egp(discrepancy.abs())}'
             : 'Short by ${egp(discrepancy.abs())}';
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
         color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color.withOpacity(0.2)),
       ),
       child: Row(children: [
@@ -451,11 +629,8 @@ class _DiscrepancyRow extends StatelessWidget {
         const Spacer(),
         if (!isExact)
           Text(
-            'System: ${egp(context.findAncestorStateOfType<_CloseShiftScreenState>()!._systemCash)}',
-            style: cairo(
-              fontSize: 11,
-              color: color.withOpacity(0.8),
-            ),
+            'System: ${egp(systemCash)}',
+            style: cairo(fontSize: 11, color: color.withOpacity(0.8)),
           ),
       ]),
     );

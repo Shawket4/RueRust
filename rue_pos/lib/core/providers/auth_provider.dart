@@ -3,13 +3,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../api/auth_api.dart';
 import '../api/client.dart';
+import 'branch_provider.dart';
 
 class AuthProvider extends ChangeNotifier {
-  User?   _user;
-  bool    _loading = true;
+  final BranchProvider branchProvider;
 
-  User?  get user    => _user;
-  bool   get loading => _loading;
+  AuthProvider(this.branchProvider);
+
+  User?  _user;
+  bool   _loading = true;
+
+  User?  get user            => _user;
+  bool   get loading         => _loading;
   bool   get isAuthenticated => authToken != null && _user != null;
 
   Future<void> init() async {
@@ -18,6 +23,7 @@ class AuthProvider extends ChangeNotifier {
     if (authToken != null) {
       try {
         _user = await authApi.me();
+        await _loadBranch();
       } catch (_) {
         await _clear();
       }
@@ -32,12 +38,21 @@ class AuthProvider extends ChangeNotifier {
     _user     = User.fromJson(data['user'] as Map<String, dynamic>);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('token', authToken!);
+    await _loadBranch();
     notifyListeners();
   }
 
   Future<void> logout() async {
+    branchProvider.clear();
     await _clear();
     notifyListeners();
+  }
+
+  Future<void> _loadBranch() async {
+    final branchId = _user?.branchId;
+    if (branchId != null) {
+      await branchProvider.load(branchId);
+    }
   }
 
   Future<void> _clear() async {
@@ -47,3 +62,4 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove('token');
   }
 }
+

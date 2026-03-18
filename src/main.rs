@@ -32,6 +32,7 @@ async fn main() -> std::io::Result<()> {
         .init();
 
     let db_url      = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let jwt_secret  = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
     let uploads_dir = env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
 
     fs::create_dir_all(&uploads_dir).expect("Failed to create uploads directory");
@@ -43,8 +44,11 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to connect to PostgreSQL");
 
     let pool          = web::Data::new(pool);
+    let jwt_secret    = web::Data::new(auth::jwt::JwtSecret(jwt_secret));
     let uploads_clone = uploads_dir.clone();
     let bind_addr     = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let https_port    = env::var("HTTPS_PORT").unwrap_or_else(|_| "8443".to_string());
+    let https_addr    = format!("0.0.0.0:{}", https_port);
 
     let tls_config = build_tls_config();
 
@@ -61,6 +65,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(pool.clone())
+            .app_data(jwt_secret.clone())
             .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))
             .configure(auth::routes::configure)
             .configure(orgs::routes::configure)
@@ -79,8 +84,12 @@ async fn main() -> std::io::Result<()> {
     });
 
     if let Some(tls) = tls_config {
-        tracing::info!("HTTPS on {}", bind_addr);
-        server.bind_rustls_0_23(&bind_addr, tls)?.run().await
+        tracing::info!("HTTPS on {} and HTTP on {}", https_addr, bind_addr);
+        server
+            .bind(&bind_addr)?
+            .bind_rustls_0_23(&https_addr, tls)?
+            .run()
+            .await
     } else {
         tracing::info!("HTTP on {} (no TLS certs found)", bind_addr);
         server.bind(&bind_addr)?.run().await

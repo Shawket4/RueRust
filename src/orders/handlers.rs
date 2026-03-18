@@ -106,7 +106,8 @@ pub struct CreateOrderRequest {
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
     pub reason: String,
-}
+
+    pub restore_inventory: Option<bool>,}
 
 #[derive(Deserialize)]
 pub struct ListOrdersQuery {
@@ -434,15 +435,20 @@ pub async fn create_order(
     let tax_amount = (taxable as f64 * tax_rate_f64) as i32;
     let total_amount = taxable + tax_amount;
 
-    // ── Next order number for this branch ─────────────────────
+    let mut tx = pool.get_ref().begin().await?;
+
+    sqlx::query!("SELECT pg_advisory_xact_lock(hashtext($1::text))", body.shift_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    
     let order_number: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE shift_id = $1"
     )
     .bind(body.shift_id)
-    .fetch_one(pool.get_ref())
+    .fetch_one(&mut *tx)
     .await?;
 
-    let mut tx = pool.get_ref().begin().await?;
+
 
     // ── Insert order ──────────────────────────────────────────
     let order = sqlx::query_as::<_, Order>(

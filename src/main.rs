@@ -20,7 +20,7 @@ use actix_files::Files;
 use actix_web::{web, App, HttpServer};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
-use std::env;
+use std::{env, fs};
 use tracing_subscriber::EnvFilter;
 
 #[actix_web::main]
@@ -31,13 +31,10 @@ async fn main() -> std::io::Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let db_url     = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let db_url      = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let uploads_dir = env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
 
-    // Ensure uploads root exists on startup
-    std::fs::create_dir_all(&uploads_dir)
-        .expect("Failed to create uploads directory");
+    fs::create_dir_all(&uploads_dir).expect("Failed to create uploads directory");
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -45,14 +42,18 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to connect to PostgreSQL");
 
-    let pool       = web::Data::new(pool);
-    let jwt_secret = web::Data::new(auth::jwt::JwtSecret(jwt_secret));
-    let uploads_dir_clone = uploads_dir.clone();
+    let pool          = web::Data::new(pool);
+    let uploads_clone = uploads_dir.clone();
+    let bind_addr     = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let https_port    = env::var("HTTPS_PORT").unwrap_or_else(|_| "8443".to_string());
+    let https_addr    = format!("0.0.0.0:{}", https_port);
 
-    tracing::info!("Starting rue-rust on 0.0.0.0:8080");
+    let tls_config = build_tls_config();
+
+    tracing::info!("Starting rue-rust");
     tracing::info!("Uploads directory: {}", uploads_dir);
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let cors = Cors::default()
             .allow_any_origin()
             .allow_any_method()
@@ -62,13 +63,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .app_data(pool.clone())
-            .app_data(jwt_secret.clone())
-            // Static file serving — public, no auth required
-            .service(
-                Files::new("/uploads", &uploads_dir_clone)
-                    // listing disabled by default
-                    .use_last_modified(true),
-            )
+            .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))
             .configure(auth::routes::configure)
             .configure(orgs::routes::configure)
             .configure(users::routes::configure)
@@ -83,8 +78,54 @@ async fn main() -> std::io::Result<()> {
             .configure(orders::routes::configure)
             .configure(reports::routes::configure)
             .configure(uploads::routes::configure)
-    })
-    .bind("0.0.0.0:8080")?
-    .run()
-    .await
+    });
+
+    if let Some(tls) = tls_config {
+        tracing::info!("HTTPS on {}", https_addr);
+        tracing::info!("HTTP  on {}", bind_addr);
+        server.bind(&bind_addr)?.bind_rustls_0_23(&https_addr, tls)?.run().await
+    } else {
+        tracing::info!("HTTP on {} (no TLS certs found)", bind_addr);
+        server.bind(&bind_addr)?.run().await
+    }
 }
+
+fn build_tls_config() -> Option<rustls::ServerConfig> {
+    let cert_file = env::var("SSL_CERT_FILE").ok()?;
+    let key_file  = env::var("SSL_KEY_FILE").ok()?;
+    if cert_file.is_empty() || key_file.is_empty() { return None; }
+
+    let cert_pem = fs::read(&cert_file).ok().or_else(|| {
+        tracing::warn!("SSL_CERT_FILE not found: {}", cert_file); None
+    })?;
+    let key_pem = fs::read(&key_file).ok().or_else(|| {
+        tracing::warn!("SSL_KEY_FILE not found: {}", key_file); None
+    })?;
+
+    let certs: Vec<rustls::pki_types::CertificateDer> =
+        rustls_pemfile::certs(&mut cert_pem.as_slice())
+            .filter_map(|c| c.ok()).collect();
+
+    let mut keys: Vec<rustls::pki_types::PrivateKeyDer> =
+        rustls_pemfile::pkcs8_private_keys(&mut key_pem.as_slice())
+            .filter_map(|k| k.ok().map(rustls::pki_types::PrivateKeyDer::from))
+            .collect();
+
+    if keys.is_empty() {
+        keys = rustls_pemfile::rsa_private_keys(&mut key_pem.as_slice())
+            .filter_map(|k| k.ok().map(rustls::pki_types::PrivateKeyDer::from))
+            .collect();
+    }
+
+    if certs.is_empty() || keys.is_empty() {
+        tracing::warn!("Could not parse TLS certs/keys — falling back to HTTP");
+        return None;
+    }
+
+    rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, keys.remove(0))
+        .map_err(|e| { tracing::warn!("TLS config error: {}", e); e })
+        .ok()
+}
+

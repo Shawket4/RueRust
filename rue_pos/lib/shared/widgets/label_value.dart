@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 
 class LabelValue extends StatelessWidget {
@@ -17,14 +16,14 @@ class LabelValue extends StatelessWidget {
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: GoogleFonts.inter(
-          fontSize: 13, color: AppColors.textSecondary,
-        )),
-        Text(value, style: GoogleFonts.inter(
-          fontSize: 13,
-          fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-          color: valueColor ?? AppColors.textPrimary,
-        )),
+        Text(label,
+            style: cairo(fontSize: 13, color: AppColors.textSecondary)),
+        Text(value,
+            style: cairo(
+              fontSize:   13,
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+              color:      valueColor ?? AppColors.textPrimary,
+            )),
       ],
     ),
   );

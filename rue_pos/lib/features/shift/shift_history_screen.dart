@@ -44,17 +44,19 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
     });
     try {
       final shifts = await shiftApi.list(branchId);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _shifts = shifts;
           _loading = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _loading = false;
         });
+      }
     }
   }
 
@@ -132,17 +134,19 @@ class _ShiftTileState extends State<_ShiftTile> {
     });
     try {
       final orders = await orderApi.list(shiftId: widget.shift.id);
-      if (mounted)
+      if (mounted) {
         setState(() {
           _orders = orders;
           _loadingOrders = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _ordersError = e.toString();
           _loadingOrders = false;
         });
+      }
     }
   }
 
@@ -303,6 +307,7 @@ class _PastOrderRowState extends State<_PastOrderRow> {
         port: bp.printerPort,
         order: full,
         branchName: bp.branchName,
+        brand: bp.printerBrand!,
       );
       if (mounted) {
         if (err != null) {

@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme/app_theme.dart';
 
 class PinPad extends StatelessWidget {
-  final String              pin;
-  final int                 maxLength;
+  final String               pin;
+  final int                  maxLength;
   final void Function(String) onDigit;
-  final VoidCallback        onBackspace;
+  final VoidCallback         onBackspace;
 
   const PinPad({
     super.key,
@@ -24,9 +23,12 @@ class PinPad extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
+  Widget build(BuildContext context) {
+    final w       = MediaQuery.of(context).size.width;
+    final keySize = w >= 768 ? 80.0 : 68.0;
+
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      // PIN dots
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: List.generate(maxLength, (i) => AnimatedContainer(
@@ -44,47 +46,81 @@ class PinPad extends StatelessWidget {
         )),
       ),
       const SizedBox(height: 28),
+      // Keys
       ..._rows.map((row) => Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: row.map((k) {
-            if (k.isEmpty) return const SizedBox(width: 72, height: 68);
-            return _Key(label: k,
-                onTap: () => k == '⌫' ? onBackspace() : onDigit(k));
+            if (k.isEmpty) {
+              return SizedBox(width: keySize, height: keySize);
+            }
+            return _Key(
+              label:   k,
+              size:    keySize,
+              onTap:   () => k == '⌫' ? onBackspace() : onDigit(k),
+            );
           }).toList(),
         ),
       )),
-    ],
-  );
+    ]);
+  }
 }
 
-class _Key extends StatelessWidget {
-  final String      label;
+class _Key extends StatefulWidget {
+  final String       label;
+  final double       size;
   final VoidCallback onTap;
-  const _Key({required this.label, required this.onTap});
+  const _Key({required this.label, required this.size, required this.onTap});
+  @override
+  State<_Key> createState() => _KeyState();
+}
+
+class _KeyState extends State<_Key> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double>   _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl  = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 80));
+    _scale = Tween<double>(begin: 1.0, end: 0.92)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      margin: const EdgeInsets.symmetric(horizontal: 6),
-      width: 68, height: 68,
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-        boxShadow: [BoxShadow(
-          color: Colors.black.withOpacity(0.05),
-          blurRadius: 4, offset: const Offset(0, 2),
-        )],
+    onTapDown:   (_) => _ctrl.forward(),
+    onTapUp:     (_) { _ctrl.reverse(); widget.onTap(); },
+    onTapCancel: ()  => _ctrl.reverse(),
+    child: ScaleTransition(
+      scale: _scale,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        width:  widget.size,
+        height: widget.size,
+        decoration: BoxDecoration(
+          color:        AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border:       Border.all(color: AppColors.border),
+          boxShadow: [BoxShadow(
+            color:      Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset:     const Offset(0, 2),
+          )],
+        ),
+        alignment: Alignment.center,
+        child: Text(widget.label,
+            style: cairo(
+              fontSize:   widget.label == '⌫' ? 18 : 22,
+              fontWeight: FontWeight.w600,
+              color:      AppColors.textPrimary,
+            )),
       ),
-      alignment: Alignment.center,
-      child: Text(label, style: GoogleFonts.inter(
-        fontSize: label == '⌫' ? 18 : 22,
-        fontWeight: FontWeight.w600,
-        color: AppColors.textPrimary,
-      )),
     ),
   );
 }

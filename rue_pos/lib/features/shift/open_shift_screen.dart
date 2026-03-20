@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
+import '../../core/services/offline_sync_service.dart';
 import 'package:provider/provider.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/shift_provider.dart';
@@ -238,13 +238,44 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
                   ),
 
                   const SizedBox(height: 8),
-                  AppButton(
-                    label: 'Open Shift',
-                    loading: _loading,
-                    width: double.infinity,
-                    icon: Icons.play_arrow_rounded,
-                    onTap: _open,
-                  ),
+                  Builder(builder: (bCtx) {
+                    final offline = !bCtx.watch<OfflineSyncService>().isOnline;
+                    return Column(children: [
+                      if (offline)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF3CD),
+                              borderRadius: BorderRadius.circular(10),
+                              border:
+                                  Border.all(color: const Color(0xFFFFD700)),
+                            ),
+                            child: Row(children: [
+                              const Icon(Icons.wifi_off_rounded,
+                                  size: 14, color: Color(0xFF856404)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: Text(
+                                'Internet required to open a shift.',
+                                style: cairo(
+                                    fontSize: 12,
+                                    color: const Color(0xFF856404)),
+                              )),
+                            ]),
+                          ),
+                        ),
+                      AppButton(
+                        label: 'Open Shift',
+                        loading: _loading,
+                        width: double.infinity,
+                        icon: Icons.play_arrow_rounded,
+                        onTap: offline ? null : _open,
+                      ),
+                    ]);
+                  }),
                 ],
               ),
             ),

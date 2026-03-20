@@ -17,14 +17,34 @@ dependencies:
   intl: ^0.19.0
   cupertino_icons: ^1.0.8
   lottie: ^3.3.2
+  connectivity_plus: ^7.0.0
+  starxpand_sdk_wrapper: ^1.0.2
+  pdf: ^3.11.1
+  printing: ^5.14.2
+  uuid: ^4.5.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/Icon.png"
+  background_color: "#ffffff"
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "assets/TheRue.png"
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: Cairo
+      fonts:
+        - asset: assets/fonts/Cairo-Regular.ttf
+        - asset: assets/fonts/Cairo-Bold.ttf
+          weight: 700
   assets:
     - assets/TheRue.png
     - assets/lottie/

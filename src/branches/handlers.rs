@@ -11,24 +11,29 @@ use crate::{
     permissions::checker::check_permission,
 };
 
-// ── DB / Response model ───────────────────────────────────────
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq)]
+#[sqlx(type_name = "printer_brand", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum PrinterBrand {
+    Star,
+    Epson,
+}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Branch {
-    pub id:           Uuid,
-    pub org_id:       Uuid,
-    pub name:         String,
-    pub address:      Option<String>,
-    pub phone:        Option<String>,
-    pub timezone:     String,
-    pub printer_ip:   Option<String>,  // INET stored as text
-    pub printer_port: Option<i32>,
-    pub is_active:    bool,
-    pub created_at:   DateTime<Utc>,
-    pub updated_at:   DateTime<Utc>,
+    pub id:            Uuid,
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub address:       Option<String>,
+    pub phone:         Option<String>,
+    pub timezone:      String,
+    pub printer_brand: Option<PrinterBrand>,
+    pub printer_ip:    Option<String>,
+    pub printer_port:  Option<i32>,
+    pub is_active:     bool,
+    pub created_at:    DateTime<Utc>,
+    pub updated_at:    DateTime<Utc>,
 }
-
-// ── Request types ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ListBranchesQuery {
@@ -37,27 +42,27 @@ pub struct ListBranchesQuery {
 
 #[derive(Deserialize)]
 pub struct CreateBranchRequest {
-    pub org_id:       Uuid,
-    pub name:         String,
-    pub address:      Option<String>,
-    pub phone:        Option<String>,
-    pub timezone:     Option<String>,
-    pub printer_ip:   Option<String>,
-    pub printer_port: Option<i32>,
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub address:       Option<String>,
+    pub phone:         Option<String>,
+    pub timezone:      Option<String>,
+    pub printer_brand: Option<PrinterBrand>,
+    pub printer_ip:    Option<String>,
+    pub printer_port:  Option<i32>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateBranchRequest {
-    pub name:         Option<String>,
-    pub address:      Option<String>,
-    pub phone:        Option<String>,
-    pub timezone:     Option<String>,
-    pub printer_ip:   Option<String>,
-    pub printer_port: Option<i32>,
-    pub is_active:    Option<bool>,
+    pub name:          Option<String>,
+    pub address:       Option<String>,
+    pub phone:         Option<String>,
+    pub timezone:      Option<String>,
+    pub printer_brand: Option<PrinterBrand>,
+    pub printer_ip:    Option<String>,
+    pub printer_port:  Option<i32>,
+    pub is_active:     Option<bool>,
 }
-
-// ── GET /branches?org_id= ─────────────────────────────────────
 
 pub async fn list_branches(
     req:   HttpRequest,
@@ -71,8 +76,8 @@ pub async fn list_branches(
     let branches = sqlx::query_as::<_, Branch>(
         r#"
         SELECT id, org_id, name, address, phone, timezone,
-               printer_ip::text, printer_port, is_active,
-               created_at, updated_at
+               printer_brand, printer_ip::text, printer_port,
+               is_active, created_at, updated_at
         FROM branches
         WHERE org_id = $1 AND deleted_at IS NULL
         ORDER BY name
@@ -84,8 +89,6 @@ pub async fn list_branches(
 
     Ok(HttpResponse::Ok().json(branches))
 }
-
-// ── GET /branches/:id ─────────────────────────────────────────
 
 pub async fn get_branch(
     req:  HttpRequest,
@@ -101,8 +104,6 @@ pub async fn get_branch(
     Ok(HttpResponse::Ok().json(branch))
 }
 
-// ── POST /branches ────────────────────────────────────────────
-
 pub async fn create_branch(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
@@ -114,11 +115,11 @@ pub async fn create_branch(
 
     let branch = sqlx::query_as::<_, Branch>(
         r#"
-        INSERT INTO branches (org_id, name, address, phone, timezone, printer_ip, printer_port)
-        VALUES ($1, $2, $3, $4, $5, $6::inet, $7)
+        INSERT INTO branches (org_id, name, address, phone, timezone, printer_brand, printer_ip, printer_port)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8)
         RETURNING id, org_id, name, address, phone, timezone,
-                  printer_ip::text, printer_port, is_active,
-                  created_at, updated_at
+                  printer_brand, printer_ip::text, printer_port,
+                  is_active, created_at, updated_at
         "#,
     )
     .bind(body.org_id)
@@ -126,6 +127,7 @@ pub async fn create_branch(
     .bind(&body.address)
     .bind(&body.phone)
     .bind(body.timezone.as_deref().unwrap_or("Africa/Cairo"))
+    .bind(&body.printer_brand)
     .bind(&body.printer_ip)
     .bind(body.printer_port.unwrap_or(9100))
     .fetch_one(pool.get_ref())
@@ -133,8 +135,6 @@ pub async fn create_branch(
 
     Ok(HttpResponse::Created().json(branch))
 }
-
-// ── PUT /branches/:id ─────────────────────────────────────────
 
 pub async fn update_branch(
     req:  HttpRequest,
@@ -151,17 +151,18 @@ pub async fn update_branch(
     let branch = sqlx::query_as::<_, Branch>(
         r#"
         UPDATE branches SET
-            name         = COALESCE($2, name),
-            address      = COALESCE($3, address),
-            phone        = COALESCE($4, phone),
-            timezone     = COALESCE($5, timezone),
-            printer_ip   = COALESCE($6::inet, printer_ip),
-            printer_port = COALESCE($7, printer_port),
-            is_active    = COALESCE($8, is_active)
+            name          = COALESCE($2, name),
+            address       = COALESCE($3, address),
+            phone         = COALESCE($4, phone),
+            timezone      = COALESCE($5, timezone),
+            printer_brand = COALESCE($6, printer_brand),
+            printer_ip    = COALESCE($7::inet, printer_ip),
+            printer_port  = COALESCE($8, printer_port),
+            is_active     = COALESCE($9, is_active)
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, org_id, name, address, phone, timezone,
-                  printer_ip::text, printer_port, is_active,
-                  created_at, updated_at
+                  printer_brand, printer_ip::text, printer_port,
+                  is_active, created_at, updated_at
         "#,
     )
     .bind(*id)
@@ -169,6 +170,7 @@ pub async fn update_branch(
     .bind(&body.address)
     .bind(&body.phone)
     .bind(&body.timezone)
+    .bind(&body.printer_brand)
     .bind(&body.printer_ip)
     .bind(body.printer_port)
     .bind(body.is_active)
@@ -178,8 +180,6 @@ pub async fn update_branch(
 
     Ok(HttpResponse::Ok().json(branch))
 }
-
-// ── DELETE /branches/:id ──────────────────────────────────────
 
 pub async fn delete_branch(
     req:  HttpRequest,
@@ -202,8 +202,6 @@ pub async fn delete_branch(
     Ok(HttpResponse::NoContent().finish())
 }
 
-// ── Helpers ───────────────────────────────────────────────────
-
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
     req.extensions()
         .get::<Claims>()
@@ -215,8 +213,8 @@ async fn fetch_branch(pool: &PgPool, id: Uuid) -> Result<Branch, AppError> {
     sqlx::query_as::<_, Branch>(
         r#"
         SELECT id, org_id, name, address, phone, timezone,
-               printer_ip::text, printer_port, is_active,
-               created_at, updated_at
+               printer_brand, printer_ip::text, printer_port,
+               is_active, created_at, updated_at
         FROM branches
         WHERE id = $1 AND deleted_at IS NULL
         "#,

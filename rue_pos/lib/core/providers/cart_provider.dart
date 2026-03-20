@@ -37,29 +37,45 @@ class CartProvider extends ChangeNotifier {
   int? get discountValue => _discountValue;
 
   void add(CartItem item) {
-    // Merge identical items (same menuItemId + sizeLabel + same addons)
-    final existing = _items.where((i) =>
-        i.menuItemId == item.menuItemId &&
-        i.sizeLabel  == item.sizeLabel  &&
-        i.addons.length == item.addons.length).firstOrNull;
-    if (existing != null) {
+    // Merge only if same item + size + identical addon set (by drinkOptionItemId)
+    final existing = _items.firstWhere(
+      (i) =>
+          i.menuItemId == item.menuItemId &&
+          i.sizeLabel  == item.sizeLabel  &&
+          _addonsMatch(i.addons, item.addons),
+      orElse: () => _sentinel,
+    );
+    if (!identical(existing, _sentinel)) {
       existing.quantity += item.quantity;
-      notifyListeners();
     } else {
       _items.add(item);
-      notifyListeners();
     }
+    notifyListeners();
   }
 
-  void removeAt(int i) { _items.removeAt(i); notifyListeners(); }
+  // Sentinel to avoid nullable firstWhere hack
+  static final _sentinel = CartItem(
+    menuItemId: '__sentinel__', itemName: '', unitPrice: 0,
+  );
 
+  /// Two addon lists match iff they contain the same drinkOptionItemIds
+  /// (order-independent).
+  static bool _addonsMatch(
+      List<SelectedAddon> a, List<SelectedAddon> b) {
+    if (a.length != b.length) return false;
+    final aIds = a.map((x) => x.drinkOptionItemId).toSet();
+    final bIds = b.map((x) => x.drinkOptionItemId).toSet();
+    return aIds.containsAll(bIds) && bIds.containsAll(aIds);
+  }
+
+  void removeAt(int i)        { _items.removeAt(i); notifyListeners(); }
   void setQty(int i, int qty) {
     if (qty <= 0) { removeAt(i); } else { _items[i].quantity = qty; notifyListeners(); }
   }
 
-  void setPayment(String m)   { _payment = m;  notifyListeners(); }
+  void setPayment(String m)   { _payment  = m; notifyListeners(); }
   void setCustomer(String? n) { _customer = n; notifyListeners(); }
-  void setNotes(String? n)    { _notes = n;    notifyListeners(); }
+  void setNotes(String? n)    { _notes    = n; notifyListeners(); }
 
   void setDiscount(DiscountType? t, int? v) {
     _discountType  = t;

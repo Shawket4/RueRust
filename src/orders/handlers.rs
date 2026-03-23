@@ -78,9 +78,13 @@ pub struct OrderItemFull {
 
 #[derive(Deserialize)]
 pub struct AddonInput {
-    pub addon_item_id:       Uuid,
-    pub drink_option_item_id: Uuid, // needed to look up ingredient overrides
+    pub addon_item_id:        Uuid,
+    pub drink_option_item_id: Uuid,
+    #[serde(default = "default_addon_qty")]
+    pub quantity: i32,
 }
+
+fn default_addon_qty() -> i32 { 1 }
 
 #[derive(Deserialize)]
 pub struct OrderItemInput {
@@ -175,6 +179,7 @@ pub async fn create_order(
         addon_item_id: Uuid,
         addon_name:    String,
         unit_price:    i32,
+        quantity:      i32,
     }
 
     struct InventoryDeduction {
@@ -338,6 +343,7 @@ pub async fn create_order(
                 addon_item_id: addon_input.addon_item_id,
                 addon_name,
                 unit_price: addon_price,
+                quantity:   addon_input.quantity.max(1),
             });
 
             // ── Addon ingredient deductions ───────────────────
@@ -407,7 +413,7 @@ pub async fn create_order(
         }
 
         let item_line = unit_price * item_input.quantity;
-        let addon_line: i32 = resolved_addons.iter().map(|a| a.unit_price).sum::<i32>() * item_input.quantity;
+        let addon_line: i32 = resolved_addons.iter().map(|a| a.unit_price * a.quantity).sum::<i32>() * item_input.quantity;
         subtotal += item_line + addon_line;
 
         resolved_items.push(ResolvedItem {
@@ -514,7 +520,7 @@ pub async fn create_order(
         let mut addon_rows: Vec<OrderItemAddon> = Vec::new();
 
         for addon in &resolved.addons {
-            let addon_line = addon.unit_price * resolved.quantity;
+            let addon_line = addon.unit_price * addon.quantity * resolved.quantity;
             let row = sqlx::query_as::<_, OrderItemAddon>(
                 r#"
                 INSERT INTO order_item_addons
@@ -527,7 +533,7 @@ pub async fn create_order(
             .bind(addon.addon_item_id)
             .bind(&addon.addon_name)
             .bind(addon.unit_price)
-            .bind(resolved.quantity)
+            .bind(addon.quantity)
             .bind(addon_line)
             .fetch_one(&mut *tx)
             .await?;

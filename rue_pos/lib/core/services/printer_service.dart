@@ -2,9 +2,12 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:starxpand_sdk_wrapper/starxpand_sdk_wrapper.dart';
 import '../models/branch.dart';
 import '../models/order.dart';
@@ -14,7 +17,6 @@ class PrinterService {
   static const _printerWidth = 576;
   static const _timeout = Duration(seconds: 5);
 
-  // ── Public entry point ────────────────────────────────────────────────────
   static Future<String?> print({
     required String ip,
     required int port,
@@ -23,43 +25,27 @@ class PrinterService {
     required String branchName,
   }) async {
     final cleanIp = ip.split('/').first;
+    final pdfBytes =
+        await _buildReceiptPdf(order: order, branchName: branchName);
     switch (brand) {
       case PrinterBrand.star:
-        return _printStar(
-          ip: cleanIp,
-          order: order,
-          branchName: branchName,
-        );
+        return _printStar(ip: cleanIp, pdfBytes: pdfBytes);
       case PrinterBrand.epson:
-        return _printEpson(
-          ip: cleanIp,
-          port: port,
-          order: order,
-          branchName: branchName,
-        );
+        return _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes);
     }
   }
 
-  // ── Star (via StarXpand SDK) ───────────────────────────────────────────────
   static Future<String?> _printStar({
     required String ip,
-    required Order order,
-    required String branchName,
+    required Uint8List pdfBytes,
   }) async {
     try {
       final device = StarDevice(ip, StarInterfaceType.lan);
       final connected =
           await StarXpand.instance.connect(device, monitor: false);
       if (!connected) return 'Could not connect to Star printer';
-
-      final pdfBytes = await _buildReceiptPdf(
-        order: order,
-        branchName: branchName,
-      );
-      final success = await StarXpand.instance.printPdf(
-        pdfBytes,
-        width: _printerWidth,
-      );
+      final success =
+          await StarXpand.instance.printPdf(pdfBytes, width: _printerWidth);
       return success ? null : 'Star print failed';
     } catch (e) {
       return 'Star printer error: $e';
@@ -68,19 +54,20 @@ class PrinterService {
     }
   }
 
-  // ── Epson (raw ESC/POS over TCP) ──────────────────────────────────────────
   static Future<String?> _printEpson({
     required String ip,
     required int port,
-    required Order order,
-    required String branchName,
+    required Uint8List pdfBytes,
   }) async {
     Socket? socket;
     try {
+      final pages = Printing.raster(pdfBytes, dpi: 203);
+      final page = await pages.first;
+      final png = await page.toPng();
+      final imgBytes = await _pngToEscPosRaster(png, page.width, page.height);
       socket = await Socket.connect(ip, port, timeout: _timeout);
       socket.setOption(SocketOption.tcpNoDelay, true);
-      final bytes = _buildEscPosReceipt(order: order, branchName: branchName);
-      socket.add(bytes);
+      socket.add(imgBytes);
       await socket.flush().timeout(_timeout);
       return null;
     } on TimeoutException {
@@ -94,103 +81,58 @@ class PrinterService {
     }
   }
 
-  // ── ESC/POS receipt builder (Epson) ───────────────────────────────────────
-  static Uint8List _buildEscPosReceipt({
-    required Order order,
-    required String branchName,
-  }) {
-    const esc = 0x1B;
-    const gs = 0x1D;
-    const lf = 0x0A;
-    const col = 42;
+  static Future<Uint8List> _pngToEscPosRaster(
+    Uint8List png,
+    int widthPx,
+    int heightPx,
+  ) async {
+    final codec = await ui.instantiateImageCodec(png);
+    final frame = await codec.getNextFrame();
+    final imgData =
+        await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (imgData == null) throw Exception('Failed to decode image');
 
-    List<int> text(String s) => s.runes.map((c) => c < 256 ? c : 0x3F).toList();
-    List<int> line(String s) => [...text(s), lf];
-    List<int> align(int a) => [esc, 0x61, a];
-    List<int> bold(bool on) => [esc, 0x45, on ? 1 : 0];
-    List<int> dblSize(bool on) => [gs, 0x21, on ? 0x11 : 0x00];
-    List<int> divider() => line('-' * col);
-
-    String padRow(String left, String right) {
-      final space = col - left.length - right.length;
-      return space > 0 ? left + ' ' * space + right : '$left $right';
-    }
-
+    final pixels = imgData.buffer.asUint8List();
     final buf = <int>[];
-    buf.addAll([esc, 0x40]); // init
 
-    // Header
-    buf.addAll(align(1));
-    buf.addAll(dblSize(true));
-    buf.addAll(bold(true));
-    buf.addAll(line('THE RUE COFFEE'));
-    buf.addAll(dblSize(false));
-    buf.addAll(bold(false));
-    buf.addAll(line(branchName));
-    buf.addAll(line(''));
-    buf.addAll(divider());
+    buf.addAll([0x1B, 0x40]);
 
-    // Order info
-    buf.addAll(align(0));
-    buf.addAll(bold(true));
-    buf.addAll(line(padRow(
-      'Order #${order.orderNumber}',
-      timeShort(order.createdAt),
-    )));
-    buf.addAll(bold(false));
-    buf.addAll(divider());
+    final widthBytes = (widthPx + 7) ~/ 8;
+    final xL = widthBytes & 0xFF;
+    final xH = (widthBytes >> 8) & 0xFF;
+    final yL = heightPx & 0xFF;
+    final yH = (heightPx >> 8) & 0xFF;
 
-    // Items
-    for (final item in order.items) {
-      final sizePart = item.sizeLabel != null ? ' (${item.sizeLabel})' : '';
-      final label = '${item.quantity}x ${item.itemName}$sizePart';
-      buf.addAll(line(padRow(label, egp(item.lineTotal))));
-      for (final addon in item.addons) {
-        final aLabel = '  + ${addon.addonName}';
-        final aPrice = addon.unitPrice > 0 ? '+${egp(addon.unitPrice)}' : '';
-        buf.addAll(line(aPrice.isNotEmpty ? padRow(aLabel, aPrice) : aLabel));
+    buf.addAll([0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH]);
+
+    for (int y = 0; y < heightPx; y++) {
+      for (int xByte = 0; xByte < widthBytes; xByte++) {
+        int byte = 0;
+        for (int bit = 0; bit < 8; bit++) {
+          final x = xByte * 8 + bit;
+          if (x < widthPx) {
+            final idx = (y * widthPx + x) * 4;
+            final r = pixels[idx];
+            final g = pixels[idx + 1];
+            final b = pixels[idx + 2];
+            final a = pixels[idx + 3];
+            final rW = ((r * a) + (255 * (255 - a))) ~/ 255;
+            final gW = ((g * a) + (255 * (255 - a))) ~/ 255;
+            final bW = ((b * a) + (255 * (255 - a))) ~/ 255;
+            final lum = (0.299 * rW + 0.587 * gW + 0.114 * bW).round();
+            if (lum < 128) byte |= (0x80 >> bit);
+          }
+        }
+        buf.add(byte);
       }
     }
 
-    buf.addAll(divider());
-
-    // Totals
-    buf.addAll(line(padRow('Subtotal', egp(order.subtotal))));
-    if (order.discountAmount > 0) {
-      buf.addAll(line(padRow('Discount', '- ${egp(order.discountAmount)}')));
-    }
-    if (order.taxAmount > 0) {
-      buf.addAll(line(padRow('Tax', egp(order.taxAmount))));
-    }
-    buf.addAll(bold(true));
-    buf.addAll(line(padRow('TOTAL', egp(order.totalAmount))));
-    buf.addAll(bold(false));
-    buf.addAll(divider());
-
-    // Footer
-    final payLabel = order.paymentMethod[0].toUpperCase() +
-        order.paymentMethod.substring(1).replaceAll('_', ' ');
-    buf.addAll(line('Payment : $payLabel'));
-    if (order.customerName != null && order.customerName!.isNotEmpty) {
-      buf.addAll(line('Customer: ${order.customerName}'));
-    }
-    if (order.tellerName.isNotEmpty) {
-      buf.addAll(line('Teller  : ${order.tellerName}'));
-    }
-    buf.addAll(line(''));
-    buf.addAll(align(1));
-    buf.addAll(line('Thank you for visiting!'));
-    buf.addAll(line(''));
-    buf.addAll(line(''));
-    buf.addAll(line(''));
-
-    // Cut
-    buf.addAll([gs, 0x56, 0x41, 0x05]);
+    buf.addAll([0x1B, 0x64, 0x05]);
+    buf.addAll([0x1D, 0x56, 0x41, 0x05]);
 
     return Uint8List.fromList(buf);
   }
 
-  // ── PDF receipt builder (Star) ────────────────────────────────────────────
   static Future<Uint8List> _buildReceiptPdf({
     required Order order,
     required String branchName,
@@ -202,8 +144,8 @@ class PrinterService {
           .buffer
           .asByteData(),
     );
-    final fontBold = pw.Font.ttf(
-      (await rootBundle.load('assets/fonts/Cairo-Bold.ttf'))
+    final fontSemiBold = pw.Font.ttf(
+      (await rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
           .buffer
           .asByteData(),
     );
@@ -213,48 +155,54 @@ class PrinterService {
 
     const charWidth = 40;
 
-    pw.TextStyle ts(pw.Font f, {double size = 9}) =>
+    pw.TextStyle ts(pw.Font f, {double size = 8.0}) =>
         pw.TextStyle(font: f, fontSize: size);
 
-    pw.Widget divider() => pw.Divider(thickness: 0.5, color: PdfColors.black);
+    pw.Widget divider() => pw.Divider(
+          thickness: 0.3,
+          color: PdfColors.grey600,
+          height: 4,
+        );
 
     String padRow(String left, String right) {
       final space = charWidth - left.length - right.length;
-      return space > 0 ? left + ' ' * space + right : '$left $right';
+      if (space <= 0) return '$left $right';
+      return left + ' ' * space + right;
     }
+
+    final dt = order.createdAt.toLocal();
+    final dateTimeStr = '${dt.day.toString().padLeft(2, '0')}/'
+        '${dt.month.toString().padLeft(2, '0')}/'
+        '${dt.year}  '
+        '${timeShort(order.createdAt)}';
 
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat(
           72 * PdfPageFormat.mm,
           double.infinity,
-          marginTop: 6 * PdfPageFormat.mm,
-          marginBottom: 8 * PdfPageFormat.mm,
-          marginLeft: 4 * PdfPageFormat.mm,
-          marginRight: 4 * PdfPageFormat.mm,
+          marginTop: 2 * PdfPageFormat.mm,
+          marginBottom: 2 * PdfPageFormat.mm,
+          marginLeft: 2 * PdfPageFormat.mm,
+          marginRight: 2 * PdfPageFormat.mm,
         ),
         build: (ctx) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch,
           children: [
             // Logo
-            pw.Center(child: pw.Image(logoImage, width: 100)),
-            pw.SizedBox(height: 4),
-            pw.Center(child: pw.Text(branchName, style: ts(font, size: 9))),
-            pw.SizedBox(height: 6),
-            divider(),
-            pw.SizedBox(height: 4),
+            pw.Center(child: pw.Image(logoImage, width: 56)),
 
-            // Order info
-            pw.Text(
-              padRow(
-                'Order #${order.orderNumber}',
-                timeShort(order.createdAt),
-              ),
-              style: ts(fontBold, size: 10),
-            ),
-            pw.SizedBox(height: 4),
+            // Branch
+            pw.Center(child: pw.Text(branchName, style: ts(font, size: 7.5))),
+            pw.SizedBox(height: 2),
             divider(),
-            pw.SizedBox(height: 4),
+
+            // Order number + date/time
+            pw.Text(
+              padRow('Order #${order.orderNumber}', dateTimeStr),
+              style: ts(fontSemiBold, size: 8),
+            ),
+            divider(),
 
             // Items
             ...order.items.expand((item) {
@@ -264,50 +212,36 @@ class PrinterService {
               return [
                 pw.Text(
                   padRow(label, egp(item.lineTotal)),
-                  style: ts(fontBold, size: 9),
+                  style: ts(fontSemiBold, size: 8),
                 ),
                 ...item.addons.map((addon) {
                   final aLabel = '  + ${addon.addonName}';
                   final aPrice =
                       addon.unitPrice > 0 ? '+${egp(addon.unitPrice)}' : '';
-                  return pw.Padding(
-                    padding: const pw.EdgeInsets.only(left: 4),
-                    child: pw.Text(
-                      aPrice.isNotEmpty ? padRow(aLabel, aPrice) : aLabel,
-                      style: ts(font, size: 8),
-                    ),
+                  return pw.Text(
+                    aPrice.isNotEmpty ? padRow(aLabel, aPrice) : aLabel,
+                    style: ts(font, size: 7.5),
                   );
                 }),
-                pw.SizedBox(height: 3),
               ];
             }),
 
             divider(),
-            pw.SizedBox(height: 4),
 
             // Totals
-            pw.Text(
-              padRow('Subtotal', egp(order.subtotal)),
-              style: ts(font, size: 9),
-            ),
+            pw.Text(padRow('Subtotal', egp(order.subtotal)),
+                style: ts(font, size: 8)),
             if (order.discountAmount > 0)
-              pw.Text(
-                padRow('Discount', '- ${egp(order.discountAmount)}'),
-                style: ts(font, size: 9),
-              ),
+              pw.Text(padRow('Discount', '- ${egp(order.discountAmount)}'),
+                  style: ts(font, size: 8)),
             if (order.taxAmount > 0)
-              pw.Text(
-                padRow('Tax', egp(order.taxAmount)),
-                style: ts(font, size: 9),
-              ),
-            pw.SizedBox(height: 3),
+              pw.Text(padRow('Tax', egp(order.taxAmount)),
+                  style: ts(font, size: 8)),
             pw.Text(
               padRow('TOTAL', egp(order.totalAmount)),
-              style: ts(fontBold, size: 13),
+              style: ts(fontSemiBold, size: 10),
             ),
-            pw.SizedBox(height: 4),
             divider(),
-            pw.SizedBox(height: 4),
 
             // Footer
             pw.Text(
@@ -316,26 +250,20 @@ class PrinterService {
                 order.paymentMethod[0].toUpperCase() +
                     order.paymentMethod.substring(1).replaceAll('_', ' '),
               ),
-              style: ts(font, size: 9),
+              style: ts(font, size: 7.5),
             ),
             if (order.customerName != null && order.customerName!.isNotEmpty)
-              pw.Text(
-                padRow('Customer', order.customerName!),
-                style: ts(font, size: 9),
-              ),
+              pw.Text(padRow('Customer', order.customerName!),
+                  style: ts(font, size: 7.5)),
             if (order.tellerName.isNotEmpty)
-              pw.Text(
-                padRow('Teller', order.tellerName),
-                style: ts(font, size: 9),
-              ),
-            pw.SizedBox(height: 10),
+              pw.Text(padRow('Teller', order.tellerName),
+                  style: ts(font, size: 7.5)),
+            pw.SizedBox(height: 3),
             pw.Center(
-              child: pw.Text(
-                'Thank you for visiting!',
-                style: ts(fontBold, size: 9),
-              ),
+              child: pw.Text('Thank you for visiting!',
+                  style: ts(font, size: 7.5)),
             ),
-            pw.SizedBox(height: 6),
+            pw.SizedBox(height: 2),
             divider(),
           ],
         ),

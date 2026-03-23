@@ -19,18 +19,21 @@ class BranchProvider extends ChangeNotifier {
   PrinterBrand? get printerBrand => _branch?.printerBrand;
 
   Future<void> load(String branchId) async {
-    if (_branch?.id == branchId) return;
+    debugPrint('BranchProvider.load() called with: $branchId');
     _loading = true;
     _error = null;
     notifyListeners();
     try {
       _branch = await branchApi.get(branchId);
+      debugPrint('Branch loaded: ${_branch?.name}');
+      debugPrint('printer_brand: ${_branch?.printerBrand}');
+      debugPrint('hasPrinter: ${_branch?.hasPrinter}');
       await _save(_branch!);
     } catch (e) {
+      debugPrint('Branch load FAILED: $e');
       final cached = await _load(branchId);
       if (cached != null) {
         _branch = cached;
-        _error = null;
       } else {
         _error = e.toString();
       }

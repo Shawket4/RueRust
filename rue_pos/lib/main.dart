@@ -12,6 +12,7 @@ import 'core/services/offline_sync_service.dart';
 import 'core/theme/app_theme.dart';
 
 void main() async {
+  print("object");
   WidgetsFlutterBinding.ensureInitialized();
 
   // Global Flutter error handler — prevents red-screen crashes in release
@@ -39,14 +40,25 @@ class RuePOS extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final branchProvider = BranchProvider();
-
+    print("object");
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<OfflineSyncService>.value(
             value: offlineSyncService),
         ChangeNotifierProvider<BranchProvider>.value(value: branchProvider),
         ChangeNotifierProvider<AuthProvider>(
-          create: (_) => AuthProvider(branchProvider)..init(),
+          create: (_) {
+            final auth = AuthProvider(branchProvider);
+            auth.init().then((_) {
+              debugPrint('Auth init done');
+              debugPrint('User: ${auth.user?.name}');
+              debugPrint('BranchId: ${auth.user?.branchId}');
+              debugPrint('Branch: ${branchProvider.branch?.name}');
+              debugPrint('PrinterBrand: ${branchProvider.printerBrand}');
+              debugPrint('HasPrinter: ${branchProvider.hasPrinter}');
+            });
+            return auth;
+          },
         ),
         ChangeNotifierProvider(create: (_) => ShiftProvider()),
         ChangeNotifierProvider(create: (_) => CartProvider()),

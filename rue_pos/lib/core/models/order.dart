@@ -2,24 +2,26 @@ class SelectedAddon {
   final String addonItemId;
   final String drinkOptionItemId;
   final String name;
-  final int    priceModifier;
+  final int priceModifier;
+  final int quantity;
 
   const SelectedAddon({
     required this.addonItemId,
     required this.drinkOptionItemId,
     required this.name,
     required this.priceModifier,
+    this.quantity = 1,
   });
 }
 
 class CartItem {
-  final String              menuItemId;
-  final String              itemName;
-  final String?             sizeLabel;
-  final int                 unitPrice;
-  int                       quantity;
+  final String menuItemId;
+  final String itemName;
+  final String? sizeLabel;
+  final int unitPrice;
+  int quantity;
   final List<SelectedAddon> addons;
-  final String?             notes;
+  final String? notes;
 
   CartItem({
     required this.menuItemId,
@@ -27,21 +29,25 @@ class CartItem {
     this.sizeLabel,
     required this.unitPrice,
     this.quantity = 1,
-    this.addons   = const [],
+    this.addons = const [],
     this.notes,
   });
 
-  int get addonsPrice => addons.fold(0, (s, a) => s + a.priceModifier);
-  int get lineTotal   => (unitPrice + addonsPrice) * quantity;
+  int get addonsPrice =>
+      addons.fold(0, (s, a) => s + a.priceModifier * a.quantity);
+  int get lineTotal => (unitPrice + addonsPrice) * quantity;
 
   Map<String, dynamic> toJson() => {
         'menu_item_id': menuItemId,
-        'size_label':   sizeLabel,
-        'quantity':     quantity,
-        'addons': addons.map((a) => {
-              'addon_item_id':        a.addonItemId,
-              'drink_option_item_id': a.drinkOptionItemId,
-            }).toList(),
+        'size_label': sizeLabel,
+        'quantity': quantity,
+        'addons': addons
+            .map((a) => {
+                  'addon_item_id': a.addonItemId,
+                  'drink_option_item_id': a.drinkOptionItemId,
+                  'quantity': a.quantity,
+                })
+            .toList(),
         'notes': notes,
       };
 }
@@ -49,9 +55,9 @@ class CartItem {
 class OrderItemAddon {
   final String id;
   final String addonName;
-  final int    unitPrice;
-  final int    quantity;
-  final int    lineTotal;
+  final int unitPrice;
+  final int quantity;
+  final int lineTotal;
 
   const OrderItemAddon({
     required this.id,
@@ -62,21 +68,21 @@ class OrderItemAddon {
   });
 
   factory OrderItemAddon.fromJson(Map<String, dynamic> j) => OrderItemAddon(
-        id:        j['id'],
+        id: j['id'],
         addonName: j['addon_name'],
         unitPrice: j['unit_price'],
-        quantity:  j['quantity'],
+        quantity: j['quantity'],
         lineTotal: j['line_total'],
       );
 }
 
 class OrderItem {
-  final String               id;
-  final String               itemName;
-  final String?              sizeLabel;
-  final int                  unitPrice;
-  final int                  quantity;
-  final int                  lineTotal;
+  final String id;
+  final String itemName;
+  final String? sizeLabel;
+  final int unitPrice;
+  final int quantity;
+  final int lineTotal;
   final List<OrderItemAddon> addons;
 
   const OrderItem({
@@ -90,11 +96,11 @@ class OrderItem {
   });
 
   factory OrderItem.fromJson(Map<String, dynamic> j) => OrderItem(
-        id:        j['id'],
-        itemName:  j['item_name'],
+        id: j['id'],
+        itemName: j['item_name'],
         sizeLabel: j['size_label'],
         unitPrice: j['unit_price'],
-        quantity:  j['quantity'],
+        quantity: j['quantity'],
         lineTotal: j['line_total'],
         addons: (j['addons'] as List? ?? [])
             .map((a) => OrderItemAddon.fromJson(a))
@@ -103,23 +109,23 @@ class OrderItem {
 }
 
 class Order {
-  final String          id;
-  final String          branchId;
-  final String          shiftId;
-  final String          tellerId;
-  final String          tellerName;
-  final int             orderNumber;
-  final String          status;
-  final String          paymentMethod;
-  final int             subtotal;
-  final String?         discountType;
-  final int             discountValue;
-  final int             discountAmount;
-  final int             taxAmount;
-  final int             totalAmount;
-  final String?         customerName;
-  final String?         notes;
-  final DateTime        createdAt;
+  final String id;
+  final String branchId;
+  final String shiftId;
+  final String tellerId;
+  final String tellerName;
+  final int orderNumber;
+  final String status;
+  final String paymentMethod;
+  final int subtotal;
+  final String? discountType;
+  final int discountValue;
+  final int discountAmount;
+  final int taxAmount;
+  final int totalAmount;
+  final String? customerName;
+  final String? notes;
+  final DateTime createdAt;
   final List<OrderItem> items;
 
   const Order({
@@ -144,26 +150,25 @@ class Order {
   });
 
   factory Order.fromJson(Map<String, dynamic> j) => Order(
-        id:             j['id'],
-        branchId:       j['branch_id'],
-        shiftId:        j['shift_id'],
-        tellerId:       (j['teller_id']    as String?) ?? '',
-        tellerName:     (j['teller_name']  as String?) ?? '',
-        orderNumber:    j['order_number'],
-        status:         j['status'],
-        paymentMethod:  j['payment_method'],
-        subtotal:       (j['subtotal']       as int?) ?? 0,
-        discountType:   j['discount_type']   as String?,
-        discountValue:  (j['discount_value'] as int?) ?? 0,
+        id: j['id'],
+        branchId: j['branch_id'],
+        shiftId: j['shift_id'],
+        tellerId: (j['teller_id'] as String?) ?? '',
+        tellerName: (j['teller_name'] as String?) ?? '',
+        orderNumber: j['order_number'],
+        status: j['status'],
+        paymentMethod: j['payment_method'],
+        subtotal: (j['subtotal'] as int?) ?? 0,
+        discountType: j['discount_type'] as String?,
+        discountValue: (j['discount_value'] as int?) ?? 0,
         discountAmount: (j['discount_amount'] as int?) ?? 0,
-        taxAmount:      (j['tax_amount']     as int?) ?? 0,
-        totalAmount:    j['total_amount'],
-        customerName:   j['customer_name']   as String?,
-        notes:          j['notes']           as String?,
-        createdAt:      DateTime.parse(j['created_at']),
+        taxAmount: (j['tax_amount'] as int?) ?? 0,
+        totalAmount: j['total_amount'],
+        customerName: j['customer_name'] as String?,
+        notes: j['notes'] as String?,
+        createdAt: DateTime.parse(j['created_at']),
         items: (j['items'] as List? ?? [])
             .map((i) => OrderItem.fromJson(i))
             .toList(),
       );
 }
-

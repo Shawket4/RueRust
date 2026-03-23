@@ -3,6 +3,7 @@
 import 'dart:math' show max;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
@@ -27,6 +28,13 @@ import '../../shared/widgets/label_value.dart';
 
 const _skeletonBase = Color(0xFFF0EBE3);
 const _skeletonHighlight = Color(0xFFE8E0D5);
+
+// ── Group type sort order: milk_type → coffee_type → extra ───────────────────
+int _groupTypeSortOrder(String type) => switch (type) {
+      'milk_type' => 0,
+      'coffee_type' => 1,
+      _ => 2, // 'extra' and anything else last
+    };
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
@@ -64,8 +72,7 @@ class _OrderScreenState extends State<OrderScreen> {
     final isTablet = w >= 768;
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
-      // Mobile: floating cart button in bottom-right
+      backgroundColor: const Color(0xFFF7F4F0),
       floatingActionButton: isTablet ? null : _MobileCartFab(),
       body: SafeArea(
         child: Column(children: [
@@ -88,14 +95,14 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Widget _contentArea() => AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 260),
         switchInCurve: Curves.easeOut,
         switchOutCurve: Curves.easeIn,
         transitionBuilder: (child, anim) => FadeTransition(
           opacity: anim,
           child: SlideTransition(
             position:
-                Tween<Offset>(begin: const Offset(0, 0.04), end: Offset.zero)
+                Tween<Offset>(begin: const Offset(0, 0.035), end: Offset.zero)
                     .animate(anim),
             child: child,
           ),
@@ -122,7 +129,7 @@ class _TopBar extends StatelessWidget {
 
     final bar = Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(12, 10, 16, 10),
+      padding: const EdgeInsets.fromLTRB(14, 11, 16, 11),
       child: Row(children: [
         _IconBtn(
             icon: Icons.arrow_back_rounded, onTap: () => context.go('/home')),
@@ -133,7 +140,9 @@ class _TopBar extends StatelessWidget {
           child: Container(
             height: 38,
             decoration: BoxDecoration(
-                color: AppColors.bg, borderRadius: BorderRadius.circular(10)),
+                color: const Color(0xFFF5F1ED),
+                // pill shape for search bar
+                borderRadius: BorderRadius.circular(20)),
             child: TextField(
               controller: ctrl,
               style: cairo(fontSize: 14),
@@ -141,12 +150,12 @@ class _TopBar extends StatelessWidget {
                 hintText: 'Search menu…',
                 hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
                 prefixIcon: const Icon(Icons.search_rounded,
-                    size: 18, color: AppColors.textMuted),
+                    size: 17, color: AppColors.textMuted),
                 suffixIcon: query.isNotEmpty
                     ? GestureDetector(
                         onTap: ctrl.clear,
                         child: const Icon(Icons.close_rounded,
-                            size: 16, color: AppColors.textMuted))
+                            size: 15, color: AppColors.textMuted))
                     : null,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -158,7 +167,6 @@ class _TopBar extends StatelessWidget {
             ),
           ),
         ),
-        // On tablet show the cart pill; on mobile it's the FAB
         if (isTablet) ...[
           const SizedBox(width: 12),
           AnimatedSwitcher(
@@ -168,31 +176,7 @@ class _TopBar extends StatelessWidget {
                 child: FadeTransition(opacity: anim, child: child)),
             child: cart.isEmpty
                 ? const SizedBox.shrink(key: ValueKey('empty'))
-                : Container(
-                    key: const ValueKey('pill'),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                            color: AppColors.primary.withOpacity(0.28),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3))
-                      ],
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.shopping_bag_outlined,
-                          size: 14, color: Colors.white),
-                      const SizedBox(width: 6),
-                      Text('${cart.count} · ${egp(cart.total)}',
-                          style: cairo(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                    ]),
-                  ),
+                : _CartPill(key: const ValueKey('pill'), cart: cart),
           ),
         ],
       ]),
@@ -221,6 +205,36 @@ class _TopBar extends StatelessWidget {
     }
     return bar;
   }
+}
+
+class _CartPill extends StatelessWidget {
+  final CartProvider cart;
+  const _CartPill({super.key, required this.cart});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.primary,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+                color: AppColors.primary.withOpacity(0.28),
+                blurRadius: 10,
+                offset: const Offset(0, 3))
+          ],
+        ),
+        child: Row(children: [
+          const Icon(Icons.shopping_bag_outlined,
+              size: 14, color: Colors.white),
+          const SizedBox(width: 6),
+          Text('${cart.count} · ${egp(cart.total)}',
+              style: cairo(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white)),
+        ]),
+      );
 }
 
 class _StatusBanner extends StatelessWidget {
@@ -257,7 +271,7 @@ class _StatusBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CATEGORY RAIL
+//  CATEGORY RAIL  (redesigned)
 // ─────────────────────────────────────────────────────────────────────────────
 class _CategoryRail extends StatelessWidget {
   const _CategoryRail();
@@ -266,53 +280,88 @@ class _CategoryRail extends StatelessWidget {
   Widget build(BuildContext context) {
     final menu = context.watch<MenuProvider>();
     return Container(
-      width: 86,
+      width: 78,
       decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(right: BorderSide(color: Color(0xFFF0F0F0)))),
+          color: Color(0xFFF7F4F0),
+          border: Border(right: BorderSide(color: Color(0xFFEDE9E3)))),
       child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 12),
         itemCount: menu.categories.length,
         itemBuilder: (_, i) {
           final cat = menu.categories[i];
           final sel = cat.id == menu.selectedId;
+          final style = _CatStyle.of(cat.name);
           return GestureDetector(
             onTap: () => menu.select(cat.id),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOutCubic,
-              margin: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-              decoration: BoxDecoration(
-                color: sel ? AppColors.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: sel ? Colors.white : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: sel
+                      ? [
+                          BoxShadow(
+                              color: Colors.black.withOpacity(0.06),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2))
+                        ]
+                      : [],
+                ),
+                child: Column(children: [
+                  // Colored icon bubble
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: sel
+                          ? style.accent.withOpacity(0.12)
+                          : Colors.transparent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      style.icon,
+                      size: 20,
+                      color: sel ? style.accent : AppColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(normaliseName(cat.name),
+                      style: cairo(
+                          fontSize: 9,
+                          fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                          color: sel ? style.accent : AppColors.textMuted,
+                          height: 1.3),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis),
+                  // Active dot indicator
+                  const SizedBox(height: 5),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: sel ? 18 : 0,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: style.accent,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ]),
               ),
-              child: Column(children: [
-                Icon(_catIcon(cat.name),
-                    size: 20, color: sel ? Colors.white : AppColors.textMuted),
-                const SizedBox(height: 5),
-                Text(normaliseName(cat.name),
-                    style: cairo(
-                        fontSize: 9.5,
-                        fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-                        color: sel ? Colors.white : AppColors.textSecondary,
-                        height: 1.25),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis),
-              ]),
             ),
           );
         },
       ),
     );
   }
-
-  IconData _catIcon(String name) => _CatStyle.of(name).icon;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MENU GRID  — adaptive columns based on available width
+//  MENU GRID
 // ─────────────────────────────────────────────────────────────────────────────
 class _MenuGrid extends StatelessWidget {
   const _MenuGrid({super.key});
@@ -322,9 +371,7 @@ class _MenuGrid extends StatelessWidget {
     final menu = context.watch<MenuProvider>();
     final items = menu.filtered.where((i) => i.isActive).toList();
 
-    if (menu.loading) {
-      return _grid(8, (_, __) => const _MenuCardSkeleton());
-    }
+    if (menu.loading) return _grid(8, (_, __) => const _MenuCardSkeleton());
     if (menu.error != null) {
       return _ErrorState(
         message: menu.error!,
@@ -344,16 +391,15 @@ class _MenuGrid extends StatelessWidget {
 
   Widget _grid(int count, Widget Function(BuildContext, int) builder) =>
       LayoutBuilder(builder: (ctx, constraints) {
-        // Adaptive: aim for cards ~160px wide, min 2, max 5
-        final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
+        final cols = (constraints.maxWidth / 158).floor().clamp(2, 5);
         final extent = constraints.maxWidth / cols;
         return GridView.builder(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(14),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: cols,
             mainAxisSpacing: 10,
             crossAxisSpacing: 10,
-            childAspectRatio: extent / (extent * 1.3),
+            childAspectRatio: extent / (extent * 1.32),
           ),
           itemCount: count,
           itemBuilder: builder,
@@ -394,15 +440,15 @@ class _SearchResults extends StatelessWidget {
     }
 
     return LayoutBuilder(builder: (ctx, constraints) {
-      final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
+      final cols = (constraints.maxWidth / 158).floor().clamp(2, 5);
       final extent = constraints.maxWidth / cols;
       return GridView.builder(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: cols,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: extent / (extent * 1.3),
+          childAspectRatio: extent / (extent * 1.32),
         ),
         itemCount: found.length,
         itemBuilder: (_, i) => _MenuCard(item: found[i]),
@@ -422,6 +468,8 @@ class _MobileCartFab extends StatelessWidget {
     return FloatingActionButton.extended(
       onPressed: () => _MobileCartSheet.show(context),
       backgroundColor: AppColors.primary,
+      elevation: 6,
+      shape: const StadiumBorder(),
       label: Text('${cart.count} items · ${egp(cart.total)}',
           style: cairo(
               fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
@@ -455,35 +503,23 @@ class _MobileCartSheet extends StatelessWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Column(children: [
-        // Handle
         Padding(
           padding: const EdgeInsets.only(top: 12),
           child: Center(
               child: Container(
-                  width: 40,
+                  width: 36,
                   height: 4,
                   decoration: BoxDecoration(
                       color: const Color(0xFFE0E0E0),
                       borderRadius: BorderRadius.circular(2)))),
         ),
-        // Header
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
           child: Row(children: [
             Text('Order',
                 style: cairo(fontSize: 17, fontWeight: FontWeight.w800)),
             const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20)),
-              child: Text('${cart.count}',
-                  style: cairo(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary)),
-            ),
+            _CountBadge(count: cart.count),
             const Spacer(),
             if (!cart.isEmpty)
               GestureDetector(
@@ -499,8 +535,8 @@ class _MobileCartSheet extends StatelessWidget {
               ),
           ]),
         ),
-        const SizedBox(height: 8),
-        const Divider(height: 1),
+        const SizedBox(height: 10),
+        const Divider(height: 1, color: Color(0xFFF0EDE8)),
         Expanded(
           child: cart.isEmpty
               ? Center(
@@ -558,7 +594,7 @@ class _MenuCardSkeletonState extends State<_MenuCardSkeleton>
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
+                      color: Colors.black.withOpacity(0.04),
                       blurRadius: 8,
                       offset: const Offset(0, 2))
                 ]),
@@ -696,7 +732,9 @@ class _CatStyle {
           iconColor: Color(0xFFE64A19),
           accent: Color(0xFFEF6C00));
     }
-    if (n.contains('affogato') || n.contains('ice cream')) {
+    if (n.contains('affogato') ||
+        n.contains('ice cream') ||
+        n.contains('soft serve')) {
       return const _CatStyle(
           icon: Icons.icecream_rounded,
           bgTop: Color(0xFFF3E5F5),
@@ -768,8 +806,8 @@ class _MenuCardState extends State<_MenuCard>
   void initState() {
     super.initState();
     _pressCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 100));
-    _pressAnim = Tween<double>(begin: 1, end: 0.96)
+        vsync: this, duration: const Duration(milliseconds: 90));
+    _pressAnim = Tween<double>(begin: 1, end: 0.95)
         .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
   }
 
@@ -814,8 +852,8 @@ class _MenuCardState extends State<_MenuCard>
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                  color: style.accent.withOpacity(0.12),
-                  blurRadius: 12,
+                  color: style.accent.withOpacity(0.10),
+                  blurRadius: 14,
                   offset: const Offset(0, 4)),
               BoxShadow(
                   color: Colors.black.withOpacity(0.04),
@@ -840,21 +878,21 @@ class _MenuCardState extends State<_MenuCard>
                 if (!hasImage)
                   Center(
                       child: Container(
-                    width: 56,
-                    height: 56,
+                    width: 52,
+                    height: 52,
                     decoration: BoxDecoration(
-                        color: style.iconColor.withOpacity(0.12),
+                        color: style.iconColor.withOpacity(0.1),
                         shape: BoxShape.circle),
-                    child: Icon(style.icon, size: 28, color: style.iconColor),
+                    child: Icon(style.icon, size: 26, color: style.iconColor),
                   )),
                 if (_fetching)
                   Positioned.fill(
                       child: Container(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withOpacity(0.28),
                     alignment: Alignment.center,
                     child: const SizedBox(
-                        width: 24,
-                        height: 24,
+                        width: 22,
+                        height: 22,
                         child: CircularProgressIndicator(
                             strokeWidth: 2.5, color: Colors.white)),
                   )),
@@ -866,9 +904,9 @@ class _MenuCardState extends State<_MenuCard>
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                          width: 4,
-                          height: 28,
-                          margin: const EdgeInsets.only(right: 8),
+                          width: 3,
+                          height: 26,
+                          margin: const EdgeInsets.only(right: 7),
                           decoration: BoxDecoration(
                               color: style.accent,
                               borderRadius: BorderRadius.circular(2))),
@@ -880,7 +918,7 @@ class _MenuCardState extends State<_MenuCard>
                                   height: 1.25),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis)),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 5),
                       Text(egp(item.basePrice),
                           style: cairo(
                               fontSize: 11,
@@ -919,6 +957,7 @@ class ItemDetailSheet extends StatefulWidget {
       context: ctx,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      useSafeArea: true,
       builder: (_) => ItemDetailSheet(item: item));
 
   @override
@@ -927,9 +966,12 @@ class ItemDetailSheet extends StatefulWidget {
 
 class _ItemDetailSheetState extends State<ItemDetailSheet> {
   String? _selectedSize;
-  final Map<String, String> _single = {};
-  final Map<String, Set<String>> _multi = {};
+  // groupId → { optionItemId → qty }
+  final Map<String, Map<String, int>> _opts = {};
   int _qty = 1;
+
+  // Sorted option groups: milk_type → coffee_type → extras
+  late final List<DrinkOptionGroup> _sortedGroups;
 
   @override
   void initState() {
@@ -937,23 +979,19 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
     if (widget.item.sizes.isNotEmpty) {
       _selectedSize = widget.item.sizes.first.label;
     }
+    _sortedGroups = [...widget.item.optionGroups]..sort((a, b) =>
+        _groupTypeSortOrder(a.groupType)
+            .compareTo(_groupTypeSortOrder(b.groupType)));
   }
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
   int get _addonsTotal {
     int t = 0;
-    for (final g in widget.item.optionGroups) {
-      if (g.isMultiSelect) {
-        for (final o in g.items) {
-          if ((_multi[g.id] ?? {}).contains(o.id)) t += o.price;
-        }
-      } else {
-        for (final o in g.items) {
-          if (o.id == _single[g.id]) {
-            t += o.price;
-            break;
-          }
-        }
+    for (final g in _sortedGroups) {
+      final selected = _opts[g.id] ?? {};
+      for (final o in g.items) {
+        final qty = selected[o.id] ?? 0;
+        if (qty > 0) t += (o.price as int) * qty;
       }
     }
     return t;
@@ -961,56 +999,57 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
 
   int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
   bool get _canAdd {
-    for (final g in widget.item.optionGroups) {
+    for (final g in _sortedGroups) {
       if (!g.isRequired) continue;
-      if (g.isMultiSelect) {
-        if ((_multi[g.id] ?? {}).isEmpty) return false;
-      } else {
-        if (!_single.containsKey(g.id)) return false;
-      }
+      if ((_opts[g.id] ?? {}).isEmpty) return false;
     }
     return true;
   }
 
-  void _toggleSingle(String gId, String oId, bool req) => setState(() {
-        if (_single[gId] == oId) {
-          if (!req) _single.remove(gId);
+  void _tap(String gId, String oId, bool isMulti, bool isRequired) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      final groupOpts = _opts.putIfAbsent(gId, () => {});
+      if (!isMulti) {
+        if (groupOpts.containsKey(oId)) {
+          if (!isRequired) groupOpts.remove(oId);
         } else {
-          _single[gId] = oId;
+          groupOpts.clear();
+          groupOpts[oId] = 1;
         }
-      });
+      } else {
+        groupOpts[oId] = (groupOpts[oId] ?? 0) + 1;
+      }
+    });
+  }
 
-  void _toggleMulti(String gId, String oId) => setState(() {
-        final s = _multi.putIfAbsent(gId, () => {});
-        s.contains(oId) ? s.remove(oId) : s.add(oId);
-        if (s.isEmpty) _multi.remove(gId);
-      });
+  void _longPress(String gId, String oId) {
+    HapticFeedback.lightImpact();
+    setState(() {
+      final groupOpts = _opts[gId];
+      if (groupOpts == null) return;
+      final current = groupOpts[oId] ?? 0;
+      if (current <= 1)
+        groupOpts.remove(oId);
+      else
+        groupOpts[oId] = current - 1;
+      if (groupOpts.isEmpty) _opts.remove(gId);
+    });
+  }
 
   void _addToCart() {
     final addons = <SelectedAddon>[];
-    for (final g in widget.item.optionGroups) {
-      if (g.isMultiSelect) {
-        for (final o in g.items) {
-          if ((_multi[g.id] ?? {}).contains(o.id)) {
-            addons.add(SelectedAddon(
-                addonItemId: o.addonItemId,
-                drinkOptionItemId: o.id,
-                name: o.name,
-                priceModifier: o.price));
-          }
-        }
-      } else {
-        final sId = _single[g.id];
-        if (sId == null) continue;
-        for (final o in g.items) {
-          if (o.id == sId) {
-            addons.add(SelectedAddon(
-                addonItemId: o.addonItemId,
-                drinkOptionItemId: o.id,
-                name: o.name,
-                priceModifier: o.price));
-            break;
-          }
+    for (final g in _sortedGroups) {
+      final selected = _opts[g.id] ?? {};
+      for (final o in g.items) {
+        final qty = selected[o.id] ?? 0;
+        if (qty > 0) {
+          addons.add(SelectedAddon(
+              addonItemId: o.addonItemId,
+              drinkOptionItemId: o.id,
+              name: o.name,
+              priceModifier: o.price as int,
+              quantity: qty));
         }
       }
     }
@@ -1027,16 +1066,18 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
+    final style = _CatStyle.of(widget.item.name);
+
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
       child: Container(
-        constraints: BoxConstraints(maxHeight: mq.size.height * 0.90),
+        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
         decoration: const BoxDecoration(
             color: Color(0xFFFAF8F5),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              padding: const EdgeInsets.only(top: 12, bottom: 2),
               child: Center(
                   child: Container(
                       width: 36,
@@ -1044,137 +1085,55 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: const Color(0xFFDDD8D0),
                           borderRadius: BorderRadius.circular(2))))),
-          // Header
-          Container(
-            padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
-            decoration: const BoxDecoration(
-                color: Color(0xFFFAF8F5),
-                border: Border(bottom: BorderSide(color: Color(0xFFECE8E0)))),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(normaliseName(widget.item.name),
-                        style: cairo(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            height: 1.2)),
-                    if (widget.item.description != null) ...[
-                      const SizedBox(height: 4),
-                      Text(widget.item.description!,
-                          style: cairo(
-                              fontSize: 12.5,
-                              color: AppColors.textSecondary,
-                              height: 1.4)),
-                    ],
-                  ])),
-              const SizedBox(width: 16),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                transitionBuilder: (child, anim) => SlideTransition(
-                    position: Tween<Offset>(
-                            begin: const Offset(0, -0.3), end: Offset.zero)
-                        .animate(anim),
-                    child: FadeTransition(opacity: anim, child: child)),
-                child: Container(
-                  key: ValueKey(_unitPrice + _addonsTotal),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                      color: AppColors.primary.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10)),
-                  child: Text(egp(_unitPrice + _addonsTotal),
-                      style: cairo(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primary)),
-                ),
-              ),
-            ]),
-          ),
-          // Options scroll area
+          _SheetHeader(
+              item: widget.item,
+              style: style,
+              unitPrice: _unitPrice,
+              addonsTotal: _addonsTotal),
           Flexible(
               child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (widget.item.sizes.isNotEmpty) ...[
-                const _SectionLabel('Size'),
+                _SectionLabel('Size'),
                 const SizedBox(height: 10),
                 Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: widget.item.sizes
-                        .map((s) => _Chip(
+                        .map((s) => _SizeChip(
                               label: normaliseName(s.label),
-                              sublabel: egp(s.price),
+                              price: egp(s.price),
                               selected: s.label == _selectedSize,
-                              checkbox: false,
                               onTap: () =>
                                   setState(() => _selectedSize = s.label),
                             ))
                         .toList()),
                 const SizedBox(height: 20),
               ],
-              for (final g in widget.item.optionGroups) ...[
+
+              // Option groups — already sorted milk → coffee → extras
+              for (final g in _sortedGroups) ...[
                 _OptionGroupCard(
                   group: g,
-                  selectedSingle: _single[g.id],
-                  selectedMulti: _multi[g.id] ?? {},
-                  onToggleSingle: (oId) =>
-                      _toggleSingle(g.id, oId, g.isRequired),
-                  onToggleMulti: (oId) => _toggleMulti(g.id, oId),
+                  selectedQtys: _opts[g.id] ?? {},
+                  onTap: (oId) =>
+                      _tap(g.id, oId, g.isMultiSelect, g.isRequired),
+                  onLongPress: (oId) => _longPress(g.id, oId),
                 ),
                 const SizedBox(height: 12),
               ],
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
             ]),
           )),
-          // Footer
-          Container(
-            padding: const EdgeInsets.fromLTRB(22, 12, 22, 16),
-            decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: Color(0xFFECE8E0)))),
-            child: Row(children: [
-              Container(
-                decoration: BoxDecoration(
-                    color: const Color(0xFFF5F0EB),
-                    borderRadius: BorderRadius.circular(12)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  _QtyBtn(
-                      icon: Icons.remove,
-                      onTap: () =>
-                          setState(() => _qty = (_qty - 1).clamp(1, 99))),
-                  SizedBox(
-                      width: 40,
-                      child: Center(
-                          child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 150),
-                              transitionBuilder: (child, anim) =>
-                                  ScaleTransition(scale: anim, child: child),
-                              child: Text('$_qty',
-                                  key: ValueKey(_qty),
-                                  style: cairo(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800))))),
-                  _QtyBtn(
-                      icon: Icons.add,
-                      onTap: () =>
-                          setState(() => _qty = (_qty + 1).clamp(1, 99))),
-                ]),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: AppButton(
-                label: _canAdd
-                    ? 'Add to Order — ${egp(_lineTotal)}'
-                    : 'Select required options',
-                height: 50,
-                onTap: _canAdd ? _addToCart : null,
-              )),
-            ]),
+          _SheetFooter(
+            qty: _qty,
+            total: _lineTotal,
+            canAdd: _canAdd,
+            onMinus: () => setState(() => _qty = (_qty - 1).clamp(1, 99)),
+            onPlus: () => setState(() => _qty = (_qty + 1).clamp(1, 99)),
+            onAdd: _addToCart,
           ),
         ]),
       ),
@@ -1183,20 +1142,157 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  SHEET SUB-WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+class _SheetHeader extends StatelessWidget {
+  final MenuItem item;
+  final _CatStyle style;
+  final int unitPrice;
+  final int addonsTotal;
+  const _SheetHeader(
+      {required this.item,
+      required this.style,
+      required this.unitPrice,
+      required this.addonsTotal});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+      decoration: const BoxDecoration(
+          color: Color(0xFFFAF8F5),
+          border: Border(bottom: BorderSide(color: Color(0xFFECE8E0)))),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+              gradient: LinearGradient(
+                  colors: [style.bgTop, style.bgBottom],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight),
+              borderRadius: BorderRadius.circular(14)),
+          child: item.imageUrl != null && item.imageUrl!.isNotEmpty
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.network(item.imageUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          Icon(style.icon, size: 26, color: style.iconColor)))
+              : Icon(style.icon, size: 26, color: style.iconColor),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(normaliseName(item.name),
+              style: cairo(
+                  fontSize: 19, fontWeight: FontWeight.w800, height: 1.2)),
+          if (item.description != null) ...[
+            const SizedBox(height: 3),
+            Text(item.description!,
+                style: cairo(
+                    fontSize: 12, color: AppColors.textSecondary, height: 1.4),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis),
+          ],
+        ])),
+        const SizedBox(width: 12),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          transitionBuilder: (child, anim) => SlideTransition(
+              position:
+                  Tween<Offset>(begin: const Offset(0, -0.3), end: Offset.zero)
+                      .animate(anim),
+              child: FadeTransition(opacity: anim, child: child)),
+          child: Container(
+            key: ValueKey(unitPrice + addonsTotal),
+            // pill price badge
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.09),
+                borderRadius: BorderRadius.circular(24)),
+            child: Text(egp(unitPrice + addonsTotal),
+                style: cairo(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primary)),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _SheetFooter extends StatelessWidget {
+  final int qty;
+  final int total;
+  final bool canAdd;
+  final VoidCallback onMinus, onPlus, onAdd;
+  const _SheetFooter(
+      {required this.qty,
+      required this.total,
+      required this.canAdd,
+      required this.onMinus,
+      required this.onPlus,
+      required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
+        decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Color(0xFFECE8E0)))),
+        child: Row(children: [
+          // Pill qty stepper
+          Container(
+            decoration: BoxDecoration(
+                color: const Color(0xFFF5F0EB),
+                borderRadius: BorderRadius.circular(24)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _QtyBtn(icon: Icons.remove, onTap: onMinus),
+              SizedBox(
+                  width: 40,
+                  child: Center(
+                      child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 130),
+                          transitionBuilder: (child, anim) =>
+                              ScaleTransition(scale: anim, child: child),
+                          child: Text('$qty',
+                              key: ValueKey(qty),
+                              style: cairo(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800))))),
+              _QtyBtn(icon: Icons.add, onTap: onPlus),
+            ]),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+              child: AppButton(
+            label: canAdd
+                ? 'Add to Order  ${egp(total)}'
+                : 'Select required options',
+            height: 50,
+            onTap: canAdd ? onAdd : null,
+          )),
+        ]),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  OPTION GROUP CARD
 // ─────────────────────────────────────────────────────────────────────────────
 class _OptionGroupCard extends StatefulWidget {
-  final dynamic group;
-  final String? selectedSingle;
-  final Set<String> selectedMulti;
-  final void Function(String) onToggleSingle;
-  final void Function(String) onToggleMulti;
+  final DrinkOptionGroup group;
+  final Map<String, int> selectedQtys;
+  final void Function(String) onTap;
+  final void Function(String) onLongPress;
   const _OptionGroupCard(
       {required this.group,
-      required this.selectedSingle,
-      required this.selectedMulti,
-      required this.onToggleSingle,
-      required this.onToggleMulti});
+      required this.selectedQtys,
+      required this.onTap,
+      required this.onLongPress});
+
   @override
   State<_OptionGroupCard> createState() => _OptionGroupCardState();
 }
@@ -1204,6 +1300,7 @@ class _OptionGroupCard extends StatefulWidget {
 class _OptionGroupCardState extends State<_OptionGroupCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
+
   @override
   void initState() {
     super.initState();
@@ -1217,77 +1314,112 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
     super.dispose();
   }
 
+  // Icon per group type
+  IconData _groupIcon(String type) => switch (type) {
+        'milk_type' => Icons.water_drop_outlined,
+        'coffee_type' => Icons.coffee_outlined,
+        _ => Icons.add_circle_outline_rounded,
+      };
+
   @override
   Widget build(BuildContext context) {
     final g = widget.group;
-    final allOpts = g.items as List;
-    final showSearch = allOpts.length > 5;
+    final allOpts = g.items;
+    final showSearch = allOpts.length > 6;
     final opts = _query.isEmpty
         ? allOpts
-        : allOpts
-            .where((o) => (o.name as String).toLowerCase().contains(_query))
-            .toList();
-    final selCount = g.isMultiSelect
-        ? widget.selectedMulti.length
-        : (widget.selectedSingle != null ? 1 : 0);
+        : allOpts.where((o) => o.name.toLowerCase().contains(_query)).toList();
+    final selCount = widget.selectedQtys.length;
+    final hasSelection = selCount > 0;
+    final groupType = g.groupType;
 
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color: selCount > 0
-                ? AppColors.primary.withOpacity(0.2)
-                : const Color(0xFFECE8E0)),
+            color: hasSelection
+                ? AppColors.primary.withOpacity(0.25)
+                : const Color(0xFFEAE6E0),
+            width: hasSelection ? 1.5 : 1),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 6,
-              offset: const Offset(0, 2))
+              color: hasSelection
+                  ? AppColors.primary.withOpacity(0.06)
+                  : Colors.black.withOpacity(0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Group header
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 0),
           child: Row(children: [
+            // Group type icon
+            Icon(_groupIcon(groupType),
+                size: 14,
+                color: hasSelection ? AppColors.primary : AppColors.textMuted),
+            const SizedBox(width: 6),
             Expanded(
                 child: Row(children: [
-              Text(g.displayName.toString().toUpperCase(),
+              Text(g.displayName.toUpperCase(),
                   style: cairo(
-                      fontSize: 10.5,
+                      fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary,
-                      letterSpacing: 0.7)),
+                      color: hasSelection
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                      letterSpacing: 0.8)),
               const SizedBox(width: 6),
-              if (g.isRequired) const _Pill('Required', AppColors.danger),
+              if (g.isRequired) _TagPill('Required', AppColors.danger),
               if (g.isMultiSelect) ...[
                 const SizedBox(width: 4),
-                const _Pill('Multi', AppColors.primary)
+                _TagPill('Multi', AppColors.primary),
               ],
             ])),
-            if (selCount > 0)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(20)),
-                child: Text('$selCount',
+            if (hasSelection)
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Container(
+                  key: ValueKey(selCount),
+                  // pill badge for selection count
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text('$selCount',
+                      style: cairo(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+                ),
+              )
+            else if (g.isRequired)
+              Row(children: [
+                Icon(Icons.radio_button_unchecked,
+                    size: 13, color: AppColors.danger.withOpacity(0.5)),
+                const SizedBox(width: 4),
+                Text('Pick one',
                     style: cairo(
                         fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white)),
-              ),
+                        color: AppColors.danger.withOpacity(0.6))),
+              ]),
           ]),
         ),
+
         if (showSearch) ...[
           const SizedBox(height: 10),
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Container(
-                height: 34,
+                height: 33,
                 decoration: BoxDecoration(
                     color: const Color(0xFFF5F0EB),
-                    borderRadius: BorderRadius.circular(9)),
+                    // pill search in groups too
+                    borderRadius: BorderRadius.circular(20)),
                 child: TextField(
                     controller: _searchCtrl,
                     style: cairo(fontSize: 13),
@@ -1312,6 +1444,7 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
                     )),
               )),
         ],
+
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: opts.isEmpty
@@ -1321,29 +1454,157 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
                   spacing: 7,
                   runSpacing: 7,
                   children: opts.map((opt) {
-                    final sel = g.isMultiSelect
-                        ? widget.selectedMulti.contains(opt.id)
-                        : widget.selectedSingle == opt.id;
-                    return _Chip(
-                      label: normaliseName(opt.name as String),
-                      sublabel: (opt.price as int) > 0
-                          ? '+${egp(opt.price as int)}'
-                          : null,
-                      selected: sel,
-                      checkbox: g.isMultiSelect,
-                      onTap: () => g.isMultiSelect
-                          ? widget.onToggleMulti(opt.id as String)
-                          : widget.onToggleSingle(opt.id as String),
+                    final qty = widget.selectedQtys[opt.id] ?? 0;
+                    return _OptionChip(
+                      label: normaliseName(opt.name),
+                      price: opt.price,
+                      qty: qty,
+                      isMulti: g.isMultiSelect,
+                      onTap: () => widget.onTap(opt.id),
+                      onLongPress: () => widget.onLongPress(opt.id),
                     );
                   }).toList()),
         ),
+
+        if (g.isMultiSelect)
+          Padding(
+            padding: const EdgeInsets.only(left: 14, bottom: 10),
+            child: Text('Tap to add · Long-press to remove',
+                style: cairo(
+                  fontSize: 9.5,
+                  color: AppColors.textMuted,
+                )),
+          ),
       ]),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CART PANEL (tablet sidebar)
+//  OPTION CHIP  — fully pill-shaped, qty badge
+// ─────────────────────────────────────────────────────────────────────────────
+class _OptionChip extends StatefulWidget {
+  final String label;
+  final int price;
+  final int qty;
+  final bool isMulti;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  const _OptionChip(
+      {required this.label,
+      required this.price,
+      required this.qty,
+      required this.isMulti,
+      required this.onTap,
+      required this.onLongPress});
+
+  @override
+  State<_OptionChip> createState() => _OptionChipState();
+}
+
+class _OptionChipState extends State<_OptionChip>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 80));
+    _scale = Tween<double>(begin: 1, end: 0.93)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = widget.qty > 0;
+
+    return GestureDetector(
+      onTapDown: (_) => _ctrl.forward(),
+      onTapUp: (_) {
+        _ctrl.reverse();
+        widget.onTap();
+      },
+      onTapCancel: () => _ctrl.reverse(),
+      onLongPress: widget.onLongPress,
+      child: ScaleTransition(
+        scale: _scale,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          // fully pill-shaped chips
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+              color: selected ? AppColors.primary : const Color(0xFFF5F0EB),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                  color: selected ? AppColors.primary : const Color(0xFFE4DDD4),
+                  width: selected ? 1.5 : 1)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            if (widget.isMulti) ...[
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Icon(
+                  selected
+                      ? Icons.check_circle_rounded
+                      : Icons.add_circle_outline_rounded,
+                  key: ValueKey(selected),
+                  size: 14,
+                  color: selected ? Colors.white : AppColors.textMuted,
+                ),
+              ),
+              const SizedBox(width: 5),
+            ],
+            Text(widget.label,
+                style: cairo(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : AppColors.textPrimary)),
+            if (widget.price > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                    color: selected
+                        ? Colors.white.withOpacity(0.2)
+                        : AppColors.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12)),
+                child: Text('+${egp(widget.price)}',
+                    style: cairo(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: selected ? Colors.white : AppColors.primary)),
+              ),
+            ],
+            if (widget.qty > 1) ...[
+              const SizedBox(width: 5),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.28),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Text('×${widget.qty}',
+                    style: cairo(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white)),
+              ),
+            ],
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CART PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 class _CartPanel extends StatelessWidget {
   const _CartPanel();
@@ -1351,21 +1612,19 @@ class _CartPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final w = MediaQuery.of(context).size.width;
-    // Adaptive cart width: 26% of screen, clamped 280–380px
-    final cartW = (w * 0.26).clamp(280.0, 380.0);
+    final cartW = (w * 0.27).clamp(290.0, 380.0);
     final cart = context.watch<CartProvider>();
 
     return Container(
       width: cartW,
       decoration: const BoxDecoration(
           color: Colors.white,
-          border: Border(left: BorderSide(color: Color(0xFFF0F0F0)))),
+          border: Border(left: BorderSide(color: Color(0xFFF0EDE8)))),
       child: Column(children: [
-        // Header
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0)))),
+              border: Border(bottom: BorderSide(color: Color(0xFFF0EDE8)))),
           child: Row(children: [
             Text('Order',
                 style: cairo(fontSize: 15, fontWeight: FontWeight.w800)),
@@ -1373,30 +1632,20 @@ class _CartPanel extends StatelessWidget {
               const SizedBox(width: 8),
               AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
-                  child: Container(
-                    key: ValueKey(cart.count),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20)),
-                    child: Text('${cart.count}',
-                        style: cairo(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary)),
-                  )),
+                  child: _CountBadge(
+                      key: ValueKey(cart.count), count: cart.count)),
             ],
             const Spacer(),
             if (!cart.isEmpty)
               GestureDetector(
                 onTap: () => _confirmClear(context),
                 child: Container(
+                  // pill clear button
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                   decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.07),
-                      borderRadius: BorderRadius.circular(8)),
+                      color: AppColors.danger.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(20)),
                   child: Text('Clear',
                       style: cairo(
                           fontSize: 12,
@@ -1426,33 +1675,30 @@ class _CartPanel extends StatelessWidget {
     );
   }
 
-  void _confirmClear(BuildContext context) {
-    showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              title: Text('Clear Order?',
-                  style: cairo(fontWeight: FontWeight.w700)),
-              content: Text('Remove all items from the cart.', style: cairo()),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: Text('Cancel',
-                        style: cairo(color: AppColors.textSecondary))),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    context.read<CartProvider>().clear();
-                  },
-                  child: Text('Clear',
-                      style: cairo(
-                          color: AppColors.danger,
-                          fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ));
-  }
+  void _confirmClear(BuildContext context) => showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title:
+                Text('Clear Order?', style: cairo(fontWeight: FontWeight.w700)),
+            content: Text('Remove all items from the cart.', style: cairo()),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text('Cancel',
+                      style: cairo(color: AppColors.textSecondary))),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  context.read<CartProvider>().clear();
+                },
+                child: Text('Clear',
+                    style: cairo(
+                        color: AppColors.danger, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ));
 }
 
 class _EmptyCart extends StatelessWidget {
@@ -1461,36 +1707,41 @@ class _EmptyCart extends StatelessWidget {
   Widget build(BuildContext context) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           SizedBox(
-              width: 130,
-              height: 130,
+              width: 120,
+              height: 120,
               child: Lottie.asset('assets/lottie/empty_cart.json',
                   fit: BoxFit.contain, repeat: true)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text('Cart is empty',
               style: cairo(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textSecondary)),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Text('Tap any item to add it',
               style: cairo(fontSize: 12, color: AppColors.textMuted)),
         ]),
       );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  CART ROW
+// ─────────────────────────────────────────────────────────────────────────────
 class _CartRow extends StatelessWidget {
   final int index;
   const _CartRow({required this.index});
+
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<CartProvider>();
     final item = cart.items[index];
+
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(11),
       decoration: BoxDecoration(
           color: const Color(0xFFFAFAFA),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFF0F0F0))),
+          border: Border.all(color: const Color(0xFFF0EDE8))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
@@ -1512,15 +1763,18 @@ class _CartRow extends StatelessWidget {
               runSpacing: 4,
               children: item.addons
                   .map((a) => Container(
+                        // pill addon tags in cart
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
+                            horizontal: 9, vertical: 3),
                         decoration: BoxDecoration(
                             color: AppColors.primary.withOpacity(0.07),
-                            borderRadius: BorderRadius.circular(5)),
+                            borderRadius: BorderRadius.circular(20)),
                         child: Text(
-                            a.priceModifier > 0
-                                ? '${normaliseName(a.name)} +${egp(a.priceModifier)}'
-                                : normaliseName(a.name),
+                            a.quantity > 1
+                                ? '${normaliseName(a.name)} ×${a.quantity}${a.priceModifier > 0 ? "  +${egp(a.priceModifier * a.quantity)}" : ""}'
+                                : a.priceModifier > 0
+                                    ? '${normaliseName(a.name)}  +${egp(a.priceModifier)}'
+                                    : normaliseName(a.name),
                             style: cairo(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
@@ -1528,7 +1782,7 @@ class _CartRow extends StatelessWidget {
                       ))
                   .toList()),
         ],
-        const SizedBox(height: 8),
+        const SizedBox(height: 9),
         Row(children: [
           _InlineBtn(
               icon: Icons.remove,
@@ -1551,7 +1805,7 @@ class _CartRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8)),
                 alignment: Alignment.center,
                 child: const Icon(Icons.delete_outline_rounded,
-                    size: 15, color: AppColors.danger)),
+                    size: 14, color: AppColors.danger)),
           ),
         ]),
       ]),
@@ -1559,22 +1813,25 @@ class _CartRow extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  CART FOOTER
+// ─────────────────────────────────────────────────────────────────────────────
 class _CartFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = context.watch<CartProvider>();
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 13, 16, 16),
       decoration: const BoxDecoration(
           color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFF0F0F0)))),
+          border: Border(top: BorderSide(color: Color(0xFFF0EDE8)))),
       child: Column(children: [
         LabelValue('Subtotal', egp(cart.subtotal)),
         if (cart.discountAmount > 0)
           LabelValue('Discount', '− ${egp(cart.discountAmount)}',
               valueColor: AppColors.success),
         Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: 9),
             child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1609,7 +1866,6 @@ class _CartFooter extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  CHECKOUT SHEET
-//  FIXED: saves to offline queue when network is unavailable.
 // ─────────────────────────────────────────────────────────────────────────────
 class CheckoutSheet extends StatefulWidget {
   const CheckoutSheet({super.key});
@@ -1650,7 +1906,6 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       _error = null;
     });
 
-    // ── OFFLINE PATH ──────────────────────────────────────────────────────
     if (!sync.isOnline) {
       final pending = PendingOrder(
         localId: const Uuid().v4(),
@@ -1676,7 +1931,6 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       return;
     }
 
-    // ── ONLINE PATH ───────────────────────────────────────────────────────
     try {
       final order = await orderApi.create(
         branchId: shift.branchId,
@@ -1699,7 +1953,6 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       if (e is DioException) {
         debugPrint('ORDER ${e.response?.statusCode}: ${e.response?.data}');
       }
-      // If we lost connection mid-flight, queue it
       if (e is DioException &&
           (e.type == DioExceptionType.connectionError ||
               e.type == DioExceptionType.connectionTimeout ||
@@ -1742,7 +1995,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
       padding: EdgeInsets.fromLTRB(24, 14, 24, mq.viewInsets.bottom + 28),
       child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1755,27 +2008,25 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                     decoration: BoxDecoration(
                         color: const Color(0xFFE0E0E0),
                         borderRadius: BorderRadius.circular(2)))),
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
             Text('Checkout',
                 style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
             const SizedBox(height: 16),
-            // Totals
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: const Color(0xFFF8F8F8),
+                  color: const Color(0xFFF8F5F1),
                   borderRadius: BorderRadius.circular(14)),
               child: Column(children: [
                 LabelValue('Subtotal', egp(cart.subtotal)),
                 if (cart.discountAmount > 0)
                   LabelValue('Discount', '− ${egp(cart.discountAmount)}',
                       valueColor: AppColors.success),
-                const Divider(height: 16, color: Color(0xFFEEEEEE)),
+                const Divider(height: 14, color: Color(0xFFE8E4DE)),
                 LabelValue('Total', egp(cart.total), bold: true),
               ]),
             ),
             const SizedBox(height: 18),
-            // Customer
             Text('CUSTOMER NAME (OPTIONAL)',
                 style: cairo(
                     fontSize: 11,
@@ -1794,7 +2045,6 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                       size: 18, color: AppColors.textMuted),
                 )),
             const SizedBox(height: 18),
-            // Payment
             Text('PAYMENT',
                 style: cairo(
                     fontSize: 11,
@@ -1912,12 +2162,11 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
       branchName: bp.branchName,
       brand: bp.printerBrand!,
     );
-    if (mounted) {
+    if (mounted)
       setState(() {
         _printing = false;
         _printError = err;
       });
-    }
   }
 
   @override
@@ -1926,7 +2175,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
       padding: EdgeInsets.fromLTRB(
           24, 14, 24, MediaQuery.of(context).padding.bottom + 28),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1943,7 +2192,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
             height: 120,
             child: Lottie.asset('assets/lottie/success.json',
                 repeat: false, fit: BoxFit.contain)),
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         Text('Order Placed!',
             style: cairo(fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
@@ -1954,7 +2203,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-              color: const Color(0xFFF8F8F8),
+              color: const Color(0xFFF8F5F1),
               borderRadius: BorderRadius.circular(14)),
           child: Column(children: [
             LabelValue(
@@ -1986,7 +2235,8 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                       color: AppColors.primary.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10)),
+                      // pill print button
+                      borderRadius: BorderRadius.circular(24)),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     Icon(Icons.print_rounded,
                         size: 16,
@@ -2032,16 +2282,17 @@ class _SectionLabel extends StatelessWidget {
           letterSpacing: 0.7));
 }
 
-class _Pill extends StatelessWidget {
+class _TagPill extends StatelessWidget {
   final String text;
   final Color color;
-  const _Pill(this.text, this.color);
+  const _TagPill(this.text, this.color);
   @override
   Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
           color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(4)),
+          // fully pill-shaped tags
+          borderRadius: BorderRadius.circular(20)),
       child: Text(text,
           style: cairo(
               fontSize: 9,
@@ -2050,61 +2301,66 @@ class _Pill extends StatelessWidget {
               letterSpacing: 0.3)));
 }
 
-class _Chip extends StatelessWidget {
+class _CountBadge extends StatelessWidget {
+  final int count;
+  const _CountBadge({super.key, required this.count});
+  @override
+  Widget build(BuildContext context) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+          color: AppColors.primary.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20)),
+      child: Text('$count',
+          style: cairo(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary)));
+}
+
+class _SizeChip extends StatelessWidget {
   final String label;
-  final String? sublabel;
+  final String price;
   final bool selected;
-  final bool checkbox;
   final VoidCallback onTap;
-  const _Chip(
+  const _SizeChip(
       {required this.label,
-      this.sublabel,
+      required this.price,
       required this.selected,
-      required this.checkbox,
       required this.onTap});
+
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        // pill size chips
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
         decoration: BoxDecoration(
             color: selected ? AppColors.primary : const Color(0xFFF5F0EB),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
                 color: selected ? AppColors.primary : const Color(0xFFE4DDD4),
                 width: selected ? 1.5 : 1)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          if (checkbox) ...[
-            Icon(
-                selected
-                    ? Icons.check_box_rounded
-                    : Icons.check_box_outline_blank_rounded,
-                size: 15,
-                color: selected ? Colors.white : AppColors.textMuted),
-            const SizedBox(width: 6),
-          ],
           Text(label,
               style: cairo(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: selected ? Colors.white : AppColors.textPrimary)),
-          if (sublabel != null) ...[
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                  color: selected
-                      ? Colors.white.withOpacity(0.2)
-                      : AppColors.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(5)),
-              child: Text(sublabel!,
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: selected ? Colors.white : AppColors.primary)),
-            ),
-          ],
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+                color: selected
+                    ? Colors.white.withOpacity(0.2)
+                    : AppColors.primary.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(12)),
+            child: Text(price,
+                style: cairo(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? Colors.white : AppColors.primary)),
+          ),
         ]),
       ));
 }
@@ -2152,7 +2408,8 @@ class _IconBtn extends StatelessWidget {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-              color: AppColors.bg, borderRadius: BorderRadius.circular(10)),
+              color: const Color(0xFFF5F1ED),
+              borderRadius: BorderRadius.circular(10)),
           alignment: Alignment.center,
           child: Icon(icon, size: 18, color: AppColors.textPrimary)));
 }

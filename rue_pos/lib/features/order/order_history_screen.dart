@@ -15,6 +15,9 @@ import '../../core/utils/formatting.dart';
 import '../../shared/widgets/error_banner.dart';
 import '../../shared/widgets/label_value.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
 class OrderHistoryScreen extends StatefulWidget {
   const OrderHistoryScreen({super.key});
   @override
@@ -31,7 +34,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   Future<void> _load() async {
     final shiftId = context.read<ShiftProvider>().shift?.id;
     if (shiftId == null) return;
-    await context.read<OrderHistoryProvider>().loadForShift(shiftId);
+    // force: true — always fetch fresh so new orders appear
+    await context
+        .read<OrderHistoryProvider>()
+        .loadForShift(shiftId, force: true);
   }
 
   @override
@@ -41,7 +47,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
     final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
-      backgroundColor: AppColors.bg,
+      backgroundColor: const Color(0xFFF7F4F0),
       appBar: AppBar(
         leading: IconButton(
             icon: const Icon(Icons.arrow_back_rounded),
@@ -54,11 +60,11 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         surfaceTintColor: Colors.transparent,
         bottom: PreferredSize(
             preferredSize: const Size.fromHeight(1),
-            child: Container(height: 1, color: const Color(0xFFF0F0F0))),
+            child: Container(height: 1, color: const Color(0xFFF0EDE8))),
         actions: [
           if (shift != null)
             IconButton(
-              icon: const Icon(Icons.refresh_rounded),
+              icon: const Icon(Icons.refresh_rounded, size: 20),
               tooltip: 'Refresh',
               onPressed: () =>
                   context.read<OrderHistoryProvider>().refresh(shift.id),
@@ -66,8 +72,10 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
         ],
       ),
       body: shift == null
-          ? _placeholder('No open shift',
-              icon: Icons.lock_outline_rounded, isTablet: isTablet)
+          ? _Placeholder(
+              icon: Icons.lock_outline_rounded,
+              message: 'No open shift',
+              isTablet: isTablet)
           : history.loading
               ? const Center(
                   child: CircularProgressIndicator(color: AppColors.primary))
@@ -77,84 +85,87 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
                       child:
                           ErrorBanner(message: history.error!, onRetry: _load))
                   : history.orders.isEmpty
-                      ? _placeholder('No orders yet for this shift',
+                      ? _Placeholder(
                           icon: Icons.receipt_long_outlined,
+                          message: 'No orders yet for this shift',
                           isTablet: isTablet,
                           useLottie: true)
-                      : _buildList(history.orders, isTablet),
+                      : _OrderList(orders: history.orders, isTablet: isTablet),
     );
   }
-
-  Widget _buildList(List<Order> orders, bool isTablet) {
-    final total = orders
-        .where((o) => o.status != 'voided')
-        .fold(0, (s, o) => s + o.totalAmount);
-    final count = orders.where((o) => o.status != 'voided').length;
-
-    return Column(children: [
-      Container(
-        width: double.infinity,
-        color: Colors.white,
-        padding:
-            EdgeInsets.symmetric(horizontal: isTablet ? 24 : 16, vertical: 14),
-        child: Row(children: [
-          _StatChip(label: 'Orders', value: '$count', color: AppColors.primary),
-          const SizedBox(width: 10),
-          _StatChip(
-              label: 'Total Sales',
-              value: egp(total),
-              color: AppColors.success),
-        ]),
-      ),
-      const Divider(height: 1, color: AppColors.border),
-      Expanded(
-          child: isTablet
-              ? _TwoColumnList(orders: orders)
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: orders.length,
-                  itemBuilder: (_, i) => _OrderTile(order: orders[i]))),
-    ]);
-  }
-
-  Widget _placeholder(String msg,
-          {required IconData icon,
-          required bool isTablet,
-          bool useLottie = false}) =>
-      Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (useLottie)
-          SizedBox(
-              width: isTablet ? 200 : 160,
-              height: isTablet ? 200 : 160,
-              child: Lottie.asset('assets/lottie/no_orders.json',
-                  fit: BoxFit.contain, repeat: true))
-        else ...[
-          Icon(icon, size: isTablet ? 56 : 48, color: AppColors.border),
-          const SizedBox(height: 12),
-        ],
-        Text(msg,
-            style: cairo(
-                fontSize: isTablet ? 17 : 15, color: AppColors.textSecondary)),
-      ]));
 }
 
-// ── Two-column list — no fixed mainAxisExtent, cards auto-size ────────────────
-class _TwoColumnList extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+//  SUMMARY BAR + LIST
+// ─────────────────────────────────────────────────────────────────────────────
+class _OrderList extends StatelessWidget {
   final List<Order> orders;
-  const _TwoColumnList({required this.orders});
+  final bool isTablet;
+  const _OrderList({required this.orders, required this.isTablet});
+
   @override
-  Widget build(BuildContext context) => GridView.builder(
-        padding: const EdgeInsets.all(20),
-        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-          maxCrossAxisExtent: 520,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 3.8, // wide cards, height auto-scales with content
-        ),
-        itemCount: orders.length,
-        itemBuilder: (_, i) => _OrderTile(order: orders[i]),
-      );
+  Widget build(BuildContext context) {
+    final active = orders.where((o) => o.status != 'voided').toList();
+    final total = active.fold(0, (s, o) => s + o.totalAmount);
+    final cash = active
+        .where((o) => o.paymentMethod == 'cash')
+        .fold(0, (s, o) => s + o.totalAmount);
+    final card = active
+        .where((o) => o.paymentMethod == 'card')
+        .fold(0, (s, o) => s + o.totalAmount);
+
+    return Column(children: [
+      // ── Summary bar ───────────────────────────────────────────────
+      Container(
+        color: Colors.white,
+        padding:
+            EdgeInsets.fromLTRB(isTablet ? 24 : 16, 14, isTablet ? 24 : 16, 14),
+        child: Row(children: [
+          _StatChip(
+              label: 'Orders',
+              value: '${active.length}',
+              color: AppColors.primary),
+          const SizedBox(width: 8),
+          _StatChip(
+              label: 'Total', value: egp(total), color: AppColors.success),
+          if (cash > 0) ...[
+            const SizedBox(width: 8),
+            _StatChip(
+                label: 'Cash',
+                value: egp(cash),
+                color: const Color(0xFF6B7280)),
+          ],
+          if (card > 0) ...[
+            const SizedBox(width: 8),
+            _StatChip(
+                label: 'Card',
+                value: egp(card),
+                color: const Color(0xFF7C3AED)),
+          ],
+        ]),
+      ),
+      Container(height: 1, color: const Color(0xFFF0EDE8)),
+
+      // ── List ──────────────────────────────────────────────────────
+      Expanded(
+        child: isTablet
+            ? GridView.builder(
+                padding: const EdgeInsets.all(20),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 520,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 3.6,
+                ),
+                itemCount: orders.length,
+                itemBuilder: (_, i) => _OrderTile(order: orders[i]))
+            : ListView.builder(
+                padding: const EdgeInsets.all(14),
+                itemCount: orders.length,
+                itemBuilder: (_, i) => _OrderTile(order: orders[i])),
+      ),
+    ]);
+  }
 }
 
 class _StatChip extends StatelessWidget {
@@ -162,27 +173,30 @@ class _StatChip extends StatelessWidget {
   final Color color;
   const _StatChip(
       {required this.label, required this.value, required this.color});
+
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
             color: color.withOpacity(0.08),
             borderRadius: BorderRadius.circular(10)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(label,
               style: cairo(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w500,
-                  color: color.withOpacity(0.8))),
-          const SizedBox(width: 8),
+                  color: color.withOpacity(0.75))),
+          const SizedBox(width: 7),
           Text(value,
               style: cairo(
-                  fontSize: 14, fontWeight: FontWeight.w800, color: color)),
+                  fontSize: 13, fontWeight: FontWeight.w800, color: color)),
         ]),
       );
 }
 
-// ── Order Tile ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  ORDER TILE
+// ─────────────────────────────────────────────────────────────────────────────
 class _OrderTile extends StatefulWidget {
   final Order order;
   const _OrderTile({required this.order});
@@ -203,7 +217,6 @@ class _OrderTileState extends State<_OrderTile> {
         _show(full);
       }
     } catch (_) {
-      // Fall back to the summary order we already have
       if (mounted) {
         setState(() => _loading = false);
         _show(widget.order);
@@ -220,7 +233,7 @@ class _OrderTileState extends State<_OrderTile> {
       constraints: isTablet
           ? BoxConstraints(
               maxWidth: 600,
-              maxHeight: MediaQuery.of(context).size.height * 0.85)
+              maxHeight: MediaQuery.of(context).size.height * 0.88)
           : null,
       builder: (_) => _OrderDetailSheet(order: o),
     );
@@ -240,7 +253,8 @@ class _OrderTileState extends State<_OrderTile> {
           color: isVoided ? const Color(0xFFFAFAFA) : Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-              color: isVoided ? AppColors.border : const Color(0xFFEEEEEE)),
+              color:
+                  isVoided ? const Color(0xFFEEEAE4) : const Color(0xFFF0EDE8)),
           boxShadow: isVoided
               ? []
               : [
@@ -254,13 +268,14 @@ class _OrderTileState extends State<_OrderTile> {
           Padding(
             padding: const EdgeInsets.all(14),
             child: Row(children: [
+              // Order number circle
               Container(
-                width: 48,
-                height: 48,
+                width: 46,
+                height: 46,
                 decoration: BoxDecoration(
                     color: isVoided
-                        ? AppColors.border
-                        : AppColors.primary.withOpacity(0.08),
+                        ? const Color(0xFFF0EDE8)
+                        : AppColors.primary.withOpacity(0.09),
                     borderRadius: BorderRadius.circular(13)),
                 alignment: Alignment.center,
                 child: Text('#${o.orderNumber}',
@@ -272,6 +287,7 @@ class _OrderTileState extends State<_OrderTile> {
                             : AppColors.primary)),
               ),
               const SizedBox(width: 12),
+
               Expanded(
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,7 +296,7 @@ class _OrderTileState extends State<_OrderTile> {
                       _PaymentBadge(method: o.paymentMethod, voided: isVoided),
                       if (isVoided) ...[
                         const SizedBox(width: 6),
-                        _VoidedBadge()
+                        const _VoidedBadge(),
                       ],
                       const Spacer(),
                       Text(timeShort(o.createdAt),
@@ -304,16 +320,18 @@ class _OrderTileState extends State<_OrderTile> {
                               fontSize: 11, color: AppColors.textSecondary)),
                     ],
                   ])),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               const Icon(Icons.chevron_right_rounded,
                   size: 18, color: AppColors.textMuted),
             ]),
           ),
+
+          // Loading overlay
           if (_loading)
             Positioned.fill(
                 child: Container(
               decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.7),
+                  color: Colors.white.withOpacity(0.72),
                   borderRadius: BorderRadius.circular(16)),
               alignment: Alignment.center,
               child: const SizedBox(
@@ -332,27 +350,39 @@ class _PaymentBadge extends StatelessWidget {
   final String method;
   final bool voided;
   const _PaymentBadge({required this.method, required this.voided});
+
   @override
   Widget build(BuildContext context) {
-    final label = method[0].toUpperCase() + method.substring(1);
+    final label = switch (method) {
+      'cash' => 'Cash',
+      'card' => 'Card',
+      'digital_wallet' => 'Wallet',
+      'mixed' => 'Mixed',
+      _ => method[0].toUpperCase() + method.substring(1),
+    };
+    final color = switch (method) {
+      'cash' => const Color(0xFF059669),
+      'card' => const Color(0xFF7C3AED),
+      'digital_wallet' => const Color(0xFF0EA5E9),
+      _ => AppColors.primary,
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: voided
-              ? AppColors.borderLight
-              : AppColors.primary.withOpacity(0.07),
+          color: voided ? const Color(0xFFF0EDE8) : color.withOpacity(0.1),
           borderRadius: BorderRadius.circular(6)),
       child: Text(label,
           style: cairo(
               fontSize: 10,
               fontWeight: FontWeight.w700,
-              color: voided ? AppColors.textMuted : AppColors.primary,
+              color: voided ? AppColors.textMuted : color,
               letterSpacing: 0.2)),
     );
   }
 }
 
 class _VoidedBadge extends StatelessWidget {
+  const _VoidedBadge();
   @override
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -367,7 +397,9 @@ class _VoidedBadge extends StatelessWidget {
               letterSpacing: 0.3)));
 }
 
-// ── Order Detail Sheet ────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  ORDER DETAIL SHEET
+// ─────────────────────────────────────────────────────────────────────────────
 class _OrderDetailSheet extends StatefulWidget {
   final Order order;
   const _OrderDetailSheet({required this.order});
@@ -414,38 +446,61 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
 
     return Container(
       constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.88),
       decoration: const BoxDecoration(
-          color: Colors.white,
+          color: Color(0xFFFAF8F5),
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       child: Column(children: [
+        // Handle
         Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Center(
                 child: Container(
-                    width: 40,
+                    width: 36,
                     height: 4,
                     decoration: BoxDecoration(
-                        color: const Color(0xFFE0E0E0),
+                        color: const Color(0xFFDDD8D0),
                         borderRadius: BorderRadius.circular(2))))),
+
+        // Header
         Padding(
-            padding: const EdgeInsets.fromLTRB(24, 14, 24, 12),
-            child: Row(children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Order #${order.orderNumber}',
-                    style: cairo(fontSize: 18, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 2),
-                Text(dateTime(order.createdAt),
-                    style: cairo(fontSize: 12, color: AppColors.textSecondary)),
-              ]),
-              const Spacer(),
+            padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Row(children: [
+                      Text('Order #${order.orderNumber}',
+                          style:
+                              cairo(fontSize: 18, fontWeight: FontWeight.w800)),
+                      if (isVoided) ...[
+                        const SizedBox(width: 8),
+                        const _VoidedBadge(),
+                      ],
+                    ]),
+                    const SizedBox(height: 3),
+                    Text(dateTime(order.createdAt),
+                        style: cairo(
+                            fontSize: 12, color: AppColors.textSecondary)),
+                    if (order.tellerName.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text('by ${order.tellerName}',
+                          style:
+                              cairo(fontSize: 11, color: AppColors.textMuted)),
+                    ],
+                  ])),
+
+              // Print button
               if (!isVoided)
                 _printing
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: AppColors.primary))
+                    ? const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: AppColors.primary)))
                     : GestureDetector(
                         onTap: _print,
                         child: Container(
@@ -459,11 +514,11 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                               borderRadius: BorderRadius.circular(10)),
                           child: Row(mainAxisSize: MainAxisSize.min, children: [
                             Icon(Icons.print_rounded,
-                                size: 15,
+                                size: 14,
                                 color: _printError != null
                                     ? AppColors.danger
                                     : AppColors.primary),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 5),
                             Text(_printError != null ? 'Retry' : 'Print',
                                 style: cairo(
                                     fontSize: 13,
@@ -473,43 +528,70 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                                         : AppColors.primary)),
                           ]),
                         )),
-              if (isVoided)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Text('VOIDED',
-                      style: cairo(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.danger,
-                          letterSpacing: 0.4)),
-                ),
             ])),
-        const Divider(height: 1, color: AppColors.border),
+
+        Container(height: 1, color: const Color(0xFFECE8E0)),
+
+        // Scrollable content
         Expanded(
             child: ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
+            // ── Items ─────────────────────────────────────────────
             if (order.items.isEmpty)
-              Text('No item details available',
-                  style: cairo(fontSize: 13, color: AppColors.textMuted))
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFECE8E0))),
+                child: Text('No item details available',
+                    style: cairo(fontSize: 13, color: AppColors.textMuted)),
+              )
             else
-              ...order.items.map((item) => _ItemRow(item: item)),
-            const SizedBox(height: 8),
-            const Divider(color: AppColors.border),
-            const SizedBox(height: 8),
-            LabelValue('Subtotal', egp(order.subtotal)),
-            if (order.discountAmount > 0)
-              LabelValue('Discount', '− ${egp(order.discountAmount)}',
-                  valueColor: AppColors.success),
-            if (order.taxAmount > 0) LabelValue('Tax', egp(order.taxAmount)),
-            const SizedBox(height: 4),
-            Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
+              Container(
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFECE8E0))),
+                child: Column(children: [
+                  for (int i = 0; i < order.items.length; i++) ...[
+                    _ItemRow(item: order.items[i]),
+                    if (i < order.items.length - 1)
+                      const Divider(
+                          height: 1,
+                          indent: 14,
+                          endIndent: 14,
+                          color: Color(0xFFF0EDE8)),
+                  ],
+                ]),
+              ),
+
+            const SizedBox(height: 14),
+
+            // ── Totals ────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFECE8E0))),
+              child: Column(children: [
+                _TotalRow('Subtotal', egp(order.subtotal), muted: true),
+                if (order.discountAmount > 0) ...[
+                  const SizedBox(height: 6),
+                  _TotalRow('Discount', '− ${egp(order.discountAmount)}',
+                      valueColor: AppColors.success),
+                ],
+                if (order.taxAmount > 0) ...[
+                  const SizedBox(height: 6),
+                  _TotalRow('Tax (14%)', egp(order.taxAmount), muted: true),
+                ],
+                Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child:
+                        Container(height: 1, color: const Color(0xFFF0EDE8))),
+                Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text('Total',
@@ -517,7 +599,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                               cairo(fontSize: 15, fontWeight: FontWeight.w800)),
                       Text(egp(order.totalAmount),
                           style: cairo(
-                              fontSize: 17,
+                              fontSize: 18,
                               fontWeight: FontWeight.w800,
                               color: isVoided
                                   ? AppColors.textMuted
@@ -525,82 +607,215 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                               decoration: isVoided
                                   ? TextDecoration.lineThrough
                                   : null)),
-                    ])),
-            const SizedBox(height: 8),
-            const Divider(color: AppColors.border),
-            const SizedBox(height: 8),
-            LabelValue(
-                'Payment',
-                order.paymentMethod[0].toUpperCase() +
-                    order.paymentMethod.substring(1)),
-            if (order.customerName != null)
-              LabelValue('Customer', order.customerName!),
-            if (order.tellerName.isNotEmpty)
-              LabelValue('Teller', order.tellerName),
-            LabelValue('Time', timeShort(order.createdAt)),
+                    ]),
+              ]),
+            ),
+
+            const SizedBox(height: 14),
+
+            // ── Meta ──────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFECE8E0))),
+              child: Column(children: [
+                _MetaRow(Icons.payments_outlined, 'Payment',
+                    _paymentLabel(order.paymentMethod)),
+                if (order.customerName != null) ...[
+                  const SizedBox(height: 10),
+                  _MetaRow(Icons.person_outline_rounded, 'Customer',
+                      order.customerName!),
+                ],
+                const SizedBox(height: 10),
+                _MetaRow(Icons.access_time_rounded, 'Time',
+                    timeShort(order.createdAt)),
+              ]),
+            ),
           ],
         )),
       ]),
     );
   }
+
+  String _paymentLabel(String method) => switch (method) {
+        'cash' => 'Cash',
+        'card' => 'Card',
+        'digital_wallet' => 'Digital Wallet',
+        'mixed' => 'Mixed',
+        _ => method,
+      };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  ITEM ROW  — shows qty badge on addons when > 1
+// ─────────────────────────────────────────────────────────────────────────────
 class _ItemRow extends StatelessWidget {
   final OrderItem item;
   const _ItemRow({required this.item});
+
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(14),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Qty bubble
           Container(
-            width: 30,
-            height: 30,
+            width: 28,
+            height: 28,
             decoration: BoxDecoration(
-                color: AppColors.borderLight,
+                color: AppColors.primary.withOpacity(0.09),
                 borderRadius: BorderRadius.circular(8)),
             alignment: Alignment.center,
             child: Text('${item.quantity}',
                 style: cairo(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: AppColors.textSecondary)),
+                    color: AppColors.primary)),
           ),
           const SizedBox(width: 10),
+
           Expanded(
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                // Item name + size
                 Text(
                     item.itemName +
-                        (item.sizeLabel != null ? ' · ${item.sizeLabel}' : ''),
-                    style: cairo(fontSize: 14, fontWeight: FontWeight.w600)),
+                        (item.sizeLabel != null
+                            ? ' · ${normaliseName(item.sizeLabel!)}'
+                            : ''),
+                    style: cairo(fontSize: 13, fontWeight: FontWeight.w600)),
+
+                // Addons
                 if (item.addons.isNotEmpty) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 6),
                   Wrap(
                       spacing: 4,
                       runSpacing: 4,
-                      children: item.addons
-                          .map((a) => Container(
+                      children: item.addons.map((a) {
+                        // ── THE FIX: show ×qty when addon qty > 1 ──
+                        final hasQty = a.quantity > 1;
+                        final hasPrice = a.unitPrice > 0;
+
+                        final label = [
+                          normaliseName(a.addonName),
+                          if (hasQty) '×${a.quantity}',
+                          if (hasPrice) '+${egp(a.lineTotal)}',
+                        ].join('  ');
+
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: AppColors.primary.withOpacity(0.07),
+                              borderRadius: BorderRadius.circular(6)),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            if (hasQty)
+                              Container(
+                                margin: const EdgeInsets.only(right: 5),
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 7, vertical: 2),
+                                    horizontal: 5, vertical: 1),
                                 decoration: BoxDecoration(
-                                    color: AppColors.primary.withOpacity(0.07),
-                                    borderRadius: BorderRadius.circular(5)),
-                                child: Text(
-                                    a.unitPrice > 0
-                                        ? '${a.addonName} +${egp(a.unitPrice)}'
-                                        : a.addonName,
+                                    color: AppColors.primary,
+                                    borderRadius: BorderRadius.circular(4)),
+                                child: Text('×${a.quantity}',
                                     style: cairo(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primary)),
-                              ))
-                          .toList()),
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w800,
+                                        color: Colors.white)),
+                              ),
+                            Text(
+                                normaliseName(a.addonName) +
+                                    (hasPrice ? '  +${egp(a.lineTotal)}' : ''),
+                                style: cairo(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.primary)),
+                          ]),
+                        );
+                      }).toList()),
                 ],
               ])),
-          const SizedBox(width: 12),
+
+          const SizedBox(width: 10),
           Text(egp(item.lineTotal),
-              style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
+              style: cairo(fontSize: 13, fontWeight: FontWeight.w700)),
         ]),
       );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SHARED DETAIL WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+class _TotalRow extends StatelessWidget {
+  final String label, value;
+  final bool muted;
+  final Color? valueColor;
+  const _TotalRow(this.label, this.value,
+      {this.muted = false, this.valueColor});
+
+  @override
+  Widget build(BuildContext context) =>
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(label,
+            style: cairo(
+                fontSize: 13,
+                color:
+                    muted ? AppColors.textSecondary : AppColors.textPrimary)),
+        Text(value,
+            style: cairo(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: valueColor ??
+                    (muted ? AppColors.textSecondary : AppColors.textPrimary))),
+      ]);
+}
+
+class _MetaRow extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
+  const _MetaRow(this.icon, this.label, this.value);
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Icon(icon, size: 15, color: AppColors.textMuted),
+        const SizedBox(width: 8),
+        Text(label, style: cairo(fontSize: 12, color: AppColors.textSecondary)),
+        const Spacer(),
+        Text(value, style: cairo(fontSize: 12, fontWeight: FontWeight.w700)),
+      ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PLACEHOLDER
+// ─────────────────────────────────────────────────────────────────────────────
+class _Placeholder extends StatelessWidget {
+  final IconData icon;
+  final String message;
+  final bool isTablet;
+  final bool useLottie;
+  const _Placeholder(
+      {required this.icon,
+      required this.message,
+      required this.isTablet,
+      this.useLottie = false});
+
+  @override
+  Widget build(BuildContext context) => Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (useLottie)
+          SizedBox(
+              width: isTablet ? 180 : 150,
+              height: isTablet ? 180 : 150,
+              child: Lottie.asset('assets/lottie/no_orders.json',
+                  fit: BoxFit.contain, repeat: true))
+        else ...[
+          Icon(icon, size: isTablet ? 52 : 44, color: const Color(0xFFD5CFC7)),
+          const SizedBox(height: 12),
+        ],
+        Text(message,
+            style: cairo(
+                fontSize: isTablet ? 16 : 14, color: AppColors.textSecondary)),
+      ]));
 }

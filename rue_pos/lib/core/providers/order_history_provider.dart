@@ -47,9 +47,15 @@ class OrderHistoryProvider extends ChangeNotifier {
 
   /// Called when a new order is successfully placed (online or after sync).
   void addOrder(Order o) {
-    // Avoid duplicates if synced order is also in pending list
     if (_orders.any((x) => x.id == o.id)) return;
-    _orders.insert(0, o);
+    _orders = [o, ..._orders];
+    notifyListeners();
+    if (_shiftId != null) _save(_shiftId!, _orders);
+  }
+
+  /// Called after a void — updates the order in-place in the list.
+  void updateOrder(Order updated) {
+    _orders = _orders.map((o) => o.id == updated.id ? updated : o).toList();
     notifyListeners();
     if (_shiftId != null) _save(_shiftId!, _orders);
   }
@@ -57,7 +63,7 @@ class OrderHistoryProvider extends ChangeNotifier {
   /// Called by OfflineSyncService after a pending order syncs successfully.
   void onOrderSynced(Order o) => addOrder(o);
 
-  // ── Persistence — uses canonical orderToJson ───────────────────────────────
+  // ── Persistence ───────────────────────────────────────────────────────────
   static String _key(String shiftId) => 'orders_$shiftId';
 
   Future<void> _save(String shiftId, List<Order> orders) async {

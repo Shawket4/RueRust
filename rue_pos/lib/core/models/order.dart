@@ -125,6 +125,7 @@ class Order {
   final int totalAmount;
   final String? customerName;
   final String? notes;
+  final String? voidReason;
   final DateTime createdAt;
   final List<OrderItem> items;
 
@@ -145,6 +146,7 @@ class Order {
     required this.totalAmount,
     this.customerName,
     this.notes,
+    this.voidReason,
     required this.createdAt,
     required this.items,
   });
@@ -166,6 +168,7 @@ class Order {
         totalAmount: j['total_amount'],
         customerName: j['customer_name'] as String?,
         notes: j['notes'] as String?,
+        voidReason: j['void_reason'] as String?,
         createdAt: DateTime.parse(j['created_at']),
         items: (j['items'] as List? ?? [])
             .map((i) => OrderItem.fromJson(i))

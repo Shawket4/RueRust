@@ -14,26 +14,26 @@ use crate::{
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Order {
-    pub id:             Uuid,
-    pub branch_id:      Uuid,
-    pub shift_id:       Uuid,
-    pub teller_id:      Uuid,
-    pub teller_name:    String,
-    pub order_number:   i32,
-    pub status:         String,
-    pub payment_method: String,
-    pub subtotal:       i32,
-    pub discount_type:  Option<String>,
-    pub discount_value: i32,
+    pub id:              Uuid,
+    pub branch_id:       Uuid,
+    pub shift_id:        Uuid,
+    pub teller_id:       Uuid,
+    pub teller_name:     String,
+    pub order_number:    i32,
+    pub status:          String,
+    pub payment_method:  String,
+    pub subtotal:        i32,
+    pub discount_type:   Option<String>,
+    pub discount_value:  i32,
     pub discount_amount: i32,
-    pub tax_amount:     i32,
-    pub total_amount:   i32,
-    pub customer_name:  Option<String>,
-    pub notes:          Option<String>,
-    pub voided_at:      Option<chrono::DateTime<chrono::Utc>>,
-    pub void_reason:    Option<String>,
-    pub voided_by:      Option<Uuid>,
-    pub created_at:     chrono::DateTime<chrono::Utc>,
+    pub tax_amount:      i32,
+    pub total_amount:    i32,
+    pub customer_name:   Option<String>,
+    pub notes:           Option<String>,
+    pub voided_at:       Option<chrono::DateTime<chrono::Utc>>,
+    pub void_reason:     Option<String>,
+    pub voided_by:       Option<Uuid>,
+    pub created_at:      chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -51,20 +51,20 @@ pub struct OrderItem {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct OrderItemAddon {
-    pub id:           Uuid,
+    pub id:            Uuid,
     pub order_item_id: Uuid,
     pub addon_item_id: Uuid,
-    pub addon_name:   String,
-    pub unit_price:   i32,
-    pub quantity:     i32,
-    pub line_total:   i32,
+    pub addon_name:    String,
+    pub unit_price:    i32,
+    pub quantity:      i32,
+    pub line_total:    i32,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OrderFull {
     #[serde(flatten)]
-    pub order:    Order,
-    pub items:    Vec<OrderItemFull>,
+    pub order: Order,
+    pub items: Vec<OrderItemFull>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,9 +109,9 @@ pub struct CreateOrderRequest {
 
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
-    pub reason: String,
-
-    pub restore_inventory: Option<bool>,}
+    pub reason:            String,
+    pub restore_inventory: Option<bool>,
+}
 
 #[derive(Deserialize)]
 pub struct ListOrdersQuery {
@@ -171,7 +171,6 @@ pub async fn create_order(
         quantity:     i32,
         notes:        Option<String>,
         addons:       Vec<ResolvedAddon>,
-        // inventory deductions to apply
         deductions:   Vec<InventoryDeduction>,
     }
 
@@ -196,13 +195,11 @@ pub async fn create_order(
             return Err(AppError::BadRequest("Item quantity must be greater than 0".into()));
         }
 
-        // Fetch menu item
-        let (item_name, base_price, is_soft_serve): (String, i32, bool) = sqlx::query_as(
+        // Fetch menu item (no soft serve check needed)
+        let (item_name, base_price): (String, i32) = sqlx::query_as(
             r#"
-            SELECT m.name, m.base_price,
-                   (c.name ILIKE '%soft serve%' OR m.name ILIKE '%soft serve%') AS is_soft_serve
+            SELECT m.name, m.base_price
             FROM menu_items m
-            LEFT JOIN categories c ON c.id = m.category_id
             WHERE m.id = $1 AND m.deleted_at IS NULL
             "#,
         )
@@ -231,95 +228,52 @@ pub async fn create_order(
         let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
 
         // ── Deduct drink recipe ingredients ──────────────────
-        if !is_soft_serve {
-            if let Some(size) = &item_input.size_label {
-                let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                    r#"
-                    SELECT inventory_item_id, quantity_used::float8
-                    FROM menu_item_recipes
-                    WHERE menu_item_id = $1 AND size_label = $2::item_size
-                    "#,
-                )
-                .bind(item_input.menu_item_id)
-                .bind(size)
-                .fetch_all(pool.get_ref())
-                .await?;
+        if let Some(size) = &item_input.size_label {
+            let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
+                r#"
+                SELECT inventory_item_id, quantity_used::float8
+                FROM menu_item_recipes
+                WHERE menu_item_id = $1 AND size_label = $2::item_size
+                "#,
+            )
+            .bind(item_input.menu_item_id)
+            .bind(size)
+            .fetch_all(pool.get_ref())
+            .await?;
 
-                for (inv_id, qty) in recipe_rows {
-                    item_deductions.push(InventoryDeduction {
-                        inventory_item_id: inv_id,
-                        quantity:          qty * item_input.quantity as f64,
-                        source:            "drink_recipe".into(),
-                    });
-                }
-            } else {
-                // No size — check one_size recipe
-                let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                    r#"
-                    SELECT inventory_item_id, quantity_used::float8
-                    FROM menu_item_recipes
-                    WHERE menu_item_id = $1 AND size_label = 'one_size'
-                    "#,
-                )
-                .bind(item_input.menu_item_id)
-                .fetch_all(pool.get_ref())
-                .await?;
-
-                for (inv_id, qty) in recipe_rows {
-                    item_deductions.push(InventoryDeduction {
-                        inventory_item_id: inv_id,
-                        quantity:          qty * item_input.quantity as f64,
-                        source:            "drink_recipe".into(),
-                    });
-                }
+            for (inv_id, qty) in recipe_rows {
+                item_deductions.push(InventoryDeduction {
+                    inventory_item_id: inv_id,
+                    quantity:          qty * item_input.quantity as f64,
+                    source:            "drink_recipe".into(),
+                });
             }
         } else {
-            // ── Soft serve: deduct from serve pool ───────────
-            let size = item_input.size_label.as_deref().unwrap_or("small");
-            let is_large = size == "large" || size == "extra_large";
-
-            // Check pool exists and has serves
-            let pool_row: Option<(Uuid, sqlx::types::BigDecimal, sqlx::types::BigDecimal, bool)> = sqlx::query_as(
-                "SELECT id, total_units, large_ratio, low_stock_flag FROM soft_serve_serve_pools WHERE branch_id = $1 AND menu_item_id = $2"
+            // No size — check one_size recipe
+            let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
+                r#"
+                SELECT inventory_item_id, quantity_used::float8
+                FROM menu_item_recipes
+                WHERE menu_item_id = $1 AND size_label = 'one_size'
+                "#,
             )
-            .bind(body.branch_id)
             .bind(item_input.menu_item_id)
-            .fetch_optional(pool.get_ref())
+            .fetch_all(pool.get_ref())
             .await?;
-            if pool_row.is_none() {
-                return Err(AppError::BadRequest(format!(
-                    "No serve pool found for soft serve item {}. Please log a batch first.",
-                    item_input.menu_item_id
-                )));
+
+            for (inv_id, qty) in recipe_rows {
+                item_deductions.push(InventoryDeduction {
+                    inventory_item_id: inv_id,
+                    quantity:          qty * item_input.quantity as f64,
+                    source:            "drink_recipe".into(),
+                });
             }
-            let (_, total_units, large_ratio, _) = pool_row.unwrap();
-            let total_units_f: f64 = total_units.to_string().parse().unwrap_or(0.0);
-            let large_ratio_f: f64 = large_ratio.to_string().parse().unwrap_or(1.5);
-            let units_per_serve = if is_large { large_ratio_f } else { 1.0 };
-            let units_needed = units_per_serve * item_input.quantity as f64;
-            if total_units_f < units_needed {
-                let available = if is_large {
-                    (total_units_f / large_ratio_f).floor() as i32
-                } else {
-                    total_units_f.floor() as i32
-                };
-                return Err(AppError::BadRequest(format!(
-                    "Insufficient serves in pool. Available: {}, Requested: {}",
-                    available, item_input.quantity
-                )));
-            }
-            // Mark for pool deduction (handled after order insert)
-            item_deductions.push(InventoryDeduction {
-                inventory_item_id: item_input.menu_item_id,
-                quantity:          units_needed,
-                source:            if is_large { "soft_serve_pool_large".into() } else { "soft_serve_pool_small".into() },
-            });
         }
+
         // ── Resolve addons ────────────────────────────────────
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
         for addon_input in &item_input.addons {
-            // Get addon name + price
             let (addon_name, default_price): (String, i32) = sqlx::query_as(
                 "SELECT name, default_price FROM addon_items WHERE id = $1"
             )
@@ -328,7 +282,6 @@ pub async fn create_order(
             .await?
             .ok_or_else(|| AppError::NotFound(format!("Addon {} not found", addon_input.addon_item_id)))?;
 
-            // Check for price override on the drink_option_item
             let price_override: Option<i32> = sqlx::query_scalar(
                 "SELECT price_override FROM drink_option_items WHERE id = $1"
             )
@@ -347,7 +300,6 @@ pub async fn create_order(
             });
 
             // ── Addon ingredient deductions ───────────────────
-            // Check for per-drink-per-size override first, then fall back to base
             let size_label = item_input.size_label.as_deref();
 
             let override_rows: Vec<(Uuid, f64)> = if let Some(size) = size_label {
@@ -378,7 +330,6 @@ pub async fn create_order(
             };
 
             if !override_rows.is_empty() {
-                // Use overrides — deduplicate by inventory_item_id (specific size wins over NULL)
                 let mut seen: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
                 for (inv_id, qty) in override_rows {
                     if seen.insert(inv_id) {
@@ -390,7 +341,6 @@ pub async fn create_order(
                     }
                 }
             } else {
-                // Fall back to addon base ingredients
                 let base_rows: Vec<(Uuid, f64)> = sqlx::query_as(
                     r#"
                     SELECT inventory_item_id, quantity_used::float8
@@ -412,8 +362,10 @@ pub async fn create_order(
             }
         }
 
-        let item_line = unit_price * item_input.quantity;
-        let addon_line: i32 = resolved_addons.iter().map(|a| a.unit_price * a.quantity).sum::<i32>() * item_input.quantity;
+        let item_line  = unit_price * item_input.quantity;
+        let addon_line: i32 = resolved_addons.iter()
+            .map(|a| a.unit_price * a.quantity)
+            .sum::<i32>() * item_input.quantity;
         subtotal += item_line + addon_line;
 
         resolved_items.push(ResolvedItem {
@@ -436,9 +388,9 @@ pub async fn create_order(
         _                  => 0,
     };
 
-    let taxable = subtotal - discount_amount;
+    let taxable      = subtotal - discount_amount;
     let tax_rate_f64: f64 = tax_rate.to_string().parse().unwrap_or(0.14);
-    let tax_amount = (taxable as f64 * tax_rate_f64) as i32;
+    let tax_amount   = (taxable as f64 * tax_rate_f64) as i32;
     let total_amount = taxable + tax_amount;
 
     let mut tx = pool.get_ref().begin().await?;
@@ -446,15 +398,13 @@ pub async fn create_order(
     sqlx::query!("SELECT pg_advisory_xact_lock(hashtext($1::text))", body.shift_id.to_string())
         .execute(&mut *tx)
         .await?;
-    
+
     let order_number: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE shift_id = $1"
     )
     .bind(body.shift_id)
     .fetch_one(&mut *tx)
     .await?;
-
-
 
     // ── Insert order ──────────────────────────────────────────
     let order = sqlx::query_as::<_, Order>(
@@ -492,7 +442,7 @@ pub async fn create_order(
     .fetch_one(&mut *tx)
     .await?;
 
-    // ── Insert order items + addons + deductions ──────────────
+    // ── Insert order items + addons + inventory deductions ────
     let mut order_items_full: Vec<OrderItemFull> = Vec::new();
 
     for resolved in resolved_items {
@@ -541,81 +491,32 @@ pub async fn create_order(
             addon_rows.push(row);
         }
 
-        // ── Apply inventory deductions ────────────────────────
+        // ── Regular inventory deductions only ─────────────────
         for deduction in &resolved.deductions {
-            if deduction.source.starts_with("soft_serve_pool") {
-                // Deduct from serve pool
-                sqlx::query(
-                    r#"
-                    UPDATE soft_serve_serve_pools
-                    SET total_units    = GREATEST(0, total_units - $1),
-                        low_stock_flag = (GREATEST(0, total_units - $1) < large_ratio),
-                        updated_at     = NOW()
-                    WHERE branch_id = $2 AND menu_item_id = $3
-                    "#,
-                )
-                .bind(deduction.quantity)
-                .bind(body.branch_id)
-                .bind(resolved.menu_item_id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
+            )
+            .bind(deduction.quantity)
+            .bind(deduction.inventory_item_id)
+            .bind(body.branch_id)
+            .execute(&mut *tx)
+            .await?;
 
-                // Log to deduction log using order_item_id as reference
-                sqlx::query(
-                    r#"
-                    INSERT INTO inventory_deduction_logs
-                        (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    "#,
-                )
-                .bind(body.branch_id)
-                .bind(order.id)
-                .bind(order_item.id)
-                .bind(resolved.menu_item_id) // soft serve uses menu_item_id as placeholder
-                .bind(deduction.quantity)
-                .bind(&deduction.source)
-                .execute(&mut *tx)
-                .await?;
-            } else {
-                // Regular inventory deduction
-                sqlx::query(
-                    "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
-                )
-                .bind(deduction.quantity)
-                .bind(deduction.inventory_item_id)
-                .bind(body.branch_id)
-                .execute(&mut *tx)
-                .await?;
-
-                // Check reorder threshold and flag if needed
-                sqlx::query(
-                    r#"
-                    UPDATE inventory_items
-                    SET is_active = is_active  -- no-op, just to trigger check
-                    WHERE id = $1
-                      AND current_stock <= reorder_threshold
-                    "#,
-                )
-                .bind(deduction.inventory_item_id)
-                .execute(&mut *tx)
-                .await?;
-
-                sqlx::query(
-                    r#"
-                    INSERT INTO inventory_deduction_logs
-                        (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    "#,
-                )
-                .bind(body.branch_id)
-                .bind(order.id)
-                .bind(order_item.id)
-                .bind(deduction.inventory_item_id)
-                .bind(deduction.quantity)
-                .bind(&deduction.source)
-                .execute(&mut *tx)
-                .await?;
-            }
+            sqlx::query(
+                r#"
+                INSERT INTO inventory_deduction_logs
+                    (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(body.branch_id)
+            .bind(order.id)
+            .bind(order_item.id)
+            .bind(deduction.inventory_item_id)
+            .bind(deduction.quantity)
+            .bind(&deduction.source)
+            .execute(&mut *tx)
+            .await?;
         }
 
         order_items_full.push(OrderItemFull {
@@ -644,7 +545,6 @@ pub async fn list_orders(
 
     let orders = match (query.shift_id, query.branch_id) {
         (Some(shift_id), _) => {
-            // Verify shift's branch is accessible
             let branch_id: Option<Uuid> = sqlx::query_scalar(
                 "SELECT branch_id FROM shifts WHERE id = $1"
             )
@@ -752,10 +652,10 @@ pub async fn void_order(
     let updated = sqlx::query_as::<_, Order>(
         r#"
         UPDATE orders SET
-            status     = 'voided',
-            voided_at  = NOW(),
+            status      = 'voided',
+            voided_at   = NOW(),
             void_reason = $2::void_reason,
-            voided_by  = $3
+            voided_by   = $3
         WHERE id = $1
         RETURNING
             id, branch_id, shift_id, teller_id,

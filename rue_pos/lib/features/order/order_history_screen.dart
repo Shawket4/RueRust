@@ -14,6 +14,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/error_banner.dart';
 import '../../shared/widgets/label_value.dart';
+import 'void_order_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  SCREEN
@@ -34,7 +35,6 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   Future<void> _load() async {
     final shiftId = context.read<ShiftProvider>().shift?.id;
     if (shiftId == null) return;
-    // force: true — always fetch fresh so new orders appear
     await context
         .read<OrderHistoryProvider>()
         .loadForShift(shiftId, force: true);
@@ -115,7 +115,6 @@ class _OrderList extends StatelessWidget {
         .fold(0, (s, o) => s + o.totalAmount);
 
     return Column(children: [
-      // ── Summary bar ───────────────────────────────────────────────
       Container(
         color: Colors.white,
         padding:
@@ -145,8 +144,6 @@ class _OrderList extends StatelessWidget {
         ]),
       ),
       Container(height: 1, color: const Color(0xFFF0EDE8)),
-
-      // ── List ──────────────────────────────────────────────────────
       Expanded(
         child: isTablet
             ? GridView.builder(
@@ -268,7 +265,6 @@ class _OrderTileState extends State<_OrderTile> {
           Padding(
             padding: const EdgeInsets.all(14),
             child: Row(children: [
-              // Order number circle
               Container(
                 width: 46,
                 height: 46,
@@ -287,7 +283,6 @@ class _OrderTileState extends State<_OrderTile> {
                             : AppColors.primary)),
               ),
               const SizedBox(width: 12),
-
               Expanded(
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -296,7 +291,7 @@ class _OrderTileState extends State<_OrderTile> {
                       _PaymentBadge(method: o.paymentMethod, voided: isVoided),
                       if (isVoided) ...[
                         const SizedBox(width: 6),
-                        const _VoidedBadge(),
+                        const _VoidedBadge()
                       ],
                       const Spacer(),
                       Text(timeShort(o.createdAt),
@@ -325,8 +320,6 @@ class _OrderTileState extends State<_OrderTile> {
                   size: 18, color: AppColors.textMuted),
             ]),
           ),
-
-          // Loading overlay
           if (_loading)
             Positioned.fill(
                 child: Container(
@@ -408,8 +401,15 @@ class _OrderDetailSheet extends StatefulWidget {
 }
 
 class _OrderDetailSheetState extends State<_OrderDetailSheet> {
+  late Order _order;
   bool _printing = false;
   String? _printError;
+
+  @override
+  void initState() {
+    super.initState();
+    _order = widget.order;
+  }
 
   Future<void> _print() async {
     final bp = context.read<BranchProvider>();
@@ -428,7 +428,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
     final err = await PrinterService.print(
       ip: bp.printerIp!,
       port: bp.printerPort,
-      order: widget.order,
+      order: _order,
       branchName: bp.branchName,
       brand: bp.printerBrand!,
     );
@@ -439,9 +439,16 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
       });
   }
 
+  void _onVoided(Order voided) {
+    // Update locally so the sheet reflects the void immediately
+    setState(() => _order = voided);
+    // Update the list in the provider
+    context.read<OrderHistoryProvider>().updateOrder(voided);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final order = widget.order;
+    final order = _order;
     final isVoided = order.status == 'voided';
 
     return Container(
@@ -491,8 +498,9 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                     ],
                   ])),
 
-              // Print button
-              if (!isVoided)
+              // Action buttons — only shown when not voided
+              if (!isVoided) ...[
+                // Print button
                 _printing
                     ? const Padding(
                         padding: EdgeInsets.all(8),
@@ -528,6 +536,29 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                                         : AppColors.primary)),
                           ]),
                         )),
+                const SizedBox(width: 8),
+                // Void button
+                GestureDetector(
+                  onTap: () => VoidOrderSheet.show(context, order, _onVoided),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: AppColors.danger.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.cancel_outlined,
+                          size: 14, color: AppColors.danger),
+                      const SizedBox(width: 5),
+                      Text('Void',
+                          style: cairo(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.danger)),
+                    ]),
+                  ),
+                ),
+              ],
             ])),
 
         Container(height: 1, color: const Color(0xFFECE8E0)),
@@ -537,7 +568,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
             child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            // ── Items ─────────────────────────────────────────────
+            // Items
             if (order.items.isEmpty)
               Container(
                 padding: const EdgeInsets.all(16),
@@ -569,7 +600,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
 
             const SizedBox(height: 14),
 
-            // ── Totals ────────────────────────────────────────────
+            // Totals
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -613,7 +644,7 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
 
             const SizedBox(height: 14),
 
-            // ── Meta ──────────────────────────────────────────────
+            // Meta
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -631,6 +662,12 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                 const SizedBox(height: 10),
                 _MetaRow(Icons.access_time_rounded, 'Time',
                     timeShort(order.createdAt)),
+                // Show void reason if voided
+                if (isVoided && order.voidReason != null) ...[
+                  const SizedBox(height: 10),
+                  _MetaRow(Icons.cancel_outlined, 'Void Reason',
+                      _voidReasonLabel(order.voidReason!)),
+                ],
               ]),
             ),
           ],
@@ -646,10 +683,18 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
         'mixed' => 'Mixed',
         _ => method,
       };
+
+  String _voidReasonLabel(String reason) => switch (reason) {
+        'customer_request' => 'Customer request',
+        'wrong_order' => 'Wrong order',
+        'quality_issue' => 'Quality issue',
+        'other' => 'Other',
+        _ => reason,
+      };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ITEM ROW  — shows qty badge on addons when > 1
+//  ITEM ROW
 // ─────────────────────────────────────────────────────────────────────────────
 class _ItemRow extends StatelessWidget {
   final OrderItem item;
@@ -659,7 +704,6 @@ class _ItemRow extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.all(14),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Qty bubble
           Container(
             width: 28,
             height: 28,
@@ -674,36 +718,24 @@ class _ItemRow extends StatelessWidget {
                     color: AppColors.primary)),
           ),
           const SizedBox(width: 10),
-
           Expanded(
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                // Item name + size
                 Text(
                     item.itemName +
                         (item.sizeLabel != null
                             ? ' · ${normaliseName(item.sizeLabel!)}'
                             : ''),
                     style: cairo(fontSize: 13, fontWeight: FontWeight.w600)),
-
-                // Addons
                 if (item.addons.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Wrap(
                       spacing: 4,
                       runSpacing: 4,
                       children: item.addons.map((a) {
-                        // ── THE FIX: show ×qty when addon qty > 1 ──
                         final hasQty = a.quantity > 1;
                         final hasPrice = a.unitPrice > 0;
-
-                        final label = [
-                          normaliseName(a.addonName),
-                          if (hasQty) '×${a.quantity}',
-                          if (hasPrice) '+${egp(a.lineTotal)}',
-                        ].join('  ');
-
                         return Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 7, vertical: 3),
@@ -737,7 +769,6 @@ class _ItemRow extends StatelessWidget {
                       }).toList()),
                 ],
               ])),
-
           const SizedBox(width: 10),
           Text(egp(item.lineTotal),
               style: cairo(fontSize: 13, fontWeight: FontWeight.w700)),

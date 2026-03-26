@@ -193,12 +193,12 @@ class _OpenShiftView extends ConsumerWidget {
             const _Banner(
                 icon: Icons.history_rounded,
                 text: 'Showing cached stats — tap refresh to update.'),
-          if (isOnline && sync.count > 0)
+          if (isOnline && sync.orderCount > 0)
             _Banner(
                 icon: Icons.sync_rounded,
                 animate: true,
                 text:
-                    'Syncing ${sync.count} offline order${sync.count == 1 ? "" : "s"}…'),
+                    'Syncing ${sync.orderCount} offline order${sync.orderCount == 1 ? "" : "s"}…'),
           if (sync.hasStuck)
             _Banner(
                 icon: Icons.warning_amber_rounded,

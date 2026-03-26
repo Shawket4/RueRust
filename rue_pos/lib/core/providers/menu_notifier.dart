@@ -1,24 +1,27 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/menu.dart';
 import '../repositories/menu_repository.dart';
+import '../storage/storage_service.dart';
 
 class MenuState {
   final List<Category> categories;
   final List<MenuItem> items;
-  final String? selectedCategoryId;
-  final bool isLoading;
-  final bool fromCache;
-  final String? error;
-  final String? loadedOrgId;
+  final String?        selectedCategoryId;
+  final bool           isLoading;
+  final bool           fromCache;
+  final String?        error;
+  final String?        loadedOrgId;
+  final DateTime?      cachedAt;
 
   const MenuState({
-    this.categories = const [],
-    this.items = const [],
+    this.categories        = const [],
+    this.items             = const [],
     this.selectedCategoryId,
-    this.isLoading = false,
-    this.fromCache = false,
+    this.isLoading         = false,
+    this.fromCache         = false,
     this.error,
     this.loadedOrgId,
+    this.cachedAt,
   });
 
   List<MenuItem> get filtered => selectedCategoryId == null
@@ -28,22 +31,23 @@ class MenuState {
   MenuState copyWith({
     List<Category>? categories,
     List<MenuItem>? items,
-    String? selectedCategoryId,
-    bool? isLoading,
-    bool? fromCache,
-    String? error,
-    String? loadedOrgId,
-    bool clearError = false,
-  }) =>
-      MenuState(
-        categories: categories ?? this.categories,
-        items: items ?? this.items,
-        selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
-        isLoading: isLoading ?? this.isLoading,
-        fromCache: fromCache ?? this.fromCache,
-        error: clearError ? null : (error ?? this.error),
-        loadedOrgId: loadedOrgId ?? this.loadedOrgId,
-      );
+    String?         selectedCategoryId,
+    bool?           isLoading,
+    bool?           fromCache,
+    String?         error,
+    String?         loadedOrgId,
+    DateTime?       cachedAt,
+    bool            clearError = false,
+  }) => MenuState(
+    categories:         categories         ?? this.categories,
+    items:              items              ?? this.items,
+    selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
+    isLoading:          isLoading          ?? this.isLoading,
+    fromCache:          fromCache          ?? this.fromCache,
+    error:              clearError ? null  : (error ?? this.error),
+    loadedOrgId:        loadedOrgId        ?? this.loadedOrgId,
+    cachedAt:           cachedAt           ?? this.cachedAt,
+  );
 }
 
 class MenuNotifier extends Notifier<MenuState> {
@@ -54,23 +58,23 @@ class MenuNotifier extends Notifier<MenuState> {
     if (!force &&
         state.loadedOrgId == orgId &&
         state.items.isNotEmpty &&
-        !state.fromCache) {
-      return;
-    }
+        !state.fromCache) return;
 
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       final result = await ref.read(menuRepositoryProvider).fetchMenu(orgId);
+      final cachedAt = ref.read(storageServiceProvider).menuCachedAt(orgId);
       state = state.copyWith(
-        isLoading: false,
-        categories: result.categories,
-        items: result.items,
-        fromCache: result.fromCache,
-        loadedOrgId: orgId,
-        selectedCategoryId:
-            result.categories.isNotEmpty ? result.categories.first.id : null,
+        isLoading:          false,
+        categories:         result.categories,
+        items:              result.items,
+        fromCache:          result.fromCache,
+        loadedOrgId:        orgId,
+        cachedAt:           cachedAt,
+        selectedCategoryId: result.categories.isNotEmpty
+            ? result.categories.first.id : null,
       );
-    } catch (e) {
+    } catch (_) {
       state = state.copyWith(
           isLoading: false,
           error: 'No connection and no cached menu available');

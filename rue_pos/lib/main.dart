@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/providers/auth_notifier.dart';
 import 'core/providers/order_history_notifier.dart';
+import 'core/providers/shift_notifier.dart';
 import 'core/router/router.dart';
 import 'core/services/connectivity_service.dart';
 import 'core/services/offline_queue.dart';
@@ -46,16 +47,35 @@ class _AppState extends ConsumerState<_App> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final queue = ref.read(offlineQueueProvider.notifier);
-      final history = ref.read(orderHistoryProvider.notifier);
-      queue.onOrderSynced = history.addOrder;
+      final queue        = ref.read(offlineQueueProvider.notifier);
+      final history      = ref.read(orderHistoryProvider.notifier);
+      final shiftNotif   = ref.read(shiftProvider.notifier);
+
+      // Wire up sync callbacks
+      queue.onOrderSynced      = history.addOrder;
+      queue.onVoidSynced       = history.updateOrder;
+      queue.onShiftOpenSynced  = (shift) {
+        // If the shift that just synced matches our local shift, update state
+        final current = ref.read(shiftProvider).shift;
+        if (current != null && current.id == shift.id) {
+          // Replace local shift with real synced shift
+          shiftNotif.state = shiftNotif.state.copyWith(
+            shift:        shift,
+            isLocalShift: false,
+          );
+        }
+      };
+      queue.onShiftCloseSynced = (_) {
+        // Shift close synced — nothing extra needed, shift already cleared locally
+      };
+
       queue.init();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final auth = ref.watch(authProvider);
+    final auth   = ref.watch(authProvider);
     final router = ref.watch(routerProvider);
 
     if (auth.isLoading) return const _SplashScreen();
@@ -73,21 +93,17 @@ class _SplashScreen extends StatelessWidget {
   const _SplashScreen();
   @override
   Widget build(BuildContext context) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.light,
-        home: Scaffold(
-          backgroundColor: Colors.white,
-          body: Center(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Image.asset('assets/TheRue.png', height: 64),
-              const SizedBox(height: 32),
-              const SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2.5, color: AppColors.primary)),
-            ]),
-          ),
-        ),
-      );
+    debugShowCheckedModeBanner: false,
+    theme: AppTheme.light,
+    home: Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Image.asset('assets/TheRue.png', height: 64),
+        const SizedBox(height: 32),
+        const SizedBox(width: 24, height: 24,
+            child: CircularProgressIndicator(
+                strokeWidth: 2.5, color: AppColors.primary)),
+      ])),
+    ),
+  );
 }

@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
+import 'package:rue_pos/core/models/pending_action.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/order_api.dart';
 import '../../core/models/cart.dart';
 import '../../core/models/menu.dart';
 import '../../core/models/order.dart';
-import '../../core/models/pending_order.dart';
 import '../../core/providers/auth_notifier.dart';
 import '../../core/providers/cart_notifier.dart';
 import '../../core/providers/menu_notifier.dart';
@@ -197,7 +197,7 @@ class _TopBar extends ConsumerWidget {
       ]),
     );
 
-    if (!isOnline || sync.count > 0) {
+    if (!isOnline || sync.orderCount > 0) {
       return Column(mainAxisSize: MainAxisSize.min, children: [
         bar,
         if (!isOnline)
@@ -207,12 +207,12 @@ class _TopBar extends ConsumerWidget {
             text: 'Offline — cached menu. Orders will sync when connected.',
             textColor: Color(0xFF856404),
           ),
-        if (isOnline && sync.count > 0)
+        if (isOnline && sync.orderCount > 0)
           _StatusBanner(
             color: const Color(0xFFCFE2FF),
             icon: Icons.sync_rounded,
             text:
-                'Syncing ${sync.count} offline order${sync.count == 1 ? "" : "s"}…',
+                'Syncing ${sync.orderCount} offline order${sync.orderCount == 1 ? "" : "s"}…',
             textColor: const Color(0xFF084298),
             animate: true,
           ),
@@ -1695,9 +1695,10 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         discountType: cart.discountType?.apiValue,
         discountValue: cart.discountValue,
         items: cart.items,
+        orderedAt: DateTime.now(),
         createdAt: DateTime.now(),
       );
-      await queue.enqueue(pending);
+      await queue.enqueueOrder(pending);
       ref.read(cartProvider.notifier).clear();
       if (mounted) {
         Navigator.pop(context);
@@ -1746,8 +1747,9 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
           discountValue: cart.discountValue,
           items: cart.items,
           createdAt: DateTime.now(),
+          orderedAt: DateTime.now(),
         );
-        await queue.enqueue(pending);
+        await queue.enqueueOrder(pending);
         ref.read(cartProvider.notifier).clear();
         if (mounted) {
           Navigator.pop(context);

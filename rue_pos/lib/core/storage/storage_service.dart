@@ -7,9 +7,9 @@ class StorageService {
   StorageService(this._prefs);
 
   // ── Token ──────────────────────────────────────────────────────────────────
-  String? get token          => _prefs.getString('auth_token');
-  Future<void> saveToken(String t) => _prefs.setString('auth_token', t);
-  Future<void> removeToken()       => _prefs.remove('auth_token');
+  String? get token              => _prefs.getString('auth_token');
+  Future<void> saveToken(String t)   => _prefs.setString('auth_token', t);
+  Future<void> removeToken()         => _prefs.remove('auth_token');
 
   // ── User ───────────────────────────────────────────────────────────────────
   Future<void> saveUser(Map<String, dynamic> j) =>
@@ -45,14 +45,23 @@ class StorageService {
 
   Future<void> removeShift(String branchId) => _prefs.remove('shift_$branchId');
 
-  // ── Menu ───────────────────────────────────────────────────────────────────
-  Future<void> saveMenu(String orgId, Map<String, dynamic> j) =>
-      _prefs.setString('menu_v2_$orgId', jsonEncode(j));
+  // ── Menu (with cache timestamp) ────────────────────────────────────────────
+  Future<void> saveMenu(String orgId, Map<String, dynamic> j) async {
+    await _prefs.setString('menu_v2_$orgId', jsonEncode(j));
+    await _prefs.setString(
+        'menu_cached_at_$orgId', DateTime.now().toIso8601String());
+  }
 
   Map<String, dynamic>? loadMenu(String orgId) {
     final raw = _prefs.getString('menu_v2_$orgId');
     if (raw == null) return null;
     try { return jsonDecode(raw) as Map<String, dynamic>; } catch (_) { return null; }
+  }
+
+  DateTime? menuCachedAt(String orgId) {
+    final raw = _prefs.getString('menu_cached_at_$orgId');
+    if (raw == null) return null;
+    try { return DateTime.parse(raw); } catch (_) { return null; }
   }
 
   // ── Orders ─────────────────────────────────────────────────────────────────
@@ -66,13 +75,13 @@ class StorageService {
     catch (_) { return null; }
   }
 
-  // ── Pending (offline queue) ────────────────────────────────────────────────
-  static const _pendingKey = 'offline_pending_v2';
+  // ── Pending action queue ───────────────────────────────────────────────────
+  static const _pendingKey = 'offline_pending_actions_v2';
 
-  Future<void> savePending(List<Map<String, dynamic>> pending) =>
-      _prefs.setString(_pendingKey, jsonEncode(pending));
+  Future<void> savePendingActions(List<Map<String, dynamic>> actions) =>
+      _prefs.setString(_pendingKey, jsonEncode(actions));
 
-  List<Map<String, dynamic>> loadPending() {
+  List<Map<String, dynamic>> loadPendingActions() {
     final raw = _prefs.getString(_pendingKey);
     if (raw == null) return [];
     try { return (jsonDecode(raw) as List).cast<Map<String, dynamic>>(); }
@@ -86,7 +95,6 @@ class StorageService {
   }
 }
 
-// Seeded in main.dart with the real SharedPreferences instance.
 final storageServiceProvider = Provider<StorageService>((ref) {
   throw UnimplementedError('storageServiceProvider must be overridden in ProviderScope');
 });

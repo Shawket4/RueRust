@@ -20,12 +20,9 @@ class CardContainer extends StatelessWidget {
       color: color ?? AppColors.surface,
       borderRadius: BorderRadius.circular(radius),
       border: Border.all(color: AppColors.border),
-      boxShadow: [
-        BoxShadow(
+      boxShadow: [BoxShadow(
           color: Colors.black.withOpacity(0.04),
-          blurRadius: 10, offset: const Offset(0, 2),
-        ),
-      ],
+          blurRadius: 10, offset: const Offset(0, 2))],
     ),
     child: child,
   );

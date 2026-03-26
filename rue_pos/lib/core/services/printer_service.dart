@@ -1,8 +1,5 @@
-// ignore_for_file: prefer_const_constructors
-
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -27,26 +24,23 @@ class PrinterService {
     final cleanIp = ip.split('/').first;
     final pdfBytes =
         await _buildReceiptPdf(order: order, branchName: branchName);
-    switch (brand) {
-      case PrinterBrand.star:
-        return _printStar(ip: cleanIp, pdfBytes: pdfBytes);
-      case PrinterBrand.epson:
-        return _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes);
-    }
+    return switch (brand) {
+      PrinterBrand.star => _printStar(ip: cleanIp, pdfBytes: pdfBytes),
+      PrinterBrand.epson =>
+        _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes),
+    };
   }
 
-  static Future<String?> _printStar({
-    required String ip,
-    required Uint8List pdfBytes,
-  }) async {
+  static Future<String?> _printStar(
+      {required String ip, required Uint8List pdfBytes}) async {
     try {
       final device = StarDevice(ip, StarInterfaceType.lan);
       final connected =
           await StarXpand.instance.connect(device, monitor: false);
       if (!connected) return 'Could not connect to Star printer';
-      final success =
+      final ok =
           await StarXpand.instance.printPdf(pdfBytes, width: _printerWidth);
-      return success ? null : 'Star print failed';
+      return ok ? null : 'Star print failed';
     } catch (e) {
       return 'Star printer error: $e';
     } finally {
@@ -61,10 +55,9 @@ class PrinterService {
   }) async {
     Socket? socket;
     try {
-      final pages = Printing.raster(pdfBytes, dpi: 203);
-      final page = await pages.first;
+      final page = await Printing.raster(pdfBytes, dpi: 203).first;
       final png = await page.toPng();
-      final imgBytes = await _pngToEscPosRaster(png, page.width, page.height);
+      final imgBytes = await _pngToEscPos(png, page.width, page.height);
       socket = await Socket.connect(ip, port, timeout: _timeout);
       socket.setOption(SocketOption.tcpNoDelay, true);
       socket.add(imgBytes);
@@ -81,37 +74,33 @@ class PrinterService {
     }
   }
 
-  static Future<Uint8List> _pngToEscPosRaster(
-    Uint8List png,
-    int widthPx,
-    int heightPx,
-  ) async {
+  static Future<Uint8List> _pngToEscPos(Uint8List png, int w, int h) async {
     final codec = await ui.instantiateImageCodec(png);
     final frame = await codec.getNextFrame();
     final imgData =
         await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (imgData == null) throw Exception('Failed to decode image');
-
     final pixels = imgData.buffer.asUint8List();
     final buf = <int>[];
-
     buf.addAll([0x1B, 0x40]);
-
-    final widthBytes = (widthPx + 7) ~/ 8;
-    final xL = widthBytes & 0xFF;
-    final xH = (widthBytes >> 8) & 0xFF;
-    final yL = heightPx & 0xFF;
-    final yH = (heightPx >> 8) & 0xFF;
-
-    buf.addAll([0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH]);
-
-    for (int y = 0; y < heightPx; y++) {
-      for (int xByte = 0; xByte < widthBytes; xByte++) {
+    final wB = (w + 7) ~/ 8;
+    buf.addAll([
+      0x1D,
+      0x76,
+      0x30,
+      0x00,
+      wB & 0xFF,
+      (wB >> 8) & 0xFF,
+      h & 0xFF,
+      (h >> 8) & 0xFF
+    ]);
+    for (int y = 0; y < h; y++) {
+      for (int xB = 0; xB < wB; xB++) {
         int byte = 0;
         for (int bit = 0; bit < 8; bit++) {
-          final x = xByte * 8 + bit;
-          if (x < widthPx) {
-            final idx = (y * widthPx + x) * 4;
+          final x = xB * 8 + bit;
+          if (x < w) {
+            final idx = (y * w + x) * 4;
             final r = pixels[idx];
             final g = pixels[idx + 1];
             final b = pixels[idx + 2];
@@ -119,17 +108,15 @@ class PrinterService {
             final rW = ((r * a) + (255 * (255 - a))) ~/ 255;
             final gW = ((g * a) + (255 * (255 - a))) ~/ 255;
             final bW = ((b * a) + (255 * (255 - a))) ~/ 255;
-            final lum = (0.299 * rW + 0.587 * gW + 0.114 * bW).round();
-            if (lum < 128) byte |= (0x80 >> bit);
+            if ((0.299 * rW + 0.587 * gW + 0.114 * bW).round() < 128) {
+              byte |= (0x80 >> bit);
+            }
           }
         }
         buf.add(byte);
       }
     }
-
-    buf.addAll([0x1B, 0x64, 0x05]);
-    buf.addAll([0x1D, 0x56, 0x41, 0x05]);
-
+    buf.addAll([0x1B, 0x64, 0x05, 0x1D, 0x56, 0x41, 0x05]);
     return Uint8List.fromList(buf);
   }
 
@@ -138,138 +125,88 @@ class PrinterService {
     required String branchName,
   }) async {
     final pdf = pw.Document();
-
     final font = pw.Font.ttf(
-      (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
-          .buffer
-          .asByteData(),
-    );
-    final fontSemiBold = pw.Font.ttf(
-      (await rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
-          .buffer
-          .asByteData(),
-    );
-
-    final logoData = await rootBundle.load('assets/TheRue.png');
-    final logoImage = pw.MemoryImage(logoData.buffer.asUint8List());
-
-    const charWidth = 40;
-
-    pw.TextStyle ts(pw.Font f, {double size = 8.0}) =>
-        pw.TextStyle(font: f, fontSize: size);
-
-    pw.Widget divider() => pw.Divider(
-          thickness: 0.3,
-          color: PdfColors.grey600,
-          height: 4,
-        );
-
-    String padRow(String left, String right) {
-      final space = charWidth - left.length - right.length;
-      if (space <= 0) return '$left $right';
-      return left + ' ' * space + right;
+        (await rootBundle.load('assets/fonts/Cairo-Regular.ttf'))
+            .buffer
+            .asByteData());
+    final fontB = pw.Font.ttf(
+        (await rootBundle.load('assets/fonts/Cairo-SemiBold.ttf'))
+            .buffer
+            .asByteData());
+    final logo = pw.MemoryImage(
+        (await rootBundle.load('assets/TheRue.png')).buffer.asUint8List());
+    const cw = 40;
+    pw.TextStyle ts(pw.Font f, {double sz = 8}) =>
+        pw.TextStyle(font: f, fontSize: sz);
+    pw.Widget div() =>
+        pw.Divider(thickness: 0.3, color: PdfColors.grey600, height: 4);
+    String pad(String l, String r) {
+      final sp = cw - l.length - r.length;
+      return sp <= 0 ? '$l $r' : l + ' ' * sp + r;
     }
 
     final dt = order.createdAt.toLocal();
-    final dateTimeStr = '${dt.day.toString().padLeft(2, '0')}/'
-        '${dt.month.toString().padLeft(2, '0')}/'
-        '${dt.year}  '
-        '${timeShort(order.createdAt)}';
+    final dts =
+        '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}  ${timeShort(order.createdAt)}';
 
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat(
-          72 * PdfPageFormat.mm,
-          double.infinity,
+    pdf.addPage(pw.Page(
+      pageFormat: const PdfPageFormat(72 * PdfPageFormat.mm, double.infinity,
           marginTop: 2 * PdfPageFormat.mm,
           marginBottom: 2 * PdfPageFormat.mm,
           marginLeft: 2 * PdfPageFormat.mm,
-          marginRight: 2 * PdfPageFormat.mm,
-        ),
-        build: (ctx) => pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-          children: [
-            // Logo
-            pw.Center(child: pw.Image(logoImage, width: 56)),
-
-            // Branch
-            pw.Center(child: pw.Text(branchName, style: ts(font, size: 7.5))),
-            pw.SizedBox(height: 2),
-            divider(),
-
-            // Order number + date/time
+          marginRight: 2 * PdfPageFormat.mm),
+      build: (ctx) => pw
+          .Column(crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
+        pw.Center(child: pw.Image(logo, width: 56)),
+        pw.Center(child: pw.Text(branchName, style: ts(font, sz: 7.5))),
+        pw.SizedBox(height: 2),
+        div(),
+        pw.Text(pad('Order #${order.orderNumber}', dts),
+            style: ts(fontB, sz: 8)),
+        div(),
+        ...order.items.expand((item) {
+          final sz = item.sizeLabel != null ? ' (${item.sizeLabel})' : '';
+          return [
             pw.Text(
-              padRow('Order #${order.orderNumber}', dateTimeStr),
-              style: ts(fontSemiBold, size: 8),
-            ),
-            divider(),
-
-            // Items
-            ...order.items.expand((item) {
-              final sizePart =
-                  item.sizeLabel != null ? ' (${item.sizeLabel})' : '';
-              final label = '${item.quantity}x ${item.itemName}$sizePart';
-              return [
-                pw.Text(
-                  padRow(label, egp(item.lineTotal)),
-                  style: ts(fontSemiBold, size: 8),
-                ),
-                ...item.addons.map((addon) {
-                  final aLabel = '  + ${addon.addonName}';
-                  final aPrice =
-                      addon.unitPrice > 0 ? '+${egp(addon.unitPrice)}' : '';
-                  return pw.Text(
-                    aPrice.isNotEmpty ? padRow(aLabel, aPrice) : aLabel,
-                    style: ts(font, size: 7.5),
-                  );
-                }),
-              ];
+                pad('${item.quantity}x ${item.itemName}$sz',
+                    egp(item.lineTotal)),
+                style: ts(fontB, sz: 8)),
+            ...item.addons.map((a) {
+              final ap = a.unitPrice > 0 ? '+${egp(a.unitPrice)}' : '';
+              final al = '  + ${a.addonName}';
+              return pw.Text(ap.isNotEmpty ? pad(al, ap) : al,
+                  style: ts(font, sz: 7.5));
             }),
-
-            divider(),
-
-            // Totals
-            pw.Text(padRow('Subtotal', egp(order.subtotal)),
-                style: ts(font, size: 8)),
-            if (order.discountAmount > 0)
-              pw.Text(padRow('Discount', '- ${egp(order.discountAmount)}'),
-                  style: ts(font, size: 8)),
-            if (order.taxAmount > 0)
-              pw.Text(padRow('Tax', egp(order.taxAmount)),
-                  style: ts(font, size: 8)),
-            pw.Text(
-              padRow('TOTAL', egp(order.totalAmount)),
-              style: ts(fontSemiBold, size: 10),
-            ),
-            divider(),
-
-            // Footer
-            pw.Text(
-              padRow(
+          ];
+        }),
+        div(),
+        pw.Text(pad('Subtotal', egp(order.subtotal)), style: ts(font, sz: 8)),
+        if (order.discountAmount > 0)
+          pw.Text(pad('Discount', '- ${egp(order.discountAmount)}'),
+              style: ts(font, sz: 8)),
+        if (order.taxAmount > 0)
+          pw.Text(pad('Tax', egp(order.taxAmount)), style: ts(font, sz: 8)),
+        pw.Text(pad('TOTAL', egp(order.totalAmount)), style: ts(fontB, sz: 10)),
+        div(),
+        pw.Text(
+            pad(
                 'Payment',
                 order.paymentMethod[0].toUpperCase() +
-                    order.paymentMethod.substring(1).replaceAll('_', ' '),
-              ),
-              style: ts(font, size: 7.5),
-            ),
-            if (order.customerName != null && order.customerName!.isNotEmpty)
-              pw.Text(padRow('Customer', order.customerName!),
-                  style: ts(font, size: 7.5)),
-            if (order.tellerName.isNotEmpty)
-              pw.Text(padRow('Teller', order.tellerName),
-                  style: ts(font, size: 7.5)),
-            pw.SizedBox(height: 3),
-            pw.Center(
-              child: pw.Text('Thank you for visiting!',
-                  style: ts(font, size: 7.5)),
-            ),
-            pw.SizedBox(height: 2),
-            divider(),
-          ],
-        ),
-      ),
-    );
-
+                    order.paymentMethod.substring(1).replaceAll('_', ' ')),
+            style: ts(font, sz: 7.5)),
+        if (order.customerName != null && order.customerName!.isNotEmpty)
+          pw.Text(pad('Customer', order.customerName!),
+              style: ts(font, sz: 7.5)),
+        if (order.tellerName.isNotEmpty)
+          pw.Text(pad('Teller', order.tellerName), style: ts(font, sz: 7.5)),
+        pw.SizedBox(height: 3),
+        pw.Center(
+            child:
+                pw.Text('Thank you for visiting!', style: ts(font, sz: 7.5))),
+        pw.SizedBox(height: 2),
+        div(),
+      ]),
+    ));
     return pdf.save();
   }
 }

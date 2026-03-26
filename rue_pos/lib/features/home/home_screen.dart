@@ -1,30 +1,24 @@
-// ignore_for_file: prefer_const_constructors
-
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:provider/provider.dart';
 import '../../core/models/shift.dart';
-import '../../core/providers/auth_provider.dart';
-import '../../core/providers/order_history_provider.dart';
-import '../../core/providers/shift_provider.dart';
-import '../../core/services/offline_sync_service.dart';
+import '../../core/providers/auth_notifier.dart';
+import '../../core/providers/order_history_notifier.dart';
+import '../../core/providers/shift_notifier.dart';
+import '../../core/services/connectivity_service.dart';
+import '../../core/services/offline_queue.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/app_button.dart';
 import '../../shared/widgets/card_container.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  int _orderCount = 0;
-  int _salesTotal = 0;
-  int _systemCash = 0;
-  bool _statsLoaded = false;
-
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
@@ -32,110 +26,106 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    final branchId = context.read<AuthProvider>().user?.branchId;
+    final branchId = ref.read(authProvider).user?.branchId;
     if (branchId == null) return;
-    await context.read<ShiftProvider>().load(branchId);
-    await _loadStats();
+    await ref.read(shiftProvider.notifier).load(branchId);
+    final shift = ref.read(shiftProvider).shift;
+    if (shift != null) {
+      await ref.read(orderHistoryProvider.notifier).loadForShift(shift.id);
+      await ref.read(shiftProvider.notifier).loadSystemCash();
+    }
   }
 
-  Future<void> _loadStats() async {
-    final shift = context.read<ShiftProvider>().shift;
-    if (shift == null || !shift.isOpen) return;
-
-    // Use already-loaded order history if available; else load it
-    final history = context.read<OrderHistoryProvider>();
-    if (history.orders.isEmpty || history.fromCache) {
-      await history.loadForShift(shift.id);
-    }
-
+  /// Logout guard: if shift is open, force close-shift first.
+  Future<void> _onSignOut() async {
+    final canLeave = await ref.read(authProvider.notifier).canLogout();
     if (!mounted) return;
-    final orders = history.orders;
-
-    // System cash: opening + cash orders (no voided)
-    final cashOrders = orders
-        .where((o) => o.status != 'voided' && o.paymentMethod == 'cash')
-        .fold(0, (s, o) => s + o.totalAmount);
-
-    setState(() {
-      _orderCount = orders.where((o) => o.status != 'voided').length;
-      _salesTotal = orders
-          .where((o) => o.status != 'voided')
-          .fold(0, (s, o) => s + o.totalAmount);
-      _systemCash = shift.openingCash + cashOrders;
-      _statsLoaded = true;
-    });
+    if (canLeave) {
+      await ref.read(authProvider.notifier).logout();
+    } else {
+      await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text('Close Shift First',
+              style: cairo(fontWeight: FontWeight.w800)),
+          content: Text(
+            'You have an open shift. You must close it before signing out.',
+            style: cairo(fontSize: 14, color: AppColors.textSecondary),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child:
+                  Text('Cancel', style: cairo(color: AppColors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                context.go('/close-shift');
+              },
+              child: Text('Close Shift',
+                  style: cairo(
+                      color: AppColors.danger, fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<AuthProvider>().user!;
-    final shift = context.watch<ShiftProvider>();
-    final w = MediaQuery.of(context).size.width;
-    final isTablet = w >= 768;
+    final user = ref.watch(authProvider).user!;
+    final shiftSt = ref.watch(shiftProvider);
+    final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
         child: Padding(
           padding: EdgeInsets.all(isTablet ? 36 : 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Header ───────────────────────────────────────────────────
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Image.asset('assets/TheRue.png', height: isTablet ? 52 : 44),
-                const Spacer(),
-                Text(user.name,
-                    style: cairo(
-                        fontSize: isTablet ? 14 : 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textSecondary)),
-                const SizedBox(width: 12),
-                _SignOutBtn(),
-              ]),
-              SizedBox(height: isTablet ? 36 : 28),
-
-              // ── Greeting ─────────────────────────────────────────────────
-              Text(
-                _greet(user.name.split(' ').first),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Image.asset('assets/TheRue.png', height: isTablet ? 52 : 44),
+              const Spacer(),
+              Text(user.name,
+                  style: cairo(
+                      fontSize: isTablet ? 14 : 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary)),
+              const SizedBox(width: 12),
+              _SignOutBtn(onTap: _onSignOut),
+            ]),
+            SizedBox(height: isTablet ? 36 : 28),
+            Text(_greet(user.name.split(' ').first),
                 style: cairo(
-                    fontSize: isTablet ? 28 : 22, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                user.role.replaceAll('_', ' ').toUpperCase(),
+                    fontSize: isTablet ? 28 : 22, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(user.role.replaceAll('_', ' ').toUpperCase(),
                 style: cairo(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                     color: AppColors.textMuted,
-                    letterSpacing: 1),
-              ),
-              SizedBox(height: isTablet ? 32 : 24),
-
-              // ── Body ─────────────────────────────────────────────────────
-              if (shift.loading)
-                const Center(
-                    child: CircularProgressIndicator(color: AppColors.primary))
-              else if (shift.error != null)
-                _ErrorBanner(message: shift.error!, onRetry: _load)
-              else if (shift.hasOpen)
-                _OpenShiftView(
-                  shift: shift.shift!,
-                  orderCount: _orderCount,
-                  salesTotal: _salesTotal,
-                  systemCash: _systemCash,
-                  statsLoaded: _statsLoaded,
-                  fromCache: context.watch<OrderHistoryProvider>().fromCache,
-                  onRefresh: _loadStats,
-                  isTablet: isTablet,
-                )
-              else
-                _NoShiftView(
-                  suggested: shift.preFill?.suggestedOpeningCash ?? 0,
-                  isTablet: isTablet,
-                ),
-            ],
-          ),
+                    letterSpacing: 1)),
+            SizedBox(height: isTablet ? 32 : 24),
+            if (shiftSt.isLoading)
+              const Center(
+                  child: CircularProgressIndicator(color: AppColors.primary))
+            else if (shiftSt.error != null && !shiftSt.hasOpenShift)
+              _ErrorBanner(message: shiftSt.error!, onRetry: _load)
+            else if (shiftSt.hasOpenShift)
+              _OpenShiftView(
+                  shift: shiftSt.shift!,
+                  shiftState: shiftSt,
+                  onRefresh: _load,
+                  isTablet: isTablet)
+            else
+              _NoShiftView(
+                  suggested: shiftSt.suggestedOpeningCash, isTablet: isTablet),
+          ]),
         ),
       ),
     );
@@ -143,40 +133,38 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _greet(String first) {
     final h = DateTime.now().hour;
-    final word = h < 12
+    final w = h < 12
         ? 'Morning'
         : h < 17
             ? 'Afternoon'
             : 'Evening';
-    return 'Good $word, $first';
+    return 'Good $w, $first';
   }
 }
 
-// ── Open Shift View ───────────────────────────────────────────────────────────
-class _OpenShiftView extends StatelessWidget {
+// ── Open Shift View ────────────────────────────────────────────────────────────
+class _OpenShiftView extends ConsumerWidget {
   final Shift shift;
-  final int orderCount;
-  final int salesTotal;
-  final int systemCash;
-  final bool statsLoaded;
-  final bool fromCache;
+  final ShiftState shiftState;
   final VoidCallback onRefresh;
   final bool isTablet;
 
-  const _OpenShiftView({
-    required this.shift,
-    required this.orderCount,
-    required this.salesTotal,
-    required this.systemCash,
-    required this.statsLoaded,
-    required this.fromCache,
-    required this.onRefresh,
-    required this.isTablet,
-  });
+  const _OpenShiftView(
+      {required this.shift,
+      required this.shiftState,
+      required this.onRefresh,
+      required this.isTablet});
 
   @override
-  Widget build(BuildContext context) {
-    final sync = context.watch<OfflineSyncService>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final sync = ref.watch(offlineQueueProvider);
+    final history = ref.watch(orderHistoryProvider);
+    final isOnline = ref.watch(isOnlineProvider);
+
+    final active = history.orders.where((o) => o.status != 'voided').toList();
+    final orderCount = active.length;
+    final salesTotal = active.fold(0, (s, o) => s + o.totalAmount);
+    final statsReady = !shiftState.systemCashLoading;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
@@ -184,47 +172,40 @@ class _OpenShiftView extends StatelessWidget {
         padding: EdgeInsets.all(isTablet ? 30 : 24),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
-            colors: [AppColors.primary, AppColors.secondary],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+              colors: [AppColors.primary, AppColors.secondary],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight),
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
-              color: AppColors.primary.withOpacity(0.25),
-              blurRadius: 24,
-              offset: const Offset(0, 8),
-            ),
+                color: AppColors.primary.withOpacity(0.25),
+                blurRadius: 24,
+                offset: const Offset(0, 8))
           ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // Offline / cache banner
-          if (!sync.isOnline)
+          if (!isOnline)
+            const _Banner(
+                icon: Icons.wifi_off_rounded,
+                text:
+                    'Offline — cached data shown. Orders queue until online.'),
+          if (isOnline && history.fromCache)
+            const _Banner(
+                icon: Icons.history_rounded,
+                text: 'Showing cached stats — tap refresh to update.'),
+          if (isOnline && sync.count > 0)
             _Banner(
-              icon: Icons.wifi_off_rounded,
-              text: 'Offline — cached data shown. Orders queue until online.',
-            ),
-          if (sync.isOnline && fromCache)
+                icon: Icons.sync_rounded,
+                animate: true,
+                text:
+                    'Syncing ${sync.count} offline order${sync.count == 1 ? "" : "s"}…'),
+          if (sync.hasStuck)
             _Banner(
-              icon: Icons.history_rounded,
-              text: 'Showing cached stats — tap refresh to update.',
-            ),
-          if (sync.isOnline && sync.count > 0)
-            _Banner(
-              icon: Icons.sync_rounded,
-              text:
-                  'Syncing ${sync.count} offline order${sync.count == 1 ? "" : "s"}…',
-              animate: true,
-            ),
-          if (sync.stuckCount > 0)
-            _Banner(
-              icon: Icons.warning_amber_rounded,
-              text:
-                  '${sync.stuckCount} order${sync.stuckCount == 1 ? "" : "s"} failed to sync — check connection or discard.',
-              warn: true,
-            ),
-
-          // Status row
+                icon: Icons.warning_amber_rounded,
+                warn: true,
+                text:
+                    '${sync.stuckCount} order${sync.stuckCount == 1 ? "" : "s"} '
+                    'failed to sync — check connection or discard.'),
           Row(children: [
             _StatusPill(),
             const Spacer(),
@@ -232,38 +213,32 @@ class _OpenShiftView extends StatelessWidget {
                 style: cairo(fontSize: 11, color: Colors.white60)),
             const SizedBox(width: 8),
             GestureDetector(
-              onTap: onRefresh,
-              child: const Icon(Icons.refresh_rounded,
-                  size: 16, color: Colors.white54),
-            ),
+                onTap: onRefresh,
+                child: const Icon(Icons.refresh_rounded,
+                    size: 16, color: Colors.white54)),
           ]),
           SizedBox(height: isTablet ? 26 : 20),
-
-          // Stats row
           Row(children: [
             _ShiftStat(
                 label: 'Sales',
                 value: egp(salesTotal),
-                loading: !statsLoaded,
+                loading: !statsReady,
                 isTablet: isTablet),
             _VertDivider(),
             _ShiftStat(
                 label: 'Orders',
                 value: '$orderCount',
-                loading: !statsLoaded,
+                loading: !statsReady,
                 isTablet: isTablet),
             _VertDivider(),
             _ShiftStat(
-              label: 'System Cash',
-              value: egp(systemCash),
-              sublabel: '${egp(shift.openingCash)} opening',
-              loading: !statsLoaded,
-              isTablet: isTablet,
-            ),
+                label: 'System Cash',
+                value: egp(shiftState.systemCash),
+                sublabel: '${egp(shift.openingCash)} opening',
+                loading: shiftState.systemCashLoading,
+                isTablet: isTablet),
           ]),
           SizedBox(height: isTablet ? 28 : 22),
-
-          // Action buttons
           Row(children: [
             Expanded(
                 child: _CardBtn(
@@ -290,14 +265,14 @@ class _OpenShiftView extends StatelessWidget {
                 child: _CardBtn(
               label: 'Close',
               icon: Icons.lock_outline_rounded,
-              onTap: !sync.isOnline
+              danger: true,
+              isTablet: isTablet,
+              onTap: !isOnline
                   ? () => ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                           content: Text('Internet required to close shift'),
                           backgroundColor: Color(0xFF856404)))
                   : () => _confirmClose(context),
-              danger: true,
-              isTablet: isTablet,
             )),
           ]),
         ]),
@@ -305,47 +280,136 @@ class _OpenShiftView extends StatelessWidget {
     ]);
   }
 
-  void _confirmClose(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Close Shift?', style: cairo(fontWeight: FontWeight.w800)),
-        content: Text(
-          'You will count cash and inventory on the next screen.',
-          style: cairo(fontSize: 14, color: AppColors.textSecondary),
+  void _confirmClose(BuildContext context) => showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title:
+              Text('Close Shift?', style: cairo(fontWeight: FontWeight.w800)),
+          content: Text('You will count cash and inventory on the next screen.',
+              style: cairo(fontSize: 14, color: AppColors.textSecondary)),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel',
+                    style: cairo(color: AppColors.textSecondary))),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                context.go('/close-shift');
+              },
+              child: Text('Continue',
+                  style: cairo(
+                      color: AppColors.danger, fontWeight: FontWeight.w700)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: cairo(color: AppColors.textSecondary)),
+      );
+}
+
+// ── No Shift View ──────────────────────────────────────────────────────────────
+class _NoShiftView extends StatelessWidget {
+  final int suggested;
+  final bool isTablet;
+  const _NoShiftView({required this.suggested, required this.isTablet});
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ConstrainedBox(
+            constraints:
+                BoxConstraints(maxWidth: isTablet ? 480 : double.infinity),
+            child: CardContainer(
+              padding: EdgeInsets.all(isTablet ? 28 : 20),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                              color: AppColors.primary.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(14)),
+                          child: const Icon(Icons.wb_sunny_outlined,
+                              color: AppColors.primary, size: 22)),
+                      const SizedBox(width: 14),
+                      Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('No Open Shift',
+                                style: cairo(
+                                    fontSize: isTablet ? 18 : 16,
+                                    fontWeight: FontWeight.w700)),
+                            if (suggested > 0)
+                              Text('Last closing: ${egp(suggested)}',
+                                  style: cairo(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondary)),
+                          ]),
+                    ]),
+                    const SizedBox(height: 22),
+                    AppButton(
+                        label: 'Open Shift',
+                        width: double.infinity,
+                        icon: Icons.play_arrow_rounded,
+                        onTap: () => context.go('/open-shift')),
+                  ]),
+            ),
           ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              context.go('/close-shift');
-            },
-            child: Text('Continue',
-                style: cairo(
-                    color: AppColors.danger, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 16),
+          ConstrainedBox(
+            constraints:
+                BoxConstraints(maxWidth: isTablet ? 480 : double.infinity),
+            child: OutlinedButton.icon(
+              onPressed: () => context.go('/shift-history'),
+              icon: const Icon(Icons.history_rounded, size: 16),
+              label: Text('View Shift History', style: cairo(fontSize: 14)),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                side: const BorderSide(color: AppColors.border),
+                foregroundColor: AppColors.textSecondary,
+              ),
+            ),
           ),
         ],
-      ),
-    );
-  }
+      );
+}
+
+// ── Shared small widgets ────────────────────────────────────────────────────────
+class _SignOutBtn extends StatelessWidget {
+  final VoidCallback onTap;
+  const _SignOutBtn({required this.onTap});
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: AppColors.border)),
+          alignment: Alignment.center,
+          child: const Icon(Icons.logout_rounded,
+              size: 15, color: AppColors.textSecondary),
+        ),
+      );
 }
 
 class _Banner extends StatelessWidget {
   final IconData icon;
   final String text;
-  final bool animate;
-  final bool warn;
+  final bool animate, warn;
   const _Banner(
       {required this.icon,
       required this.text,
       this.animate = false,
       this.warn = false});
-
   @override
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.only(bottom: 10),
@@ -381,16 +445,14 @@ class _StatusPill extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.18),
-          borderRadius: BorderRadius.circular(20),
-        ),
+            color: Colors.white.withOpacity(0.18),
+            borderRadius: BorderRadius.circular(20)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            width: 7,
-            height: 7,
-            decoration: const BoxDecoration(
-                color: Color(0xFF4ADE80), shape: BoxShape.circle),
-          ),
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                  color: Color(0xFF4ADE80), shape: BoxShape.circle)),
           const SizedBox(width: 6),
           Text('SHIFT OPEN',
               style: cairo(
@@ -403,18 +465,15 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _ShiftStat extends StatelessWidget {
-  final String label;
-  final String value;
+  final String label, value;
   final String? sublabel;
-  final bool loading;
-  final bool isTablet;
+  final bool loading, isTablet;
   const _ShiftStat(
       {required this.label,
       required this.value,
       this.sublabel,
       this.loading = false,
       this.isTablet = false});
-
   @override
   Widget build(BuildContext context) => Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -458,15 +517,13 @@ class _CardBtn extends StatelessWidget {
   final String label;
   final IconData icon;
   final VoidCallback onTap;
-  final bool danger;
-  final bool isTablet;
+  final bool danger, isTablet;
   const _CardBtn(
       {required this.label,
       required this.icon,
       required this.onTap,
       this.danger = false,
       this.isTablet = false});
-
   @override
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
@@ -474,9 +531,8 @@ class _CardBtn extends StatelessWidget {
           duration: const Duration(milliseconds: 150),
           padding: EdgeInsets.symmetric(vertical: isTablet ? 14 : 11),
           decoration: BoxDecoration(
-            color: danger ? Colors.white.withOpacity(0.12) : Colors.white,
-            borderRadius: BorderRadius.circular(14),
-          ),
+              color: danger ? Colors.white.withOpacity(0.12) : Colors.white,
+              borderRadius: BorderRadius.circular(14)),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon,
                 size: isTablet ? 18 : 16,
@@ -492,115 +548,17 @@ class _CardBtn extends StatelessWidget {
       );
 }
 
-// ── No Shift View ─────────────────────────────────────────────────────────────
-class _NoShiftView extends StatelessWidget {
-  final int suggested;
-  final bool isTablet;
-  const _NoShiftView({required this.suggested, required this.isTablet});
-
-  @override
-  Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ConstrainedBox(
-            constraints:
-                BoxConstraints(maxWidth: isTablet ? 480 : double.infinity),
-            child: CardContainer(
-              padding: EdgeInsets.all(isTablet ? 28 : 20),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      Container(
-                        width: 46,
-                        height: 46,
-                        decoration: BoxDecoration(
-                            color: AppColors.primary.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(14)),
-                        child: const Icon(Icons.wb_sunny_outlined,
-                            color: AppColors.primary, size: 22),
-                      ),
-                      const SizedBox(width: 14),
-                      Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('No Open Shift',
-                                style: cairo(
-                                    fontSize: isTablet ? 18 : 16,
-                                    fontWeight: FontWeight.w700)),
-                            if (suggested > 0)
-                              Text('Last closing: ${egp(suggested)}',
-                                  style: cairo(
-                                      fontSize: 12,
-                                      color: AppColors.textSecondary)),
-                          ]),
-                    ]),
-                    const SizedBox(height: 22),
-                    AppButton(
-                      label: 'Open Shift',
-                      width: double.infinity,
-                      icon: Icons.play_arrow_rounded,
-                      onTap: () => context.go('/open-shift'),
-                    ),
-                  ]),
-            ),
-          ),
-          const SizedBox(height: 16),
-          ConstrainedBox(
-            constraints:
-                BoxConstraints(maxWidth: isTablet ? 480 : double.infinity),
-            child: OutlinedButton.icon(
-              onPressed: () => context.go('/shift-history'),
-              icon: const Icon(Icons.history_rounded, size: 16),
-              label: Text('View Shift History', style: cairo(fontSize: 14)),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 48),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                side: const BorderSide(color: AppColors.border),
-                foregroundColor: AppColors.textSecondary,
-              ),
-            ),
-          ),
-        ],
-      );
-}
-
-// ── Shared small widgets ──────────────────────────────────────────────────────
-class _SignOutBtn extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: () async {
-          await context.read<AuthProvider>().logout();
-          if (context.mounted) context.go('/login');
-        },
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(11),
-              border: Border.all(color: AppColors.border)),
-          alignment: Alignment.center,
-          child: const Icon(Icons.logout_rounded,
-              size: 15, color: AppColors.textSecondary),
-        ),
-      );
-}
-
 class _ErrorBanner extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
   const _ErrorBanner({required this.message, required this.onRetry});
-
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: AppColors.danger.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.danger.withOpacity(0.2)),
-        ),
+            color: AppColors.danger.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.danger.withOpacity(0.2))),
         child: Row(children: [
           const Icon(Icons.error_outline_rounded,
               color: AppColors.danger, size: 18),
@@ -609,13 +567,12 @@ class _ErrorBanner extends StatelessWidget {
               child: Text(message,
                   style: cairo(fontSize: 13, color: AppColors.danger))),
           TextButton(
-            onPressed: onRetry,
-            child: Text('Retry',
-                style: cairo(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.primary)),
-          ),
+              onPressed: onRetry,
+              child: Text('Retry',
+                  style: cairo(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary))),
         ]),
       );
 }

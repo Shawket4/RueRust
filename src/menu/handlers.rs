@@ -122,6 +122,7 @@ pub struct OrgQuery {
 pub struct MenuItemQuery {
     pub org_id:      Uuid,
     pub category_id: Option<Uuid>,
+    pub full:        Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -339,7 +340,7 @@ pub async fn list_menu_items(
     check_permission(pool.get_ref(), &claims, "menu_items", "read").await?;
     require_same_org(&claims, Some(query.org_id))?;
 
-    let rows = match query.category_id {
+    let items = match query.category_id {
         Some(cat_id) => sqlx::query_as::<_, MenuItem>(
             r#"
             SELECT id, org_id, category_id, name, description, image_url,
@@ -370,7 +371,32 @@ pub async fn list_menu_items(
         .await?,
     };
 
-    Ok(HttpResponse::Ok().json(rows))
+    // If ?full=true, hydrate each item with sizes + option groups
+    if query.full.unwrap_or(false) {
+        let mut result: Vec<MenuItemFull> = vec![];
+        for item in items {
+            let sizes = sqlx::query_as::<_, ItemSize>(
+                r#"
+                SELECT id, menu_item_id, label::text, price_override,
+                       display_order, is_active
+                FROM item_sizes
+                WHERE menu_item_id = $1
+                ORDER BY display_order ASC
+                "#,
+            )
+            .bind(item.id)
+            .fetch_all(pool.get_ref())
+            .await?;
+
+            let option_groups =
+                fetch_option_groups_full(pool.get_ref(), item.id).await?;
+
+            result.push(MenuItemFull { item, sizes, option_groups });
+        }
+        return Ok(HttpResponse::Ok().json(result));
+    }
+
+    Ok(HttpResponse::Ok().json(items))
 }
 
 pub async fn get_menu_item(

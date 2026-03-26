@@ -26,4 +26,9 @@ class User {
     role:     j['role']      as String,
     isActive: j['is_active'] as bool,
   );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'org_id': orgId, 'branch_id': branchId,
+    'name': name, 'email': email, 'role': role, 'is_active': isActive,
+  };
 }

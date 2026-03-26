@@ -1,25 +1,22 @@
-// ignore_for_file: unused_element_parameter, unused_import
-
-import 'dart:math' show max;
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
-import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/menu_api.dart';
 import '../../core/api/order_api.dart';
+import '../../core/models/cart.dart';
 import '../../core/models/menu.dart';
 import '../../core/models/order.dart';
 import '../../core/models/pending_order.dart';
-import '../../core/providers/auth_provider.dart';
-import '../../core/providers/branch_provider.dart';
-import '../../core/providers/cart_provider.dart';
-import '../../core/providers/menu_provider.dart';
-import '../../core/providers/order_history_provider.dart';
-import '../../core/providers/shift_provider.dart';
-import '../../core/services/offline_sync_service.dart';
+import '../../core/providers/auth_notifier.dart';
+import '../../core/providers/cart_notifier.dart';
+import '../../core/providers/menu_notifier.dart';
+import '../../core/providers/order_history_notifier.dart';
+import '../../core/providers/shift_notifier.dart';
+import '../../core/services/connectivity_service.dart';
+import '../../core/services/offline_queue.dart';
 import '../../core/services/printer_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
@@ -29,23 +26,16 @@ import '../../shared/widgets/label_value.dart';
 const _skeletonBase = Color(0xFFF0EBE3);
 const _skeletonHighlight = Color(0xFFE8E0D5);
 
-// ── Group type sort order: milk_type → coffee_type → extra ───────────────────
-int _groupTypeSortOrder(String type) => switch (type) {
-      'milk_type' => 0,
-      'coffee_type' => 1,
-      _ => 2, // 'extra' and anything else last
-    };
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-class OrderScreen extends StatefulWidget {
+class OrderScreen extends ConsumerStatefulWidget {
   const OrderScreen({super.key});
   @override
-  State<OrderScreen> createState() => _OrderScreenState();
+  ConsumerState<OrderScreen> createState() => _OrderScreenState();
 }
 
-class _OrderScreenState extends State<OrderScreen> {
+class _OrderScreenState extends ConsumerState<OrderScreen> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -53,8 +43,8 @@ class _OrderScreenState extends State<OrderScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final orgId = context.read<AuthProvider>().user?.orgId;
-      if (orgId != null) context.read<MenuProvider>().load(orgId);
+      final orgId = ref.read(authProvider).user?.orgId;
+      if (orgId != null) ref.read(menuProvider.notifier).load(orgId);
     });
     _searchCtrl.addListener(
         () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
@@ -68,8 +58,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    final isTablet = w >= 768;
+    final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F4F0),
@@ -95,14 +84,14 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Widget _contentArea() => AnimatedSwitcher(
-        duration: const Duration(milliseconds: 260),
+        duration: const Duration(milliseconds: 220),
         switchInCurve: Curves.easeOut,
         switchOutCurve: Curves.easeIn,
         transitionBuilder: (child, anim) => FadeTransition(
           opacity: anim,
           child: SlideTransition(
             position:
-                Tween<Offset>(begin: const Offset(0, 0.035), end: Offset.zero)
+                Tween<Offset>(begin: const Offset(0, 0.04), end: Offset.zero)
                     .animate(anim),
             child: child,
           ),
@@ -116,20 +105,21 @@ class _OrderScreenState extends State<OrderScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 //  TOP BAR
 // ─────────────────────────────────────────────────────────────────────────────
-class _TopBar extends StatelessWidget {
+class _TopBar extends ConsumerWidget {
   final TextEditingController ctrl;
   final String query;
   const _TopBar({required this.ctrl, required this.query});
 
   @override
-  Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
-    final sync = context.watch<OfflineSyncService>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
+    final sync = ref.watch(offlineQueueProvider);
+    final isOnline = ref.watch(isOnlineProvider);
     final isTablet = MediaQuery.of(context).size.width >= 768;
 
     final bar = Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(14, 11, 16, 11),
+      padding: const EdgeInsets.fromLTRB(12, 10, 16, 10),
       child: Row(children: [
         _IconBtn(
             icon: Icons.arrow_back_rounded, onTap: () => context.go('/home')),
@@ -140,9 +130,7 @@ class _TopBar extends StatelessWidget {
           child: Container(
             height: 38,
             decoration: BoxDecoration(
-                color: const Color(0xFFF5F1ED),
-                // pill shape for search bar
-                borderRadius: BorderRadius.circular(20)),
+                color: AppColors.bg, borderRadius: BorderRadius.circular(10)),
             child: TextField(
               controller: ctrl,
               style: cairo(fontSize: 14),
@@ -150,12 +138,12 @@ class _TopBar extends StatelessWidget {
                 hintText: 'Search menu…',
                 hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
                 prefixIcon: const Icon(Icons.search_rounded,
-                    size: 17, color: AppColors.textMuted),
+                    size: 18, color: AppColors.textMuted),
                 suffixIcon: query.isNotEmpty
                     ? GestureDetector(
                         onTap: ctrl.clear,
                         child: const Icon(Icons.close_rounded,
-                            size: 15, color: AppColors.textMuted))
+                            size: 16, color: AppColors.textMuted))
                     : null,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
@@ -176,23 +164,47 @@ class _TopBar extends StatelessWidget {
                 child: FadeTransition(opacity: anim, child: child)),
             child: cart.isEmpty
                 ? const SizedBox.shrink(key: ValueKey('empty'))
-                : _CartPill(key: const ValueKey('pill'), cart: cart),
+                : Container(
+                    key: const ValueKey('pill'),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                            color: AppColors.primary.withOpacity(0.28),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3))
+                      ],
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.shopping_bag_outlined,
+                          size: 14, color: Colors.white),
+                      const SizedBox(width: 6),
+                      Text('${cart.count} · ${egp(cart.total)}',
+                          style: cairo(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white)),
+                    ]),
+                  ),
           ),
         ],
       ]),
     );
 
-    if (!sync.isOnline || sync.count > 0) {
+    if (!isOnline || sync.count > 0) {
       return Column(mainAxisSize: MainAxisSize.min, children: [
         bar,
-        if (!sync.isOnline)
+        if (!isOnline)
           const _StatusBanner(
             color: Color(0xFFFFF3CD),
             icon: Icons.wifi_off_rounded,
             text: 'Offline — cached menu. Orders will sync when connected.',
             textColor: Color(0xFF856404),
           ),
-        if (sync.isOnline && sync.count > 0)
+        if (isOnline && sync.count > 0)
           _StatusBanner(
             color: const Color(0xFFCFE2FF),
             icon: Icons.sync_rounded,
@@ -205,36 +217,6 @@ class _TopBar extends StatelessWidget {
     }
     return bar;
   }
-}
-
-class _CartPill extends StatelessWidget {
-  final CartProvider cart;
-  const _CartPill({super.key, required this.cart});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppColors.primary,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [
-            BoxShadow(
-                color: AppColors.primary.withOpacity(0.28),
-                blurRadius: 10,
-                offset: const Offset(0, 3))
-          ],
-        ),
-        child: Row(children: [
-          const Icon(Icons.shopping_bag_outlined,
-              size: 14, color: Colors.white),
-          const SizedBox(width: 6),
-          Text('${cart.count} · ${egp(cart.total)}',
-              style: cairo(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white)),
-        ]),
-      );
 }
 
 class _StatusBanner extends StatelessWidget {
@@ -271,87 +253,50 @@ class _StatusBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CATEGORY RAIL  (redesigned)
+//  CATEGORY RAIL
 // ─────────────────────────────────────────────────────────────────────────────
-class _CategoryRail extends StatelessWidget {
+class _CategoryRail extends ConsumerWidget {
   const _CategoryRail();
 
   @override
-  Widget build(BuildContext context) {
-    final menu = context.watch<MenuProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final menu = ref.watch(menuProvider);
     return Container(
-      width: 78,
+      width: 86,
       decoration: const BoxDecoration(
-          color: Color(0xFFF7F4F0),
-          border: Border(right: BorderSide(color: Color(0xFFEDE9E3)))),
+          color: Colors.white,
+          border: Border(right: BorderSide(color: Color(0xFFF0F0F0)))),
       child: ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: menu.categories.length,
         itemBuilder: (_, i) {
           final cat = menu.categories[i];
-          final sel = cat.id == menu.selectedId;
-          final style = _CatStyle.of(cat.name);
+          final sel = cat.id == menu.selectedCategoryId;
           return GestureDetector(
-            onTap: () => menu.select(cat.id),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: sel ? Colors.white : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: sel
-                      ? [
-                          BoxShadow(
-                              color: Colors.black.withOpacity(0.06),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2))
-                        ]
-                      : [],
-                ),
-                child: Column(children: [
-                  // Colored icon bubble
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: sel
-                          ? style.accent.withOpacity(0.12)
-                          : Colors.transparent,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      style.icon,
-                      size: 20,
-                      color: sel ? style.accent : AppColors.textMuted,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Text(normaliseName(cat.name),
-                      style: cairo(
-                          fontSize: 9,
-                          fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-                          color: sel ? style.accent : AppColors.textMuted,
-                          height: 1.3),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis),
-                  // Active dot indicator
-                  const SizedBox(height: 5),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: sel ? 18 : 0,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: style.accent,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ]),
+            onTap: () => ref.read(menuProvider.notifier).selectCategory(cat.id),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              margin: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+              decoration: BoxDecoration(
+                color: sel ? AppColors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
               ),
+              child: Column(children: [
+                Icon(_CatStyle.of(cat.name).icon,
+                    size: 20, color: sel ? Colors.white : AppColors.textMuted),
+                const SizedBox(height: 5),
+                Text(normaliseName(cat.name),
+                    style: cairo(
+                        fontSize: 9.5,
+                        fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                        color: sel ? Colors.white : AppColors.textSecondary,
+                        height: 1.25),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
+              ]),
             ),
           );
         },
@@ -363,21 +308,23 @@ class _CategoryRail extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  MENU GRID
 // ─────────────────────────────────────────────────────────────────────────────
-class _MenuGrid extends StatelessWidget {
+class _MenuGrid extends ConsumerWidget {
   const _MenuGrid({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final menu = context.watch<MenuProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final menu = ref.watch(menuProvider);
     final items = menu.filtered.where((i) => i.isActive).toList();
 
-    if (menu.loading) return _grid(8, (_, __) => const _MenuCardSkeleton());
+    if (menu.isLoading) return _grid(8, (_, __) => const _MenuCardSkeleton());
     if (menu.error != null) {
       return _ErrorState(
         message: menu.error!,
         onRetry: () {
-          final orgId = context.read<AuthProvider>().user?.orgId;
-          if (orgId != null) context.read<MenuProvider>().refresh(orgId);
+          final orgId = ref.read(authProvider).user?.orgId;
+          if (orgId != null) {
+            ref.read(menuProvider.notifier).load(orgId, force: true);
+          }
         },
       );
     }
@@ -391,15 +338,15 @@ class _MenuGrid extends StatelessWidget {
 
   Widget _grid(int count, Widget Function(BuildContext, int) builder) =>
       LayoutBuilder(builder: (ctx, constraints) {
-        final cols = (constraints.maxWidth / 158).floor().clamp(2, 5);
+        final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
         final extent = constraints.maxWidth / cols;
         return GridView.builder(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(12),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: cols,
             mainAxisSpacing: 10,
             crossAxisSpacing: 10,
-            childAspectRatio: extent / (extent * 1.32),
+            childAspectRatio: extent / (extent * 1.3),
           ),
           itemCount: count,
           itemBuilder: builder,
@@ -410,15 +357,15 @@ class _MenuGrid extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  SEARCH RESULTS
 // ─────────────────────────────────────────────────────────────────────────────
-class _SearchResults extends StatelessWidget {
+class _SearchResults extends ConsumerWidget {
   final String query;
   const _SearchResults({required this.query, super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final found = context
-        .watch<MenuProvider>()
-        .allItems
+  Widget build(BuildContext context, WidgetRef ref) {
+    final found = ref
+        .watch(menuProvider)
+        .items
         .where((i) =>
             i.isActive &&
             (i.name.toLowerCase().contains(query) ||
@@ -440,15 +387,15 @@ class _SearchResults extends StatelessWidget {
     }
 
     return LayoutBuilder(builder: (ctx, constraints) {
-      final cols = (constraints.maxWidth / 158).floor().clamp(2, 5);
+      final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
       final extent = constraints.maxWidth / cols;
       return GridView.builder(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(12),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: cols,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: extent / (extent * 1.32),
+          childAspectRatio: extent / (extent * 1.3),
         ),
         itemCount: found.length,
         itemBuilder: (_, i) => _MenuCard(item: found[i]),
@@ -458,18 +405,16 @@ class _SearchResults extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  MOBILE CART FAB
+//  MOBILE CART FAB + SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class _MobileCartFab extends StatelessWidget {
+class _MobileCartFab extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
     if (cart.isEmpty) return const SizedBox.shrink();
     return FloatingActionButton.extended(
       onPressed: () => _MobileCartSheet.show(context),
       backgroundColor: AppColors.primary,
-      elevation: 6,
-      shape: const StadiumBorder(),
       label: Text('${cart.count} items · ${egp(cart.total)}',
           style: cairo(
               fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
@@ -479,10 +424,7 @@ class _MobileCartFab extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MOBILE CART BOTTOM SHEET
-// ─────────────────────────────────────────────────────────────────────────────
-class _MobileCartSheet extends StatelessWidget {
+class _MobileCartSheet extends ConsumerWidget {
   const _MobileCartSheet();
 
   static void show(BuildContext ctx) => showModalBottomSheet(
@@ -493,8 +435,8 @@ class _MobileCartSheet extends StatelessWidget {
       );
 
   @override
-  Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
     return Container(
       constraints:
           BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
@@ -507,24 +449,34 @@ class _MobileCartSheet extends StatelessWidget {
           padding: const EdgeInsets.only(top: 12),
           child: Center(
               child: Container(
-                  width: 36,
+                  width: 40,
                   height: 4,
                   decoration: BoxDecoration(
                       color: const Color(0xFFE0E0E0),
                       borderRadius: BorderRadius.circular(2)))),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
           child: Row(children: [
             Text('Order',
                 style: cairo(fontSize: 17, fontWeight: FontWeight.w800)),
             const SizedBox(width: 8),
-            _CountBadge(count: cart.count),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20)),
+              child: Text('${cart.count}',
+                  style: cairo(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary)),
+            ),
             const Spacer(),
             if (!cart.isEmpty)
               GestureDetector(
                 onTap: () {
-                  cart.clear();
+                  ref.read(cartProvider.notifier).clear();
                   Navigator.pop(context);
                 },
                 child: Text('Clear',
@@ -535,8 +487,8 @@ class _MobileCartSheet extends StatelessWidget {
               ),
           ]),
         ),
-        const SizedBox(height: 10),
-        const Divider(height: 1, color: Color(0xFFF0EDE8)),
+        const SizedBox(height: 8),
+        const Divider(height: 1),
         Expanded(
           child: cart.isEmpty
               ? Center(
@@ -549,7 +501,7 @@ class _MobileCartSheet extends StatelessWidget {
                   itemBuilder: (_, i) => _CartRow(index: i),
                 ),
         ),
-        if (!cart.isEmpty) _CartFooter(),
+        if (!cart.isEmpty) const _CartFooter(),
       ]),
     );
   }
@@ -594,7 +546,7 @@ class _MenuCardSkeletonState extends State<_MenuCardSkeleton>
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
+                      color: Colors.black.withOpacity(0.05),
                       blurRadius: 8,
                       offset: const Offset(0, 2))
                 ]),
@@ -732,9 +684,7 @@ class _CatStyle {
           iconColor: Color(0xFFE64A19),
           accent: Color(0xFFEF6C00));
     }
-    if (n.contains('affogato') ||
-        n.contains('ice cream') ||
-        n.contains('soft serve')) {
+    if (n.contains('affogato') || n.contains('ice cream')) {
       return const _CatStyle(
           icon: Icons.icecream_rounded,
           bgTop: Color(0xFFF3E5F5),
@@ -789,14 +739,14 @@ class _CatStyle {
 // ─────────────────────────────────────────────────────────────────────────────
 //  MENU CARD
 // ─────────────────────────────────────────────────────────────────────────────
-class _MenuCard extends StatefulWidget {
+class _MenuCard extends ConsumerStatefulWidget {
   final MenuItem item;
-  const _MenuCard({required this.item, super.key});
+  const _MenuCard({required this.item});
   @override
-  State<_MenuCard> createState() => _MenuCardState();
+  ConsumerState<_MenuCard> createState() => _MenuCardState();
 }
 
-class _MenuCardState extends State<_MenuCard>
+class _MenuCardState extends ConsumerState<_MenuCard>
     with SingleTickerProviderStateMixin {
   bool _fetching = false;
   late final AnimationController _pressCtrl;
@@ -806,8 +756,8 @@ class _MenuCardState extends State<_MenuCard>
   void initState() {
     super.initState();
     _pressCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 90));
-    _pressAnim = Tween<double>(begin: 1, end: 0.95)
+        vsync: this, duration: const Duration(milliseconds: 100));
+    _pressAnim = Tween<double>(begin: 1, end: 0.96)
         .animate(CurvedAnimation(parent: _pressCtrl, curve: Curves.easeOut));
   }
 
@@ -821,7 +771,7 @@ class _MenuCardState extends State<_MenuCard>
     if (_fetching) return;
     setState(() => _fetching = true);
     try {
-      final full = await menuApi.item(widget.item.id);
+      final full = await ref.read(menuApiProvider).item(widget.item.id);
       if (mounted) {
         setState(() => _fetching = false);
         ItemDetailSheet.show(context, full);
@@ -852,8 +802,8 @@ class _MenuCardState extends State<_MenuCard>
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                  color: style.accent.withOpacity(0.10),
-                  blurRadius: 14,
+                  color: style.accent.withOpacity(0.12),
+                  blurRadius: 12,
                   offset: const Offset(0, 4)),
               BoxShadow(
                   color: Colors.black.withOpacity(0.04),
@@ -878,21 +828,21 @@ class _MenuCardState extends State<_MenuCard>
                 if (!hasImage)
                   Center(
                       child: Container(
-                    width: 52,
-                    height: 52,
+                    width: 56,
+                    height: 56,
                     decoration: BoxDecoration(
-                        color: style.iconColor.withOpacity(0.1),
+                        color: style.iconColor.withOpacity(0.12),
                         shape: BoxShape.circle),
-                    child: Icon(style.icon, size: 26, color: style.iconColor),
+                    child: Icon(style.icon, size: 28, color: style.iconColor),
                   )),
                 if (_fetching)
                   Positioned.fill(
                       child: Container(
-                    color: Colors.black.withOpacity(0.28),
+                    color: Colors.black.withOpacity(0.3),
                     alignment: Alignment.center,
                     child: const SizedBox(
-                        width: 22,
-                        height: 22,
+                        width: 24,
+                        height: 24,
                         child: CircularProgressIndicator(
                             strokeWidth: 2.5, color: Colors.white)),
                   )),
@@ -904,9 +854,9 @@ class _MenuCardState extends State<_MenuCard>
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                          width: 3,
-                          height: 26,
-                          margin: const EdgeInsets.only(right: 7),
+                          width: 4,
+                          height: 28,
+                          margin: const EdgeInsets.only(right: 8),
                           decoration: BoxDecoration(
                               color: style.accent,
                               borderRadius: BorderRadius.circular(2))),
@@ -918,7 +868,7 @@ class _MenuCardState extends State<_MenuCard>
                                   height: 1.25),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis)),
-                      const SizedBox(width: 5),
+                      const SizedBox(width: 6),
                       Text(egp(item.basePrice),
                           style: cairo(
                               fontSize: 11,
@@ -949,7 +899,7 @@ class _CardBackground extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  ITEM DETAIL SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class ItemDetailSheet extends StatefulWidget {
+class ItemDetailSheet extends ConsumerStatefulWidget {
   final MenuItem item;
   const ItemDetailSheet({super.key, required this.item});
 
@@ -957,21 +907,17 @@ class ItemDetailSheet extends StatefulWidget {
       context: ctx,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      useSafeArea: true,
       builder: (_) => ItemDetailSheet(item: item));
 
   @override
-  State<ItemDetailSheet> createState() => _ItemDetailSheetState();
+  ConsumerState<ItemDetailSheet> createState() => _ItemDetailSheetState();
 }
 
-class _ItemDetailSheetState extends State<ItemDetailSheet> {
+class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   String? _selectedSize;
-  // groupId → { optionItemId → qty }
-  final Map<String, Map<String, int>> _opts = {};
+  final Map<String, String> _single = {};
+  final Map<String, Set<String>> _multi = {};
   int _qty = 1;
-
-  // Sorted option groups: milk_type → coffee_type → extras
-  late final List<DrinkOptionGroup> _sortedGroups;
 
   @override
   void initState() {
@@ -979,19 +925,23 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
     if (widget.item.sizes.isNotEmpty) {
       _selectedSize = widget.item.sizes.first.label;
     }
-    _sortedGroups = [...widget.item.optionGroups]..sort((a, b) =>
-        _groupTypeSortOrder(a.groupType)
-            .compareTo(_groupTypeSortOrder(b.groupType)));
   }
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
   int get _addonsTotal {
     int t = 0;
-    for (final g in _sortedGroups) {
-      final selected = _opts[g.id] ?? {};
-      for (final o in g.items) {
-        final qty = selected[o.id] ?? 0;
-        if (qty > 0) t += (o.price as int) * qty;
+    for (final g in widget.item.optionGroups) {
+      if (g.isMultiSelect) {
+        for (final o in g.items) {
+          if ((_multi[g.id] ?? {}).contains(o.id)) t += o.price;
+        }
+      } else {
+        for (final o in g.items) {
+          if (o.id == _single[g.id]) {
+            t += o.price;
+            break;
+          }
+        }
       }
     }
     return t;
@@ -999,61 +949,60 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
 
   int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
   bool get _canAdd {
-    for (final g in _sortedGroups) {
+    for (final g in widget.item.optionGroups) {
       if (!g.isRequired) continue;
-      if ((_opts[g.id] ?? {}).isEmpty) return false;
+      if (g.isMultiSelect) {
+        if ((_multi[g.id] ?? {}).isEmpty) return false;
+      } else {
+        if (!_single.containsKey(g.id)) return false;
+      }
     }
     return true;
   }
 
-  void _tap(String gId, String oId, bool isMulti, bool isRequired) {
-    HapticFeedback.selectionClick();
-    setState(() {
-      final groupOpts = _opts.putIfAbsent(gId, () => {});
-      if (!isMulti) {
-        if (groupOpts.containsKey(oId)) {
-          if (!isRequired) groupOpts.remove(oId);
+  void _toggleSingle(String gId, String oId, bool req) => setState(() {
+        if (_single[gId] == oId) {
+          if (!req) _single.remove(gId);
         } else {
-          groupOpts.clear();
-          groupOpts[oId] = 1;
+          _single[gId] = oId;
         }
-      } else {
-        groupOpts[oId] = (groupOpts[oId] ?? 0) + 1;
-      }
-    });
-  }
+      });
 
-  void _longPress(String gId, String oId) {
-    HapticFeedback.lightImpact();
-    setState(() {
-      final groupOpts = _opts[gId];
-      if (groupOpts == null) return;
-      final current = groupOpts[oId] ?? 0;
-      if (current <= 1)
-        groupOpts.remove(oId);
-      else
-        groupOpts[oId] = current - 1;
-      if (groupOpts.isEmpty) _opts.remove(gId);
-    });
-  }
+  void _toggleMulti(String gId, String oId) => setState(() {
+        final s = _multi.putIfAbsent(gId, () => {});
+        s.contains(oId) ? s.remove(oId) : s.add(oId);
+        if (s.isEmpty) _multi.remove(gId);
+      });
 
   void _addToCart() {
     final addons = <SelectedAddon>[];
-    for (final g in _sortedGroups) {
-      final selected = _opts[g.id] ?? {};
-      for (final o in g.items) {
-        final qty = selected[o.id] ?? 0;
-        if (qty > 0) {
-          addons.add(SelectedAddon(
-              addonItemId: o.addonItemId,
-              drinkOptionItemId: o.id,
-              name: o.name,
-              priceModifier: o.price as int,
-              quantity: qty));
+    for (final g in widget.item.optionGroups) {
+      if (g.isMultiSelect) {
+        for (final o in g.items) {
+          if ((_multi[g.id] ?? {}).contains(o.id)) {
+            addons.add(SelectedAddon(
+                addonItemId: o.addonItemId,
+                drinkOptionItemId: o.id,
+                name: o.name,
+                priceModifier: o.price));
+          }
+        }
+      } else {
+        final sId = _single[g.id];
+        if (sId == null) continue;
+        for (final o in g.items) {
+          if (o.id == sId) {
+            addons.add(SelectedAddon(
+                addonItemId: o.addonItemId,
+                drinkOptionItemId: o.id,
+                name: o.name,
+                priceModifier: o.price));
+            break;
+          }
         }
       }
     }
-    context.read<CartProvider>().add(CartItem(
+    ref.read(cartProvider.notifier).add(CartItem(
         menuItemId: widget.item.id,
         itemName: normaliseName(widget.item.name),
         sizeLabel: _selectedSize,
@@ -1066,18 +1015,16 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final style = _CatStyle.of(widget.item.name);
-
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
       child: Container(
-        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
+        constraints: BoxConstraints(maxHeight: mq.size.height * 0.90),
         decoration: const BoxDecoration(
             color: Color(0xFFFAF8F5),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Padding(
-              padding: const EdgeInsets.only(top: 12, bottom: 2),
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Center(
                   child: Container(
                       width: 36,
@@ -1085,55 +1032,137 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: const Color(0xFFDDD8D0),
                           borderRadius: BorderRadius.circular(2))))),
-          _SheetHeader(
-              item: widget.item,
-              style: style,
-              unitPrice: _unitPrice,
-              addonsTotal: _addonsTotal),
+          // Header
+          Container(
+            padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
+            decoration: const BoxDecoration(
+                color: Color(0xFFFAF8F5),
+                border: Border(bottom: BorderSide(color: Color(0xFFECE8E0)))),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(normaliseName(widget.item.name),
+                        style: cairo(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            height: 1.2)),
+                    if (widget.item.description != null) ...[
+                      const SizedBox(height: 4),
+                      Text(widget.item.description!,
+                          style: cairo(
+                              fontSize: 12.5,
+                              color: AppColors.textSecondary,
+                              height: 1.4)),
+                    ],
+                  ])),
+              const SizedBox(width: 16),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                transitionBuilder: (child, anim) => SlideTransition(
+                    position: Tween<Offset>(
+                            begin: const Offset(0, -0.3), end: Offset.zero)
+                        .animate(anim),
+                    child: FadeTransition(opacity: anim, child: child)),
+                child: Container(
+                  key: ValueKey(_unitPrice + _addonsTotal),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Text(egp(_unitPrice + _addonsTotal),
+                      style: cairo(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primary)),
+                ),
+              ),
+            ]),
+          ),
+          // Scrollable options
           Flexible(
               child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+            padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (widget.item.sizes.isNotEmpty) ...[
-                _SectionLabel('Size'),
+                const _SectionLabel('Size'),
                 const SizedBox(height: 10),
                 Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: widget.item.sizes
-                        .map((s) => _SizeChip(
+                        .map((s) => _Chip(
                               label: normaliseName(s.label),
-                              price: egp(s.price),
+                              sublabel: egp(s.price),
                               selected: s.label == _selectedSize,
+                              checkbox: false,
                               onTap: () =>
                                   setState(() => _selectedSize = s.label),
                             ))
                         .toList()),
                 const SizedBox(height: 20),
               ],
-
-              // Option groups — already sorted milk → coffee → extras
-              for (final g in _sortedGroups) ...[
+              for (final g in widget.item.optionGroups) ...[
                 _OptionGroupCard(
                   group: g,
-                  selectedQtys: _opts[g.id] ?? {},
-                  onTap: (oId) =>
-                      _tap(g.id, oId, g.isMultiSelect, g.isRequired),
-                  onLongPress: (oId) => _longPress(g.id, oId),
+                  selectedSingle: _single[g.id],
+                  selectedMulti: _multi[g.id] ?? {},
+                  onToggleSingle: (oId) =>
+                      _toggleSingle(g.id, oId, g.isRequired),
+                  onToggleMulti: (oId) => _toggleMulti(g.id, oId),
                 ),
                 const SizedBox(height: 12),
               ],
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
             ]),
           )),
-          _SheetFooter(
-            qty: _qty,
-            total: _lineTotal,
-            canAdd: _canAdd,
-            onMinus: () => setState(() => _qty = (_qty - 1).clamp(1, 99)),
-            onPlus: () => setState(() => _qty = (_qty + 1).clamp(1, 99)),
-            onAdd: _addToCart,
+          // Footer
+          Container(
+            padding: const EdgeInsets.fromLTRB(22, 12, 22, 16),
+            decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: Color(0xFFECE8E0)))),
+            child: Row(children: [
+              Container(
+                decoration: BoxDecoration(
+                    color: const Color(0xFFF5F0EB),
+                    borderRadius: BorderRadius.circular(12)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _QtyBtn(
+                      icon: Icons.remove,
+                      onTap: () =>
+                          setState(() => _qty = (_qty - 1).clamp(1, 99))),
+                  SizedBox(
+                      width: 40,
+                      child: Center(
+                          child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 150),
+                              transitionBuilder: (child, anim) =>
+                                  ScaleTransition(scale: anim, child: child),
+                              child: Text('$_qty',
+                                  key: ValueKey(_qty),
+                                  style: cairo(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800))))),
+                  _QtyBtn(
+                      icon: Icons.add,
+                      onTap: () =>
+                          setState(() => _qty = (_qty + 1).clamp(1, 99))),
+                ]),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: AppButton(
+                label: _canAdd
+                    ? 'Add to Order — ${egp(_lineTotal)}'
+                    : 'Select required options',
+                height: 50,
+                onTap: _canAdd ? _addToCart : null,
+              )),
+            ]),
           ),
         ]),
       ),
@@ -1142,157 +1171,20 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SHEET SUB-WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
-class _SheetHeader extends StatelessWidget {
-  final MenuItem item;
-  final _CatStyle style;
-  final int unitPrice;
-  final int addonsTotal;
-  const _SheetHeader(
-      {required this.item,
-      required this.style,
-      required this.unitPrice,
-      required this.addonsTotal});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
-      decoration: const BoxDecoration(
-          color: Color(0xFFFAF8F5),
-          border: Border(bottom: BorderSide(color: Color(0xFFECE8E0)))),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-              gradient: LinearGradient(
-                  colors: [style.bgTop, style.bgBottom],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight),
-              borderRadius: BorderRadius.circular(14)),
-          child: item.imageUrl != null && item.imageUrl!.isNotEmpty
-              ? ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.network(item.imageUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          Icon(style.icon, size: 26, color: style.iconColor)))
-              : Icon(style.icon, size: 26, color: style.iconColor),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(normaliseName(item.name),
-              style: cairo(
-                  fontSize: 19, fontWeight: FontWeight.w800, height: 1.2)),
-          if (item.description != null) ...[
-            const SizedBox(height: 3),
-            Text(item.description!,
-                style: cairo(
-                    fontSize: 12, color: AppColors.textSecondary, height: 1.4),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis),
-          ],
-        ])),
-        const SizedBox(width: 12),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          transitionBuilder: (child, anim) => SlideTransition(
-              position:
-                  Tween<Offset>(begin: const Offset(0, -0.3), end: Offset.zero)
-                      .animate(anim),
-              child: FadeTransition(opacity: anim, child: child)),
-          child: Container(
-            key: ValueKey(unitPrice + addonsTotal),
-            // pill price badge
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-            decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.09),
-                borderRadius: BorderRadius.circular(24)),
-            child: Text(egp(unitPrice + addonsTotal),
-                style: cairo(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary)),
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
-class _SheetFooter extends StatelessWidget {
-  final int qty;
-  final int total;
-  final bool canAdd;
-  final VoidCallback onMinus, onPlus, onAdd;
-  const _SheetFooter(
-      {required this.qty,
-      required this.total,
-      required this.canAdd,
-      required this.onMinus,
-      required this.onPlus,
-      required this.onAdd});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 18),
-        decoration: const BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Color(0xFFECE8E0)))),
-        child: Row(children: [
-          // Pill qty stepper
-          Container(
-            decoration: BoxDecoration(
-                color: const Color(0xFFF5F0EB),
-                borderRadius: BorderRadius.circular(24)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              _QtyBtn(icon: Icons.remove, onTap: onMinus),
-              SizedBox(
-                  width: 40,
-                  child: Center(
-                      child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 130),
-                          transitionBuilder: (child, anim) =>
-                              ScaleTransition(scale: anim, child: child),
-                          child: Text('$qty',
-                              key: ValueKey(qty),
-                              style: cairo(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800))))),
-              _QtyBtn(icon: Icons.add, onTap: onPlus),
-            ]),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-              child: AppButton(
-            label: canAdd
-                ? 'Add to Order  ${egp(total)}'
-                : 'Select required options',
-            height: 50,
-            onTap: canAdd ? onAdd : null,
-          )),
-        ]),
-      );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  OPTION GROUP CARD
 // ─────────────────────────────────────────────────────────────────────────────
 class _OptionGroupCard extends StatefulWidget {
   final DrinkOptionGroup group;
-  final Map<String, int> selectedQtys;
-  final void Function(String) onTap;
-  final void Function(String) onLongPress;
+  final String? selectedSingle;
+  final Set<String> selectedMulti;
+  final void Function(String) onToggleSingle;
+  final void Function(String) onToggleMulti;
   const _OptionGroupCard(
       {required this.group,
-      required this.selectedQtys,
-      required this.onTap,
-      required this.onLongPress});
-
+      required this.selectedSingle,
+      required this.selectedMulti,
+      required this.onToggleSingle,
+      required this.onToggleMulti});
   @override
   State<_OptionGroupCard> createState() => _OptionGroupCardState();
 }
@@ -1300,7 +1192,6 @@ class _OptionGroupCard extends StatefulWidget {
 class _OptionGroupCardState extends State<_OptionGroupCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
-
   @override
   void initState() {
     super.initState();
@@ -1314,112 +1205,75 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
     super.dispose();
   }
 
-  // Icon per group type
-  IconData _groupIcon(String type) => switch (type) {
-        'milk_type' => Icons.water_drop_outlined,
-        'coffee_type' => Icons.coffee_outlined,
-        _ => Icons.add_circle_outline_rounded,
-      };
-
   @override
   Widget build(BuildContext context) {
     final g = widget.group;
     final allOpts = g.items;
-    final showSearch = allOpts.length > 6;
+    final showSearch = allOpts.length > 5;
     final opts = _query.isEmpty
         ? allOpts
         : allOpts.where((o) => o.name.toLowerCase().contains(_query)).toList();
-    final selCount = widget.selectedQtys.length;
-    final hasSelection = selCount > 0;
-    final groupType = g.groupType;
+    final selCount = g.isMultiSelect
+        ? widget.selectedMulti.length
+        : (widget.selectedSingle != null ? 1 : 0);
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+    return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color: hasSelection
-                ? AppColors.primary.withOpacity(0.25)
-                : const Color(0xFFEAE6E0),
-            width: hasSelection ? 1.5 : 1),
+            color: selCount > 0
+                ? AppColors.primary.withOpacity(0.2)
+                : const Color(0xFFECE8E0)),
         boxShadow: [
           BoxShadow(
-              color: hasSelection
-                  ? AppColors.primary.withOpacity(0.06)
-                  : Colors.black.withOpacity(0.03),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
+              color: Colors.black.withOpacity(0.03),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
         ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Group header
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 12, 0),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
           child: Row(children: [
-            // Group type icon
-            Icon(_groupIcon(groupType),
-                size: 14,
-                color: hasSelection ? AppColors.primary : AppColors.textMuted),
-            const SizedBox(width: 6),
             Expanded(
                 child: Row(children: [
               Text(g.displayName.toUpperCase(),
                   style: cairo(
-                      fontSize: 10,
+                      fontSize: 10.5,
                       fontWeight: FontWeight.w700,
-                      color: hasSelection
-                          ? AppColors.primary
-                          : AppColors.textSecondary,
-                      letterSpacing: 0.8)),
+                      color: AppColors.textSecondary,
+                      letterSpacing: 0.7)),
               const SizedBox(width: 6),
-              if (g.isRequired) _TagPill('Required', AppColors.danger),
+              if (g.isRequired) const _Pill('Required', AppColors.danger),
               if (g.isMultiSelect) ...[
                 const SizedBox(width: 4),
-                _TagPill('Multi', AppColors.primary),
+                const _Pill('Multi', AppColors.primary),
               ],
             ])),
-            if (hasSelection)
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
-                child: Container(
-                  key: ValueKey(selCount),
-                  // pill badge for selection count
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                  decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Text('$selCount',
-                      style: cairo(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white)),
-                ),
-              )
-            else if (g.isRequired)
-              Row(children: [
-                Icon(Icons.radio_button_unchecked,
-                    size: 13, color: AppColors.danger.withOpacity(0.5)),
-                const SizedBox(width: 4),
-                Text('Pick one',
+            if (selCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(20)),
+                child: Text('$selCount',
                     style: cairo(
                         fontSize: 10,
-                        color: AppColors.danger.withOpacity(0.6))),
-              ]),
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white)),
+              ),
           ]),
         ),
-
         if (showSearch) ...[
           const SizedBox(height: 10),
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Container(
-                height: 33,
+                height: 34,
                 decoration: BoxDecoration(
                     color: const Color(0xFFF5F0EB),
-                    // pill search in groups too
-                    borderRadius: BorderRadius.circular(20)),
+                    borderRadius: BorderRadius.circular(9)),
                 child: TextField(
                     controller: _searchCtrl,
                     style: cairo(fontSize: 13),
@@ -1444,7 +1298,6 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
                     )),
               )),
         ],
-
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: opts.isEmpty
@@ -1454,177 +1307,47 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
                   spacing: 7,
                   runSpacing: 7,
                   children: opts.map((opt) {
-                    final qty = widget.selectedQtys[opt.id] ?? 0;
-                    return _OptionChip(
+                    final sel = g.isMultiSelect
+                        ? widget.selectedMulti.contains(opt.id)
+                        : widget.selectedSingle == opt.id;
+                    return _Chip(
                       label: normaliseName(opt.name),
-                      price: opt.price,
-                      qty: qty,
-                      isMulti: g.isMultiSelect,
-                      onTap: () => widget.onTap(opt.id),
-                      onLongPress: () => widget.onLongPress(opt.id),
+                      sublabel: opt.price > 0 ? '+${egp(opt.price)}' : null,
+                      selected: sel,
+                      checkbox: g.isMultiSelect,
+                      onTap: () => g.isMultiSelect
+                          ? widget.onToggleMulti(opt.id)
+                          : widget.onToggleSingle(opt.id),
                     );
                   }).toList()),
         ),
-
-        if (g.isMultiSelect)
-          Padding(
-            padding: const EdgeInsets.only(left: 14, bottom: 10),
-            child: Text('Tap to add · Long-press to remove',
-                style: cairo(
-                  fontSize: 9.5,
-                  color: AppColors.textMuted,
-                )),
-          ),
       ]),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  OPTION CHIP  — fully pill-shaped, qty badge
+//  CART PANEL (tablet sidebar)
 // ─────────────────────────────────────────────────────────────────────────────
-class _OptionChip extends StatefulWidget {
-  final String label;
-  final int price;
-  final int qty;
-  final bool isMulti;
-  final VoidCallback onTap;
-  final VoidCallback onLongPress;
-  const _OptionChip(
-      {required this.label,
-      required this.price,
-      required this.qty,
-      required this.isMulti,
-      required this.onTap,
-      required this.onLongPress});
-
-  @override
-  State<_OptionChip> createState() => _OptionChipState();
-}
-
-class _OptionChipState extends State<_OptionChip>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _scale;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 80));
-    _scale = Tween<double>(begin: 1, end: 0.93)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = widget.qty > 0;
-
-    return GestureDetector(
-      onTapDown: (_) => _ctrl.forward(),
-      onTapUp: (_) {
-        _ctrl.reverse();
-        widget.onTap();
-      },
-      onTapCancel: () => _ctrl.reverse(),
-      onLongPress: widget.onLongPress,
-      child: ScaleTransition(
-        scale: _scale,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          // fully pill-shaped chips
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-              color: selected ? AppColors.primary : const Color(0xFFF5F0EB),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                  color: selected ? AppColors.primary : const Color(0xFFE4DDD4),
-                  width: selected ? 1.5 : 1)),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            if (widget.isMulti) ...[
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
-                child: Icon(
-                  selected
-                      ? Icons.check_circle_rounded
-                      : Icons.add_circle_outline_rounded,
-                  key: ValueKey(selected),
-                  size: 14,
-                  color: selected ? Colors.white : AppColors.textMuted,
-                ),
-              ),
-              const SizedBox(width: 5),
-            ],
-            Text(widget.label,
-                style: cairo(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: selected ? Colors.white : AppColors.textPrimary)),
-            if (widget.price > 0) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                    color: selected
-                        ? Colors.white.withOpacity(0.2)
-                        : AppColors.primary.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(12)),
-                child: Text('+${egp(widget.price)}',
-                    style: cairo(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: selected ? Colors.white : AppColors.primary)),
-              ),
-            ],
-            if (widget.qty > 1) ...[
-              const SizedBox(width: 5),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.28),
-                    borderRadius: BorderRadius.circular(10)),
-                child: Text('×${widget.qty}',
-                    style: cairo(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white)),
-              ),
-            ],
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART PANEL
-// ─────────────────────────────────────────────────────────────────────────────
-class _CartPanel extends StatelessWidget {
+class _CartPanel extends ConsumerWidget {
   const _CartPanel();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final w = MediaQuery.of(context).size.width;
-    final cartW = (w * 0.27).clamp(290.0, 380.0);
-    final cart = context.watch<CartProvider>();
+    final cartW = (w * 0.26).clamp(280.0, 380.0);
+    final cart = ref.watch(cartProvider);
 
     return Container(
       width: cartW,
       decoration: const BoxDecoration(
           color: Colors.white,
-          border: Border(left: BorderSide(color: Color(0xFFF0EDE8)))),
+          border: Border(left: BorderSide(color: Color(0xFFF0F0F0)))),
       child: Column(children: [
         Container(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Color(0xFFF0EDE8)))),
+              border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0)))),
           child: Row(children: [
             Text('Order',
                 style: cairo(fontSize: 15, fontWeight: FontWeight.w800)),
@@ -1632,20 +1355,30 @@ class _CartPanel extends StatelessWidget {
               const SizedBox(width: 8),
               AnimatedSwitcher(
                   duration: const Duration(milliseconds: 200),
-                  child: _CountBadge(
-                      key: ValueKey(cart.count), count: cart.count)),
+                  child: Container(
+                    key: ValueKey(cart.count),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Text('${cart.count}',
+                        style: cairo(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primary)),
+                  )),
             ],
             const Spacer(),
             if (!cart.isEmpty)
               GestureDetector(
-                onTap: () => _confirmClear(context),
+                onTap: () => _confirmClear(context, ref),
                 child: Container(
-                  // pill clear button
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(20)),
+                      color: AppColors.danger.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(8)),
                   child: Text('Clear',
                       style: cairo(
                           fontSize: 12,
@@ -1669,36 +1402,39 @@ class _CartPanel extends StatelessWidget {
         )),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
-          child: cart.isEmpty ? const SizedBox.shrink() : _CartFooter(),
+          child: cart.isEmpty ? const SizedBox.shrink() : const _CartFooter(),
         ),
       ]),
     );
   }
 
-  void _confirmClear(BuildContext context) => showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title:
-                Text('Clear Order?', style: cairo(fontWeight: FontWeight.w700)),
-            content: Text('Remove all items from the cart.', style: cairo()),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: Text('Cancel',
-                      style: cairo(color: AppColors.textSecondary))),
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  context.read<CartProvider>().clear();
-                },
-                child: Text('Clear',
-                    style: cairo(
-                        color: AppColors.danger, fontWeight: FontWeight.w700)),
-              ),
-            ],
-          ));
+  void _confirmClear(BuildContext context, WidgetRef ref) {
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: Text('Clear Order?',
+                  style: cairo(fontWeight: FontWeight.w700)),
+              content: Text('Remove all items from the cart.', style: cairo()),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text('Cancel',
+                        style: cairo(color: AppColors.textSecondary))),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    ref.read(cartProvider.notifier).clear();
+                  },
+                  child: Text('Clear',
+                      style: cairo(
+                          color: AppColors.danger,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ));
+  }
 }
 
 class _EmptyCart extends StatelessWidget {
@@ -1707,41 +1443,36 @@ class _EmptyCart extends StatelessWidget {
   Widget build(BuildContext context) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           SizedBox(
-              width: 120,
-              height: 120,
+              width: 130,
+              height: 130,
               child: Lottie.asset('assets/lottie/empty_cart.json',
                   fit: BoxFit.contain, repeat: true)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text('Cart is empty',
               style: cairo(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textSecondary)),
-          const SizedBox(height: 3),
+          const SizedBox(height: 4),
           Text('Tap any item to add it',
               style: cairo(fontSize: 12, color: AppColors.textMuted)),
         ]),
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART ROW
-// ─────────────────────────────────────────────────────────────────────────────
-class _CartRow extends StatelessWidget {
+class _CartRow extends ConsumerWidget {
   final int index;
   const _CartRow({required this.index});
-
   @override
-  Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
     final item = cart.items[index];
-
     return Container(
-      padding: const EdgeInsets.all(11),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
           color: const Color(0xFFFAFAFA),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFF0EDE8))),
+          border: Border.all(color: const Color(0xFFF0F0F0))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(
@@ -1763,18 +1494,15 @@ class _CartRow extends StatelessWidget {
               runSpacing: 4,
               children: item.addons
                   .map((a) => Container(
-                        // pill addon tags in cart
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 3),
+                            horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
                             color: AppColors.primary.withOpacity(0.07),
-                            borderRadius: BorderRadius.circular(20)),
+                            borderRadius: BorderRadius.circular(5)),
                         child: Text(
-                            a.quantity > 1
-                                ? '${normaliseName(a.name)} ×${a.quantity}${a.priceModifier > 0 ? "  +${egp(a.priceModifier * a.quantity)}" : ""}'
-                                : a.priceModifier > 0
-                                    ? '${normaliseName(a.name)}  +${egp(a.priceModifier)}'
-                                    : normaliseName(a.name),
+                            a.priceModifier > 0
+                                ? '${normaliseName(a.name)} +${egp(a.priceModifier)}'
+                                : normaliseName(a.name),
                             style: cairo(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
@@ -1782,21 +1510,25 @@ class _CartRow extends StatelessWidget {
                       ))
                   .toList()),
         ],
-        const SizedBox(height: 9),
+        const SizedBox(height: 8),
         Row(children: [
           _InlineBtn(
               icon: Icons.remove,
-              onTap: () => cart.setQty(index, item.quantity - 1)),
+              onTap: () => ref
+                  .read(cartProvider.notifier)
+                  .setQty(index, item.quantity - 1)),
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Text('${item.quantity}',
                   style: cairo(fontSize: 14, fontWeight: FontWeight.w700))),
           _InlineBtn(
               icon: Icons.add,
-              onTap: () => cart.setQty(index, item.quantity + 1)),
+              onTap: () => ref
+                  .read(cartProvider.notifier)
+                  .setQty(index, item.quantity + 1)),
           const Spacer(),
           GestureDetector(
-            onTap: () => cart.removeAt(index),
+            onTap: () => ref.read(cartProvider.notifier).removeAt(index),
             child: Container(
                 width: 28,
                 height: 28,
@@ -1805,7 +1537,7 @@ class _CartRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8)),
                 alignment: Alignment.center,
                 child: const Icon(Icons.delete_outline_rounded,
-                    size: 14, color: AppColors.danger)),
+                    size: 15, color: AppColors.danger)),
           ),
         ]),
       ]),
@@ -1813,25 +1545,23 @@ class _CartRow extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART FOOTER
-// ─────────────────────────────────────────────────────────────────────────────
-class _CartFooter extends StatelessWidget {
+class _CartFooter extends ConsumerWidget {
+  const _CartFooter();
   @override
-  Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cart = ref.watch(cartProvider);
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 13, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       decoration: const BoxDecoration(
           color: Colors.white,
-          border: Border(top: BorderSide(color: Color(0xFFF0EDE8)))),
+          border: Border(top: BorderSide(color: Color(0xFFF0F0F0)))),
       child: Column(children: [
         LabelValue('Subtotal', egp(cart.subtotal)),
         if (cart.discountAmount > 0)
           LabelValue('Discount', '− ${egp(cart.discountAmount)}',
               valueColor: AppColors.success),
         Padding(
-            padding: const EdgeInsets.symmetric(vertical: 9),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1867,7 +1597,7 @@ class _CartFooter extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  CHECKOUT SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class CheckoutSheet extends StatefulWidget {
+class CheckoutSheet extends ConsumerStatefulWidget {
   const CheckoutSheet({super.key});
   static void show(BuildContext ctx) => showModalBottomSheet(
       context: ctx,
@@ -1875,10 +1605,10 @@ class CheckoutSheet extends StatefulWidget {
       backgroundColor: Colors.transparent,
       builder: (_) => const CheckoutSheet());
   @override
-  State<CheckoutSheet> createState() => _CheckoutSheetState();
+  ConsumerState<CheckoutSheet> createState() => _CheckoutSheetState();
 }
 
-class _CheckoutSheetState extends State<CheckoutSheet> {
+class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   bool _loading = false;
   String? _error;
   final _customerCtrl = TextEditingController();
@@ -1891,9 +1621,10 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
   }
 
   Future<void> _place() async {
-    final cart = context.read<CartProvider>();
-    final shift = context.read<ShiftProvider>().shift;
-    final sync = context.read<OfflineSyncService>();
+    final cart = ref.read(cartProvider);
+    final shift = ref.read(shiftProvider).shift;
+    final queue = ref.read(offlineQueueProvider.notifier);
+    final isOnline = ref.read(isOnlineProvider);
     final customer =
         _customerCtrl.text.trim().isEmpty ? null : _customerCtrl.text.trim();
 
@@ -1906,20 +1637,21 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       _error = null;
     });
 
-    if (!sync.isOnline) {
+    // ── OFFLINE PATH ──────────────────────────────────────────────────────
+    if (!isOnline) {
       final pending = PendingOrder(
         localId: const Uuid().v4(),
         branchId: shift.branchId,
         shiftId: shift.id,
         paymentMethod: cart.payment,
         customerName: customer,
-        discountType: cart.discountTypeStr,
+        discountType: cart.discountType?.apiValue,
         discountValue: cart.discountValue,
-        items: cart.items.toList(),
+        items: cart.items,
         createdAt: DateTime.now(),
       );
-      await sync.savePending(pending);
-      cart.clear();
+      await queue.enqueue(pending);
+      ref.read(cartProvider.notifier).clear();
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1931,28 +1663,27 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
       return;
     }
 
+    // ── ONLINE PATH ───────────────────────────────────────────────────────
     try {
-      final order = await orderApi.create(
-        branchId: shift.branchId,
-        shiftId: shift.id,
-        paymentMethod: cart.payment,
-        items: cart.items.toList(),
-        customerName: customer,
-        discountType: cart.discountTypeStr,
-        discountValue: cart.discountValue,
-        idempotencyKey: const Uuid().v4(),
-      );
-      context.read<OrderHistoryProvider>().addOrder(order);
+      final order = await ref.read(orderApiProvider).create(
+            branchId: shift.branchId,
+            shiftId: shift.id,
+            paymentMethod: cart.payment,
+            items: cart.items,
+            customerName: customer,
+            discountType: cart.discountType?.apiValue,
+            discountValue: cart.discountValue,
+            idempotencyKey: const Uuid().v4(),
+          );
+      ref.read(orderHistoryProvider.notifier).addOrder(order);
       final total = cart.total;
-      cart.clear();
+      ref.read(cartProvider.notifier).clear();
       if (mounted) {
         Navigator.pop(context);
         ReceiptSheet.show(context, order: order, total: total);
       }
     } catch (e) {
-      if (e is DioException) {
-        debugPrint('ORDER ${e.response?.statusCode}: ${e.response?.data}');
-      }
+      // Lost connection mid-flight — queue it
       if (e is DioException &&
           (e.type == DioExceptionType.connectionError ||
               e.type == DioExceptionType.connectionTimeout ||
@@ -1964,13 +1695,13 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
           shiftId: shift.id,
           paymentMethod: cart.payment,
           customerName: customer,
-          discountType: cart.discountTypeStr,
+          discountType: cart.discountType?.apiValue,
           discountValue: cart.discountValue,
-          items: cart.items.toList(),
+          items: cart.items,
           createdAt: DateTime.now(),
         );
-        await context.read<OfflineSyncService>().savePending(pending);
-        cart.clear();
+        await queue.enqueue(pending);
+        ref.read(cartProvider.notifier).clear();
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1990,12 +1721,12 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final cart = context.watch<CartProvider>();
+    final cart = ref.watch(cartProvider);
     final mq = MediaQuery.of(context);
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       padding: EdgeInsets.fromLTRB(24, 14, 24, mq.viewInsets.bottom + 28),
       child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2008,21 +1739,21 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                     decoration: BoxDecoration(
                         color: const Color(0xFFE0E0E0),
                         borderRadius: BorderRadius.circular(2)))),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             Text('Checkout',
                 style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: const Color(0xFFF8F5F1),
+                  color: const Color(0xFFF8F8F8),
                   borderRadius: BorderRadius.circular(14)),
               child: Column(children: [
                 LabelValue('Subtotal', egp(cart.subtotal)),
                 if (cart.discountAmount > 0)
                   LabelValue('Discount', '− ${egp(cart.discountAmount)}',
                       valueColor: AppColors.success),
-                const Divider(height: 14, color: Color(0xFFE8E4DE)),
+                const Divider(height: 16, color: Color(0xFFEEEEEE)),
                 LabelValue('Total', egp(cart.total), bold: true),
               ]),
             ),
@@ -2061,7 +1792,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
                   : Icons.credit_card_rounded;
               return Expanded(
                   child: GestureDetector(
-                onTap: () => cart.setPayment(m),
+                onTap: () => ref.read(cartProvider.notifier).setPayment(m),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   margin: const EdgeInsets.only(right: 8),
@@ -2120,7 +1851,7 @@ class _CheckoutSheetState extends State<CheckoutSheet> {
 // ─────────────────────────────────────────────────────────────────────────────
 //  RECEIPT SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class ReceiptSheet extends StatefulWidget {
+class ReceiptSheet extends ConsumerStatefulWidget {
   final Order order;
   final int total;
   const ReceiptSheet({super.key, required this.order, required this.total});
@@ -2133,10 +1864,10 @@ class ReceiptSheet extends StatefulWidget {
           builder: (_) => ReceiptSheet(order: order, total: total));
 
   @override
-  State<ReceiptSheet> createState() => _ReceiptSheetState();
+  ConsumerState<ReceiptSheet> createState() => _ReceiptSheetState();
 }
 
-class _ReceiptSheetState extends State<ReceiptSheet> {
+class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
   bool _printing = false;
   String? _printError;
 
@@ -2149,24 +1880,24 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
   }
 
   Future<void> _print() async {
-    final bp = context.read<BranchProvider>();
-    if (!bp.hasPrinter) return;
+    final branch = ref.read(authProvider).branch;
+    if (branch == null || !branch.hasPrinter) return;
     setState(() {
       _printing = true;
       _printError = null;
     });
     final err = await PrinterService.print(
-      ip: bp.printerIp!,
-      port: bp.printerPort,
-      order: widget.order,
-      branchName: bp.branchName,
-      brand: bp.printerBrand!,
-    );
-    if (mounted)
+        ip: branch.printerIp!,
+        port: branch.printerPort,
+        brand: branch.printerBrand!,
+        order: widget.order,
+        branchName: branch.name);
+    if (mounted) {
       setState(() {
         _printing = false;
         _printError = err;
       });
+    }
   }
 
   @override
@@ -2175,7 +1906,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
     return Container(
       decoration: const BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       padding: EdgeInsets.fromLTRB(
           24, 14, 24, MediaQuery.of(context).padding.bottom + 28),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -2192,7 +1923,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
             height: 120,
             child: Lottie.asset('assets/lottie/success.json',
                 repeat: false, fit: BoxFit.contain)),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Text('Order Placed!',
             style: cairo(fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
@@ -2203,7 +1934,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-              color: const Color(0xFFF8F5F1),
+              color: const Color(0xFFF8F8F8),
               borderRadius: BorderRadius.circular(14)),
           child: Column(children: [
             LabelValue(
@@ -2235,8 +1966,7 @@ class _ReceiptSheetState extends State<ReceiptSheet> {
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                       color: AppColors.primary.withOpacity(0.08),
-                      // pill print button
-                      borderRadius: BorderRadius.circular(24)),
+                      borderRadius: BorderRadius.circular(10)),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     Icon(Icons.print_rounded,
                         size: 16,
@@ -2282,17 +2012,16 @@ class _SectionLabel extends StatelessWidget {
           letterSpacing: 0.7));
 }
 
-class _TagPill extends StatelessWidget {
+class _Pill extends StatelessWidget {
   final String text;
   final Color color;
-  const _TagPill(this.text, this.color);
+  const _Pill(this.text, this.color);
   @override
   Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
           color: color.withOpacity(0.1),
-          // fully pill-shaped tags
-          borderRadius: BorderRadius.circular(20)),
+          borderRadius: BorderRadius.circular(4)),
       child: Text(text,
           style: cairo(
               fontSize: 9,
@@ -2301,66 +2030,61 @@ class _TagPill extends StatelessWidget {
               letterSpacing: 0.3)));
 }
 
-class _CountBadge extends StatelessWidget {
-  final int count;
-  const _CountBadge({super.key, required this.count});
-  @override
-  Widget build(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-      decoration: BoxDecoration(
-          color: AppColors.primary.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(20)),
-      child: Text('$count',
-          style: cairo(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: AppColors.primary)));
-}
-
-class _SizeChip extends StatelessWidget {
+class _Chip extends StatelessWidget {
   final String label;
-  final String price;
+  final String? sublabel;
   final bool selected;
+  final bool checkbox;
   final VoidCallback onTap;
-  const _SizeChip(
+  const _Chip(
       {required this.label,
-      required this.price,
+      this.sublabel,
       required this.selected,
+      required this.checkbox,
       required this.onTap});
-
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        // pill size chips
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
             color: selected ? AppColors.primary : const Color(0xFFF5F0EB),
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
                 color: selected ? AppColors.primary : const Color(0xFFE4DDD4),
                 width: selected ? 1.5 : 1)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (checkbox) ...[
+            Icon(
+                selected
+                    ? Icons.check_box_rounded
+                    : Icons.check_box_outline_blank_rounded,
+                size: 15,
+                color: selected ? Colors.white : AppColors.textMuted),
+            const SizedBox(width: 6),
+          ],
           Text(label,
               style: cairo(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: selected ? Colors.white : AppColors.textPrimary)),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-                color: selected
-                    ? Colors.white.withOpacity(0.2)
-                    : AppColors.primary.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(12)),
-            child: Text(price,
-                style: cairo(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: selected ? Colors.white : AppColors.primary)),
-          ),
+          if (sublabel != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                  color: selected
+                      ? Colors.white.withOpacity(0.2)
+                      : AppColors.primary.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(5)),
+              child: Text(sublabel!,
+                  style: cairo(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? Colors.white : AppColors.primary)),
+            ),
+          ],
         ]),
       ));
 }
@@ -2408,8 +2132,7 @@ class _IconBtn extends StatelessWidget {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-              color: const Color(0xFFF5F1ED),
-              borderRadius: BorderRadius.circular(10)),
+              color: AppColors.bg, borderRadius: BorderRadius.circular(10)),
           alignment: Alignment.center,
           child: Icon(icon, size: 18, color: AppColors.textPrimary)));
 }

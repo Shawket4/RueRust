@@ -1,31 +1,28 @@
-// ignore_for_file: curly_braces_in_flow_control_structures
-
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
-import 'package:provider/provider.dart';
 import '../../core/api/order_api.dart';
 import '../../core/models/order.dart';
-import '../../core/providers/branch_provider.dart';
-import '../../core/providers/order_history_provider.dart';
-import '../../core/providers/shift_provider.dart';
+import '../../core/providers/auth_notifier.dart';
+import '../../core/providers/order_history_notifier.dart';
+import '../../core/providers/shift_notifier.dart';
 import '../../core/services/printer_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/error_banner.dart';
-import '../../shared/widgets/label_value.dart';
 import 'void_order_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-class OrderHistoryScreen extends StatefulWidget {
+class OrderHistoryScreen extends ConsumerStatefulWidget {
   const OrderHistoryScreen({super.key});
   @override
-  State<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
+  ConsumerState<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
 }
 
-class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
+class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   @override
   void initState() {
     super.initState();
@@ -33,17 +30,17 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
   }
 
   Future<void> _load() async {
-    final shiftId = context.read<ShiftProvider>().shift?.id;
+    final shiftId = ref.read(shiftProvider).shift?.id;
     if (shiftId == null) return;
-    await context
-        .read<OrderHistoryProvider>()
+    await ref
+        .read(orderHistoryProvider.notifier)
         .loadForShift(shiftId, force: true);
   }
 
   @override
   Widget build(BuildContext context) {
-    final history = context.watch<OrderHistoryProvider>();
-    final shift = context.watch<ShiftProvider>().shift;
+    final history = ref.watch(orderHistoryProvider);
+    final shift = ref.watch(shiftProvider).shift;
     final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
@@ -67,7 +64,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               icon: const Icon(Icons.refresh_rounded, size: 20),
               tooltip: 'Refresh',
               onPressed: () =>
-                  context.read<OrderHistoryProvider>().refresh(shift.id),
+                  ref.read(orderHistoryProvider.notifier).refresh(shift.id),
             ),
         ],
       ),
@@ -76,7 +73,7 @@ class _OrderHistoryScreenState extends State<OrderHistoryScreen> {
               icon: Icons.lock_outline_rounded,
               message: 'No open shift',
               isTablet: isTablet)
-          : history.loading
+          : history.isLoading
               ? const Center(
                   child: CircularProgressIndicator(color: AppColors.primary))
               : history.error != null
@@ -194,21 +191,21 @@ class _StatChip extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  ORDER TILE
 // ─────────────────────────────────────────────────────────────────────────────
-class _OrderTile extends StatefulWidget {
+class _OrderTile extends ConsumerStatefulWidget {
   final Order order;
   const _OrderTile({required this.order});
   @override
-  State<_OrderTile> createState() => _OrderTileState();
+  ConsumerState<_OrderTile> createState() => _OrderTileState();
 }
 
-class _OrderTileState extends State<_OrderTile> {
+class _OrderTileState extends ConsumerState<_OrderTile> {
   bool _loading = false;
 
   Future<void> _onTap() async {
     if (_loading) return;
     setState(() => _loading = true);
     try {
-      final full = await orderApi.get(widget.order.id);
+      final full = await ref.read(orderApiProvider).get(widget.order.id);
       if (mounted) {
         setState(() => _loading = false);
         _show(full);
@@ -393,14 +390,14 @@ class _VoidedBadge extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  ORDER DETAIL SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class _OrderDetailSheet extends StatefulWidget {
+class _OrderDetailSheet extends ConsumerStatefulWidget {
   final Order order;
   const _OrderDetailSheet({required this.order});
   @override
-  State<_OrderDetailSheet> createState() => _OrderDetailSheetState();
+  ConsumerState<_OrderDetailSheet> createState() => _OrderDetailSheetState();
 }
 
-class _OrderDetailSheetState extends State<_OrderDetailSheet> {
+class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
   late Order _order;
   bool _printing = false;
   String? _printError;
@@ -412,8 +409,8 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
   }
 
   Future<void> _print() async {
-    final bp = context.read<BranchProvider>();
-    if (!bp.hasPrinter || bp.printerIp == null) {
+    final branch = ref.read(authProvider).branch;
+    if (branch == null || !branch.hasPrinter) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('No printer configured for this branch'),
         backgroundColor: AppColors.warning,
@@ -426,24 +423,22 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
       _printError = null;
     });
     final err = await PrinterService.print(
-      ip: bp.printerIp!,
-      port: bp.printerPort,
-      order: _order,
-      branchName: bp.branchName,
-      brand: bp.printerBrand!,
-    );
-    if (mounted)
+        ip: branch.printerIp!,
+        port: branch.printerPort,
+        brand: branch.printerBrand!,
+        order: _order,
+        branchName: branch.name);
+    if (mounted) {
       setState(() {
         _printing = false;
         _printError = err;
       });
+    }
   }
 
   void _onVoided(Order voided) {
-    // Update locally so the sheet reflects the void immediately
     setState(() => _order = voided);
-    // Update the list in the provider
-    context.read<OrderHistoryProvider>().updateOrder(voided);
+    ref.read(orderHistoryProvider.notifier).updateOrder(voided);
   }
 
   @override
@@ -471,95 +466,93 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
 
         // Header
         Padding(
-            padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Row(children: [
-                      Text('Order #${order.orderNumber}',
-                          style:
-                              cairo(fontSize: 18, fontWeight: FontWeight.w800)),
-                      if (isVoided) ...[
-                        const SizedBox(width: 8),
-                        const _VoidedBadge(),
-                      ],
-                    ]),
-                    const SizedBox(height: 3),
-                    Text(dateTime(order.createdAt),
-                        style: cairo(
-                            fontSize: 12, color: AppColors.textSecondary)),
-                    if (order.tellerName.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text('by ${order.tellerName}',
-                          style:
-                              cairo(fontSize: 11, color: AppColors.textMuted)),
+          padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Row(children: [
+                    Text('Order #${order.orderNumber}',
+                        style:
+                            cairo(fontSize: 18, fontWeight: FontWeight.w800)),
+                    if (isVoided) ...[
+                      const SizedBox(width: 8),
+                      const _VoidedBadge()
                     ],
-                  ])),
-
-              // Action buttons — only shown when not voided
-              if (!isVoided) ...[
-                // Print button
-                _printing
-                    ? const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: AppColors.primary)))
-                    : GestureDetector(
-                        onTap: _print,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                              color: (_printError != null
-                                      ? AppColors.danger
-                                      : AppColors.primary)
-                                  .withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(10)),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Icon(Icons.print_rounded,
-                                size: 14,
-                                color: _printError != null
+                  ]),
+                  const SizedBox(height: 3),
+                  Text(dateTime(order.createdAt),
+                      style:
+                          cairo(fontSize: 12, color: AppColors.textSecondary)),
+                  if (order.tellerName.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text('by ${order.tellerName}',
+                        style: cairo(fontSize: 11, color: AppColors.textMuted)),
+                  ],
+                ])),
+            if (!isVoided) ...[
+              // Print button
+              _printing
+                  ? const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.primary)))
+                  : GestureDetector(
+                      onTap: _print,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                            color: (_printError != null
                                     ? AppColors.danger
-                                    : AppColors.primary),
-                            const SizedBox(width: 5),
-                            Text(_printError != null ? 'Retry' : 'Print',
-                                style: cairo(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: _printError != null
-                                        ? AppColors.danger
-                                        : AppColors.primary)),
-                          ]),
-                        )),
-                const SizedBox(width: 8),
-                // Void button
-                GestureDetector(
-                  onTap: () => VoidOrderSheet.show(context, order, _onVoided),
-                  child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                        color: AppColors.danger.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.cancel_outlined,
-                          size: 14, color: AppColors.danger),
-                      const SizedBox(width: 5),
-                      Text('Void',
-                          style: cairo(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.danger)),
-                    ]),
-                  ),
+                                    : AppColors.primary)
+                                .withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(10)),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.print_rounded,
+                              size: 14,
+                              color: _printError != null
+                                  ? AppColors.danger
+                                  : AppColors.primary),
+                          const SizedBox(width: 5),
+                          Text(_printError != null ? 'Retry' : 'Print',
+                              style: cairo(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: _printError != null
+                                      ? AppColors.danger
+                                      : AppColors.primary)),
+                        ]),
+                      )),
+              const SizedBox(width: 8),
+              // Void button
+              GestureDetector(
+                onTap: () => VoidOrderSheet.show(context, order, _onVoided),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                      color: AppColors.danger.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.cancel_outlined,
+                        size: 14, color: AppColors.danger),
+                    const SizedBox(width: 5),
+                    Text('Void',
+                        style: cairo(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.danger)),
+                  ]),
                 ),
-              ],
-            ])),
+              ),
+            ],
+          ]),
+        ),
 
         Container(height: 1, color: const Color(0xFFECE8E0)),
 
@@ -662,7 +655,6 @@ class _OrderDetailSheetState extends State<_OrderDetailSheet> {
                 const SizedBox(height: 10),
                 _MetaRow(Icons.access_time_rounded, 'Time',
                     timeShort(order.createdAt)),
-                // Show void reason if voided
                 if (isVoided && order.voidReason != null) ...[
                   const SizedBox(height: 10),
                   _MetaRow(Icons.cancel_outlined, 'Void Reason',
@@ -734,7 +726,6 @@ class _ItemRow extends StatelessWidget {
                       spacing: 4,
                       runSpacing: 4,
                       children: item.addons.map((a) {
-                        final hasQty = a.quantity > 1;
                         final hasPrice = a.unitPrice > 0;
                         return Container(
                           padding: const EdgeInsets.symmetric(
@@ -742,29 +733,14 @@ class _ItemRow extends StatelessWidget {
                           decoration: BoxDecoration(
                               color: AppColors.primary.withOpacity(0.07),
                               borderRadius: BorderRadius.circular(6)),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            if (hasQty)
-                              Container(
-                                margin: const EdgeInsets.only(right: 5),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                    color: AppColors.primary,
-                                    borderRadius: BorderRadius.circular(4)),
-                                child: Text('×${a.quantity}',
-                                    style: cairo(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white)),
-                              ),
-                            Text(
-                                normaliseName(a.addonName) +
-                                    (hasPrice ? '  +${egp(a.lineTotal)}' : ''),
-                                style: cairo(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.primary)),
-                          ]),
+                          child: Text(
+                              hasPrice
+                                  ? '${normaliseName(a.addonName)}  +${egp(a.lineTotal)}'
+                                  : normaliseName(a.addonName),
+                              style: cairo(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.primary)),
                         );
                       }).toList()),
                 ],

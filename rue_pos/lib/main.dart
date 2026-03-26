@@ -1,21 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import 'core/providers/auth_provider.dart';
-import 'core/providers/branch_provider.dart';
-import 'core/providers/cart_provider.dart';
-import 'core/providers/menu_provider.dart';
-import 'core/providers/order_history_provider.dart';
-import 'core/providers/shift_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'core/providers/auth_notifier.dart';
+import 'core/providers/order_history_notifier.dart';
 import 'core/router/router.dart';
-import 'core/services/offline_sync_service.dart';
+import 'core/services/connectivity_service.dart';
+import 'core/services/offline_queue.dart';
+import 'core/storage/storage_service.dart';
 import 'core/theme/app_theme.dart';
 
 void main() async {
-  print("object");
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Global Flutter error handler — prevents red-screen crashes in release
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     debugPrint('Flutter error: ${details.exceptionAsString()}');
@@ -27,61 +24,47 @@ void main() async {
     DeviceOrientation.portraitUp,
   ]);
 
-  // Init offline service BEFORE runApp — but syncAll() is deferred inside
-  // init() via Future.microtask so providers exist when it fires.
-  await offlineSyncService.init();
+  await ConnectivityService.instance.init();
+  final prefs = await SharedPreferences.getInstance();
 
-  runApp(const RuePOS());
+  runApp(ProviderScope(
+    overrides: [
+      storageServiceProvider.overrideWithValue(StorageService(prefs)),
+    ],
+    child: const _App(),
+  ));
 }
 
-class RuePOS extends StatelessWidget {
-  const RuePOS({super.key});
+class _App extends ConsumerStatefulWidget {
+  const _App();
+  @override
+  ConsumerState<_App> createState() => _AppState();
+}
+
+class _AppState extends ConsumerState<_App> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final queue = ref.read(offlineQueueProvider.notifier);
+      final history = ref.read(orderHistoryProvider.notifier);
+      queue.onOrderSynced = history.addOrder;
+      queue.init();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final branchProvider = BranchProvider();
-    print("object");
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider<OfflineSyncService>.value(
-            value: offlineSyncService),
-        ChangeNotifierProvider<BranchProvider>.value(value: branchProvider),
-        ChangeNotifierProvider<AuthProvider>(
-          create: (_) {
-            final auth = AuthProvider(branchProvider);
-            auth.init().then((_) {
-              debugPrint('Auth init done');
-              debugPrint('User: ${auth.user?.name}');
-              debugPrint('BranchId: ${auth.user?.branchId}');
-              debugPrint('Branch: ${branchProvider.branch?.name}');
-              debugPrint('PrinterBrand: ${branchProvider.printerBrand}');
-              debugPrint('HasPrinter: ${branchProvider.hasPrinter}');
-            });
-            return auth;
-          },
-        ),
-        ChangeNotifierProvider(create: (_) => ShiftProvider()),
-        ChangeNotifierProvider(create: (_) => CartProvider()),
-        ChangeNotifierProvider(create: (_) => MenuProvider()),
-        ChangeNotifierProvider(
-          create: (ctx) {
-            final history = OrderHistoryProvider();
-            // Wire offline sync → history so synced orders appear immediately
-            offlineSyncService.onOrderSynced = history.onOrderSynced;
-            return history;
-          },
-        ),
-      ],
-      child: Builder(builder: (ctx) {
-        final auth = ctx.watch<AuthProvider>();
-        if (auth.loading) return const _SplashScreen();
-        return MaterialApp.router(
-          debugShowCheckedModeBanner: false,
-          title: 'Rue POS',
-          theme: AppTheme.light,
-          routerConfig: buildRouter(auth),
-        );
-      }),
+    final auth = ref.watch(authProvider);
+    final router = ref.watch(routerProvider);
+
+    if (auth.isLoading) return const _SplashScreen();
+
+    return MaterialApp.router(
+      debugShowCheckedModeBanner: false,
+      title: 'Rue POS',
+      theme: AppTheme.light,
+      routerConfig: router,
     );
   }
 }
@@ -99,13 +82,10 @@ class _SplashScreen extends StatelessWidget {
               Image.asset('assets/TheRue.png', height: 64),
               const SizedBox(height: 32),
               const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2.5,
-                  color: AppColors.primary,
-                ),
-              ),
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2.5, color: AppColors.primary)),
             ]),
           ),
         ),

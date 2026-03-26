@@ -66,7 +66,6 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(pool.clone())
             .app_data(jwt_secret.clone())
-            .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))
             .route("/health", web::get().to(|| async { actix_web::HttpResponse::Ok().finish() }))
             .configure(auth::routes::configure)
             .configure(orgs::routes::configure)
@@ -82,6 +81,7 @@ async fn main() -> std::io::Result<()> {
             .configure(orders::routes::configure)
             .configure(reports::routes::configure)
             .configure(uploads::routes::configure)
+            .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))
     });
 
     if let Some(tls) = tls_config {

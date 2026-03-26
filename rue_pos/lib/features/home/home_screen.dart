@@ -263,6 +263,14 @@ class _OpenShiftView extends ConsumerWidget {
             const SizedBox(width: 8),
             Expanded(
                 child: _CardBtn(
+              label: 'Pending',
+              icon: Icons.pending_actions_rounded,
+              onTap: () => context.go('/pending-orders'),
+              isTablet: isTablet,
+            )),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _CardBtn(
               label: 'Close',
               icon: Icons.lock_outline_rounded,
               danger: true,

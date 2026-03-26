@@ -643,7 +643,7 @@ class StorageService {
   // ── Orders ─────────────────────────────────────────────────────────────────
   Future<void> saveOrders(String shiftId, List<Map<String, dynamic>> orders) =>
       _prefs.setString('orders_$shiftId', jsonEncode(orders));
-
+//
   List<Map<String, dynamic>>? loadOrders(String shiftId) {
     final raw = _prefs.getString('orders_$shiftId');
     if (raw == null) return null;

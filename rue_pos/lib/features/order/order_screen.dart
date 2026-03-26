@@ -115,6 +115,8 @@ class _TopBar extends ConsumerWidget {
     final sync = ref.watch(offlineQueueProvider);
     final isOnline = ref.watch(isOnlineProvider);
     final isTablet = MediaQuery.of(context).size.width >= 768;
+    final cachedAt = ref.watch(menuProvider).cachedAt;
+    final lastSyncedAtText = cachedAt != null ? timeShort(cachedAt) : '—';
 
     final bar = Container(
       color: Colors.white,
@@ -126,8 +128,15 @@ class _TopBar extends ConsumerWidget {
           width: 6,
         ),
         _SyncBtn(),
-        const SizedBox(width: 10),
-        Image.asset('assets/TheRue.png', height: 22),
+        const SizedBox(
+          width: 6,
+        ),
+        Text(
+          'Last synced at $lastSyncedAtText',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: cairo(fontSize: 11, color: AppColors.textMuted),
+        ),
         const SizedBox(width: 14),
         Expanded(
           child: Container(

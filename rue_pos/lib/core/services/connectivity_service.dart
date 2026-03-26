@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class ConnectivityService {
@@ -13,31 +14,69 @@ class ConnectivityService {
   Stream<bool> get stream => _controller.stream;
 
   StreamSubscription<List<ConnectivityResult>>? _sub;
+  Timer? _pingTimer;
+
+  final _dio = Dio(BaseOptions(
+    baseUrl: 'https://rue-pos.ddns.net/api',
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+  ));
 
   Future<void> init() async {
-    final results = await Connectivity().checkConnectivity();
-    _isOnline = results.any((r) => r != ConnectivityResult.none);
+    // Initial check
+    await _checkReal();
 
+    // Listen to interface changes
     _sub = Connectivity().onConnectivityChanged.listen((results) {
-      final online = results.any((r) => r != ConnectivityResult.none);
-      if (online != _isOnline) {
-        _isOnline = online;
-        _controller.add(_isOnline);
+      final hasInterface = results.any((r) => r != ConnectivityResult.none);
+      if (!hasInterface) {
+        _emit(false);
+      } else {
+        // Interface came up — verify with real ping
+        _checkReal();
       }
     });
+
+    // Ping every 10 seconds as fallback
+    _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _checkReal();
+    });
+  }
+
+  Future<void> _checkReal() async {
+    try {
+      await _dio.get('/health',
+          options: Options(
+            // Don't use auth token for ping
+            headers: {},
+            sendTimeout: const Duration(seconds: 4),
+            receiveTimeout: const Duration(seconds: 4),
+          ));
+      _emit(true);
+    } catch (_) {
+      _emit(false);
+    }
+  }
+
+  void _emit(bool online) {
+    if (online != _isOnline) {
+      _isOnline = online;
+      _controller.add(_isOnline);
+    }
   }
 
   void dispose() {
     _sub?.cancel();
+    _pingTimer?.cancel();
     _controller.close();
   }
 }
 
-final connectivityStreamProvider = StreamProvider<bool>((ref) =>
-    ConnectivityService.instance.stream);
+final connectivityStreamProvider =
+    StreamProvider<bool>((ref) => ConnectivityService.instance.stream);
 
-final isOnlineProvider = Provider<bool>((ref) =>
-    ref.watch(connectivityStreamProvider).maybeWhen(
-      data: (v) => v,
-      orElse: () => ConnectivityService.instance.isOnline,
-    ));
+final isOnlineProvider =
+    Provider<bool>((ref) => ref.watch(connectivityStreamProvider).maybeWhen(
+          data: (v) => v,
+          orElse: () => ConnectivityService.instance.isOnline,
+        ));

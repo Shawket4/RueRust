@@ -7,13 +7,19 @@ class MenuApi {
   MenuApi(this._c);
 
   Future<List<Category>> categories(String orgId) async {
-    final res = await _c.dio.get('/categories', queryParameters: {'org_id': orgId});
+    final res =
+        await _c.dio.get('/categories', queryParameters: {'org_id': orgId});
     return (res.data as List).map((c) => Category.fromJson(c)).toList();
   }
 
   Future<List<MenuItem>> items(String orgId) async {
-    final res = await _c.dio.get('/menu-items', queryParameters: {'org_id': orgId});
-    return (res.data as List).map((m) => MenuItem.fromJson(m)).toList();
+    final res = await _c.dio.get('/menu-items', queryParameters: {
+      'org_id': orgId,
+      'full': 'true',
+    });
+    return (res.data as List)
+        .map((m) => MenuItem.fromJson(m as Map<String, dynamic>))
+        .toList();
   }
 
   Future<MenuItem> item(String id) async {
@@ -22,5 +28,5 @@ class MenuApi {
   }
 }
 
-final menuApiProvider = Provider<MenuApi>(
-    (ref) => MenuApi(ref.watch(dioClientProvider)));
+final menuApiProvider =
+    Provider<MenuApi>((ref) => MenuApi(ref.watch(dioClientProvider)));

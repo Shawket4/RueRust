@@ -67,6 +67,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(pool.clone())
             .app_data(jwt_secret.clone())
             .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))
+            .route("/api/health", web::get().to(|| async { actix_web::HttpResponse::Ok().finish() }))
             .configure(auth::routes::configure)
             .configure(orgs::routes::configure)
             .configure(users::routes::configure)

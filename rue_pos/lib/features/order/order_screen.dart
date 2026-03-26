@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
 import 'package:uuid/uuid.dart';
-import '../../core/api/menu_api.dart';
 import '../../core/api/order_api.dart';
 import '../../core/models/cart.dart';
 import '../../core/models/menu.dart';
@@ -123,6 +122,10 @@ class _TopBar extends ConsumerWidget {
       child: Row(children: [
         _IconBtn(
             icon: Icons.arrow_back_rounded, onTap: () => context.go('/home')),
+        const SizedBox(
+          width: 6,
+        ),
+        _SyncBtn(),
         const SizedBox(width: 10),
         Image.asset('assets/TheRue.png', height: 22),
         const SizedBox(width: 14),
@@ -249,6 +252,66 @@ class _StatusBanner extends StatelessWidget {
           Expanded(
               child: Text(text, style: cairo(fontSize: 11, color: textColor))),
         ]),
+      );
+}
+
+class _SyncBtn extends ConsumerStatefulWidget {
+  @override
+  ConsumerState<_SyncBtn> createState() => _SyncBtnState();
+}
+
+class _SyncBtnState extends ConsumerState<_SyncBtn>
+    with SingleTickerProviderStateMixin {
+  bool _syncing = false;
+  late final AnimationController _spinCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _spinCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+  }
+
+  @override
+  void dispose() {
+    _spinCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sync() async {
+    if (_syncing) return;
+    setState(() => _syncing = true);
+    _spinCtrl.repeat();
+    try {
+      final orgId = ref.read(authProvider).user?.orgId;
+      if (orgId != null) {
+        await ref.read(menuProvider.notifier).load(orgId, force: true);
+      }
+    } finally {
+      if (mounted) {
+        _spinCtrl.stop();
+        _spinCtrl.reset();
+        setState(() => _syncing = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: _sync,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+              color: AppColors.bg, borderRadius: BorderRadius.circular(10)),
+          alignment: Alignment.center,
+          child: RotationTransition(
+            turns: _spinCtrl,
+            child: Icon(Icons.sync_rounded,
+                size: 18,
+                color: _syncing ? AppColors.primary : AppColors.textSecondary),
+          ),
+        ),
       );
 }
 
@@ -748,7 +811,6 @@ class _MenuCard extends ConsumerStatefulWidget {
 
 class _MenuCardState extends ConsumerState<_MenuCard>
     with SingleTickerProviderStateMixin {
-  bool _fetching = false;
   late final AnimationController _pressCtrl;
   late final Animation<double> _pressAnim;
 
@@ -768,17 +830,7 @@ class _MenuCardState extends ConsumerState<_MenuCard>
   }
 
   Future<void> _onTap() async {
-    if (_fetching) return;
-    setState(() => _fetching = true);
-    try {
-      final full = await ref.read(menuApiProvider).item(widget.item.id);
-      if (mounted) {
-        setState(() => _fetching = false);
-        ItemDetailSheet.show(context, full);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _fetching = false);
-    }
+    ItemDetailSheet.show(context, widget.item);
   }
 
   @override
@@ -813,70 +865,65 @@ class _MenuCardState extends ConsumerState<_MenuCard>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(16),
-            child: Column(children: [
-              Expanded(
+            child: Column(
+              children: [
+                Expanded(
                   child: Stack(children: [
-                Positioned.fill(
-                    child: hasImage
-                        ? Image.network(item.imageUrl!,
-                            fit: BoxFit.cover,
-                            loadingBuilder: (_, child, prog) =>
-                                prog == null ? child : _ImageSkeleton(),
-                            errorBuilder: (_, __, ___) =>
-                                _CardBackground(style: style))
-                        : _CardBackground(style: style)),
-                if (!hasImage)
-                  Center(
-                      child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                        color: style.iconColor.withOpacity(0.12),
-                        shape: BoxShape.circle),
-                    child: Icon(style.icon, size: 28, color: style.iconColor),
-                  )),
-                if (_fetching)
-                  Positioned.fill(
-                      child: Container(
-                    color: Colors.black.withOpacity(0.3),
-                    alignment: Alignment.center,
-                    child: const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2.5, color: Colors.white)),
-                  )),
-              ])),
-              Container(
-                color: Colors.white,
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
-                child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                          width: 4,
-                          height: 28,
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                              color: style.accent,
-                              borderRadius: BorderRadius.circular(2))),
-                      Expanded(
-                          child: Text(normaliseName(item.name),
-                              style: cairo(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  height: 1.25),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis)),
-                      const SizedBox(width: 6),
-                      Text(egp(item.basePrice),
-                          style: cairo(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              color: style.accent)),
-                    ]),
-              ),
-            ]),
+                    Positioned.fill(
+                        child: hasImage
+                            ? Image.network(item.imageUrl!,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (_, child, prog) =>
+                                    prog == null ? child : _ImageSkeleton(),
+                                errorBuilder: (_, __, ___) =>
+                                    _CardBackground(style: style))
+                            : _CardBackground(style: style)),
+                    if (!hasImage)
+                      Center(
+                          child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                            color: style.iconColor.withOpacity(0.12),
+                            shape: BoxShape.circle),
+                        child:
+                            Icon(style.icon, size: 28, color: style.iconColor),
+                      )),
+                    // Nothing else in the Stack
+                  ]),
+                ),
+                // Bottom row is a direct child of Column, not inside Stack
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+                  child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Container(
+                            width: 4,
+                            height: 28,
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: BoxDecoration(
+                                color: style.accent,
+                                borderRadius: BorderRadius.circular(2))),
+                        Expanded(
+                            child: Text(normaliseName(item.name),
+                                style: cairo(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.25),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis)),
+                        const SizedBox(width: 6),
+                        Text(egp(item.basePrice),
+                            style: cairo(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: style.accent)),
+                      ]),
+                ),
+              ],
+            ),
           ),
         ),
       ),

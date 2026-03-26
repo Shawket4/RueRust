@@ -105,21 +105,31 @@ pub struct CreateOrderRequest {
     pub discount_type:  Option<String>,
     pub discount_value: Option<i32>,
     pub items:          Vec<OrderItemInput>,
+    /// ISO-8601 timestamp of when the order was placed offline.
+    /// If provided, used as created_at instead of NOW().
+    pub created_at:     Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
     pub reason:            String,
     pub restore_inventory: Option<bool>,
+    /// ISO-8601 timestamp for when the void happened offline.
+    pub voided_at:         Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
 pub struct ListOrdersQuery {
-    pub branch_id: Option<Uuid>,
-    pub shift_id:  Option<Uuid>,
+    pub branch_id:    Option<Uuid>,
+    pub shift_id:     Option<Uuid>,
+    /// Return orders updated after this timestamp (incremental sync).
+    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 // ── POST /orders ──────────────────────────────────────────────
+//
+// Idempotent via Idempotency-Key header. If an order with the same
+// idempotency key has already been created, it is returned immediately.
 
 pub async fn create_order(
     req:  HttpRequest,
@@ -130,22 +140,40 @@ pub async fn create_order(
     check_permission(pool.get_ref(), &claims, "orders", "create").await?;
     require_branch_access(pool.get_ref(), &claims, body.branch_id).await?;
 
+    // ── Idempotency check ─────────────────────────────────────
+    let idempotency_key = req
+        .headers()
+        .get("Idempotency-Key")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    if let Some(key) = idempotency_key {
+        if let Some(existing) = fetch_order_by_idempotency_key(pool.get_ref(), key).await? {
+            let items = fetch_order_items_full(pool.get_ref(), existing.id).await?;
+            return Ok(HttpResponse::Ok().json(OrderFull { order: existing, items }));
+        }
+    }
+
     if body.items.is_empty() {
         return Err(AppError::BadRequest("Order must have at least one item".into()));
     }
 
-    // Validate shift belongs to this branch and is open
-    let shift_ok: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM shifts WHERE id = $1 AND branch_id = $2 AND status = 'open')"
+    // ── Validate shift exists and belongs to branch ───────────
+    // We accept shifts that exist regardless of status to support
+    // offline scenarios where the shift may have been synced but
+    // not yet reflected locally. The client is responsible for
+    // submitting in the correct order (open → orders → close).
+    let shift_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM shifts WHERE id = $1 AND branch_id = $2)"
     )
     .bind(body.shift_id)
     .bind(body.branch_id)
     .fetch_one(pool.get_ref())
     .await?;
 
-    if !shift_ok {
+    if !shift_exists {
         return Err(AppError::BadRequest(
-            "Shift not found, not open, or does not belong to this branch".into(),
+            "Shift not found or does not belong to this branch".into(),
         ));
     }
 
@@ -162,7 +190,7 @@ pub async fn create_order(
     .fetch_one(pool.get_ref())
     .await?;
 
-    // ── Build order items with pricing ───────────────────────
+    // ── Build order items with pricing ────────────────────────
     struct ResolvedItem {
         menu_item_id: Uuid,
         item_name:    String,
@@ -192,10 +220,11 @@ pub async fn create_order(
 
     for item_input in &body.items {
         if item_input.quantity <= 0 {
-            return Err(AppError::BadRequest("Item quantity must be greater than 0".into()));
+            return Err(AppError::BadRequest(
+                "Item quantity must be greater than 0".into(),
+            ));
         }
 
-        // Fetch menu item (no soft serve check needed)
         let (item_name, base_price): (String, i32) = sqlx::query_as(
             r#"
             SELECT m.name, m.base_price
@@ -206,9 +235,10 @@ pub async fn create_order(
         .bind(item_input.menu_item_id)
         .fetch_optional(pool.get_ref())
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Menu item {} not found", item_input.menu_item_id)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Menu item {} not found", item_input.menu_item_id))
+        })?;
 
-        // Resolve price: size override or base price
         let unit_price: i32 = match &item_input.size_label {
             Some(size) => {
                 let size_price: Option<i32> = sqlx::query_scalar(
@@ -219,7 +249,6 @@ pub async fn create_order(
                 .fetch_optional(pool.get_ref())
                 .await?
                 .flatten();
-
                 size_price.unwrap_or(base_price)
             }
             None => base_price,
@@ -227,50 +256,29 @@ pub async fn create_order(
 
         let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
 
-        // ── Deduct drink recipe ingredients ──────────────────
-        if let Some(size) = &item_input.size_label {
-            let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                r#"
-                SELECT inventory_item_id, quantity_used::float8
-                FROM menu_item_recipes
-                WHERE menu_item_id = $1 AND size_label = $2::item_size
-                "#,
-            )
-            .bind(item_input.menu_item_id)
-            .bind(size)
-            .fetch_all(pool.get_ref())
-            .await?;
+        // Deduct drink recipe ingredients
+        let size_for_recipe = item_input.size_label.as_deref().unwrap_or("one_size");
+        let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
+            r#"
+            SELECT inventory_item_id, quantity_used::float8
+            FROM menu_item_recipes
+            WHERE menu_item_id = $1 AND size_label = $2::item_size
+            "#,
+        )
+        .bind(item_input.menu_item_id)
+        .bind(size_for_recipe)
+        .fetch_all(pool.get_ref())
+        .await?;
 
-            for (inv_id, qty) in recipe_rows {
-                item_deductions.push(InventoryDeduction {
-                    inventory_item_id: inv_id,
-                    quantity:          qty * item_input.quantity as f64,
-                    source:            "drink_recipe".into(),
-                });
-            }
-        } else {
-            // No size — check one_size recipe
-            let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                r#"
-                SELECT inventory_item_id, quantity_used::float8
-                FROM menu_item_recipes
-                WHERE menu_item_id = $1 AND size_label = 'one_size'
-                "#,
-            )
-            .bind(item_input.menu_item_id)
-            .fetch_all(pool.get_ref())
-            .await?;
-
-            for (inv_id, qty) in recipe_rows {
-                item_deductions.push(InventoryDeduction {
-                    inventory_item_id: inv_id,
-                    quantity:          qty * item_input.quantity as f64,
-                    source:            "drink_recipe".into(),
-                });
-            }
+        for (inv_id, qty) in recipe_rows {
+            item_deductions.push(InventoryDeduction {
+                inventory_item_id: inv_id,
+                quantity:          qty * item_input.quantity as f64,
+                source:            "drink_recipe".into(),
+            });
         }
 
-        // ── Resolve addons ────────────────────────────────────
+        // Resolve addons
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
         for addon_input in &item_input.addons {
@@ -280,7 +288,9 @@ pub async fn create_order(
             .bind(addon_input.addon_item_id)
             .fetch_optional(pool.get_ref())
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("Addon {} not found", addon_input.addon_item_id)))?;
+            .ok_or_else(|| {
+                AppError::NotFound(format!("Addon {} not found", addon_input.addon_item_id))
+            })?;
 
             let price_override: Option<i32> = sqlx::query_scalar(
                 "SELECT price_override FROM drink_option_items WHERE id = $1"
@@ -299,9 +309,8 @@ pub async fn create_order(
                 quantity:   addon_input.quantity.max(1),
             });
 
-            // ── Addon ingredient deductions ───────────────────
+            // Addon ingredient deductions
             let size_label = item_input.size_label.as_deref();
-
             let override_rows: Vec<(Uuid, f64)> = if let Some(size) = size_label {
                 sqlx::query_as(
                     r#"
@@ -342,11 +351,7 @@ pub async fn create_order(
                 }
             } else {
                 let base_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                    r#"
-                    SELECT inventory_item_id, quantity_used::float8
-                    FROM addon_item_ingredients
-                    WHERE addon_item_id = $1
-                    "#,
+                    "SELECT inventory_item_id, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
                 )
                 .bind(addon_input.addon_item_id)
                 .fetch_all(pool.get_ref())
@@ -381,23 +386,27 @@ pub async fn create_order(
     }
 
     // ── Calculate totals ──────────────────────────────────────
-    let discount_value = body.discount_value.unwrap_or(0);
+    let discount_value  = body.discount_value.unwrap_or(0);
     let discount_amount = match body.discount_type.as_deref() {
         Some("percentage") => (subtotal as f64 * discount_value as f64 / 100.0) as i32,
         Some("fixed")      => discount_value.min(subtotal),
         _                  => 0,
     };
-
     let taxable      = subtotal - discount_amount;
     let tax_rate_f64: f64 = tax_rate.to_string().parse().unwrap_or(0.14);
     let tax_amount   = (taxable as f64 * tax_rate_f64) as i32;
     let total_amount = taxable + tax_amount;
 
+    let created_at = body.created_at.unwrap_or_else(chrono::Utc::now);
+
     let mut tx = pool.get_ref().begin().await?;
 
-    sqlx::query!("SELECT pg_advisory_xact_lock(hashtext($1::text))", body.shift_id.to_string())
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+        body.shift_id.to_string()
+    )
+    .execute(&mut *tx)
+    .await?;
 
     let order_number: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE shift_id = $1"
@@ -413,8 +422,9 @@ pub async fn create_order(
             (branch_id, shift_id, teller_id, order_number,
              payment_method, subtotal, discount_type, discount_value,
              discount_amount, tax_amount, total_amount,
-             customer_name, notes, status)
-        VALUES ($1, $2, $3, $4, $5::payment_method, $6, $7::discount_type, $8, $9, $10, $11, $12, $13, 'completed')
+             customer_name, notes, status, idempotency_key, created_at)
+        VALUES ($1, $2, $3, $4, $5::payment_method, $6, $7::discount_type, $8,
+                $9, $10, $11, $12, $13, 'completed', $14, $15)
         RETURNING
             id, branch_id, shift_id, teller_id,
             (SELECT name FROM users WHERE id = $3) AS teller_name,
@@ -439,6 +449,8 @@ pub async fn create_order(
     .bind(total_amount)
     .bind(&body.customer_name)
     .bind(&body.notes)
+    .bind(idempotency_key)
+    .bind(created_at)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -491,7 +503,6 @@ pub async fn create_order(
             addon_rows.push(row);
         }
 
-        // ── Regular inventory deductions only ─────────────────
         for deduction in &resolved.deductions {
             sqlx::query(
                 "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
@@ -557,30 +568,52 @@ pub async fn list_orders(
                 require_branch_access(pool.get_ref(), &claims, bid).await?;
             }
 
-            sqlx::query_as::<_, Order>(
-                r#"
-                SELECT o.id, o.branch_id, o.shift_id, o.teller_id,
-                       u.name AS teller_name,
-                       o.order_number, o.status::text, o.payment_method::text,
-                       o.subtotal, o.discount_type::text, o.discount_value,
-                       o.discount_amount, o.tax_amount, o.total_amount,
-                       o.customer_name, o.notes,
-                       o.voided_at, o.void_reason::text, o.voided_by,
-                       o.created_at
-                FROM orders o
-                JOIN users u ON u.id = o.teller_id
-                WHERE o.shift_id = $1
-                ORDER BY o.created_at DESC
-                "#,
-            )
-            .bind(shift_id)
-            .fetch_all(pool.get_ref())
-            .await?
+            match query.updated_after {
+                Some(after) => sqlx::query_as::<_, Order>(
+                    r#"
+                    SELECT o.id, o.branch_id, o.shift_id, o.teller_id,
+                           u.name AS teller_name,
+                           o.order_number, o.status::text, o.payment_method::text,
+                           o.subtotal, o.discount_type::text, o.discount_value,
+                           o.discount_amount, o.tax_amount, o.total_amount,
+                           o.customer_name, o.notes,
+                           o.voided_at, o.void_reason::text, o.voided_by,
+                           o.created_at
+                    FROM orders o
+                    JOIN users u ON u.id = o.teller_id
+                    WHERE o.shift_id = $1 AND o.updated_at > $2
+                    ORDER BY o.created_at DESC
+                    "#,
+                )
+                .bind(shift_id)
+                .bind(after)
+                .fetch_all(pool.get_ref())
+                .await?,
+
+                None => sqlx::query_as::<_, Order>(
+                    r#"
+                    SELECT o.id, o.branch_id, o.shift_id, o.teller_id,
+                           u.name AS teller_name,
+                           o.order_number, o.status::text, o.payment_method::text,
+                           o.subtotal, o.discount_type::text, o.discount_value,
+                           o.discount_amount, o.tax_amount, o.total_amount,
+                           o.customer_name, o.notes,
+                           o.voided_at, o.void_reason::text, o.voided_by,
+                           o.created_at
+                    FROM orders o
+                    JOIN users u ON u.id = o.teller_id
+                    WHERE o.shift_id = $1
+                    ORDER BY o.created_at DESC
+                    "#,
+                )
+                .bind(shift_id)
+                .fetch_all(pool.get_ref())
+                .await?,
+            }
         }
 
         (None, Some(branch_id)) => {
             require_branch_access(pool.get_ref(), &claims, branch_id).await?;
-
             sqlx::query_as::<_, Order>(
                 r#"
                 SELECT o.id, o.branch_id, o.shift_id, o.teller_id,
@@ -625,11 +658,12 @@ pub async fn get_order(
     require_branch_access(pool.get_ref(), &claims, order.branch_id).await?;
 
     let items = fetch_order_items_full(pool.get_ref(), order.id).await?;
-
     Ok(HttpResponse::Ok().json(OrderFull { order, items }))
 }
 
 // ── POST /orders/:id/void ─────────────────────────────────────
+//
+// Idempotent: if the order is already voided, return it immediately.
 
 pub async fn void_order(
     req:      HttpRequest,
@@ -643,19 +677,22 @@ pub async fn void_order(
     let order = fetch_order_or_404(pool.get_ref(), *order_id).await?;
     require_branch_access(pool.get_ref(), &claims, order.branch_id).await?;
 
+    // Idempotent: already voided → return as-is
     if order.status == "voided" {
-        return Err(AppError::BadRequest("Order is already voided".into()));
+        return Ok(HttpResponse::Ok().json(order));
     }
 
     validate_void_reason(&body.reason)?;
+
+    let voided_at = body.voided_at.unwrap_or_else(chrono::Utc::now);
 
     let updated = sqlx::query_as::<_, Order>(
         r#"
         UPDATE orders SET
             status      = 'voided',
-            voided_at   = NOW(),
+            voided_at   = $3,
             void_reason = $2::void_reason,
-            voided_by   = $3
+            voided_by   = $4
         WHERE id = $1
         RETURNING
             id, branch_id, shift_id, teller_id,
@@ -670,6 +707,7 @@ pub async fn void_order(
     )
     .bind(*order_id)
     .bind(&body.reason)
+    .bind(voided_at)
     .bind(claims.user_id())
     .fetch_one(pool.get_ref())
     .await?;
@@ -708,7 +746,34 @@ async fn fetch_order_or_404(pool: &PgPool, order_id: Uuid) -> Result<Order, AppE
     .ok_or_else(|| AppError::NotFound("Order not found".into()))
 }
 
-async fn fetch_order_items_full(pool: &PgPool, order_id: Uuid) -> Result<Vec<OrderItemFull>, AppError> {
+async fn fetch_order_by_idempotency_key(
+    pool: &PgPool,
+    key:  Uuid,
+) -> Result<Option<Order>, AppError> {
+    Ok(sqlx::query_as::<_, Order>(
+        r#"
+        SELECT o.id, o.branch_id, o.shift_id, o.teller_id,
+               u.name AS teller_name,
+               o.order_number, o.status::text, o.payment_method::text,
+               o.subtotal, o.discount_type::text, o.discount_value,
+               o.discount_amount, o.tax_amount, o.total_amount,
+               o.customer_name, o.notes,
+               o.voided_at, o.void_reason::text, o.voided_by,
+               o.created_at
+        FROM orders o
+        JOIN users u ON u.id = o.teller_id
+        WHERE o.idempotency_key = $1
+        "#,
+    )
+    .bind(key)
+    .fetch_optional(pool)
+    .await?)
+}
+
+async fn fetch_order_items_full(
+    pool:     &PgPool,
+    order_id: Uuid,
+) -> Result<Vec<OrderItemFull>, AppError> {
     let items = sqlx::query_as::<_, OrderItem>(
         "SELECT id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes
          FROM order_items WHERE order_id = $1 ORDER BY id",
@@ -729,7 +794,6 @@ async fn fetch_order_items_full(pool: &PgPool, order_id: Uuid) -> Result<Vec<Ord
 
         result.push(OrderItemFull { item, addons });
     }
-
     Ok(result)
 }
 

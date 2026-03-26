@@ -37,34 +37,41 @@ pub struct Shift {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct CashMovement {
-    pub id:         Uuid,
-    pub shift_id:   Uuid,
-    pub amount:     i32,
-    pub note:       String,
-    pub moved_by:   Uuid,
+    pub id:            Uuid,
+    pub shift_id:      Uuid,
+    pub amount:        i32,
+    pub note:          String,
+    pub moved_by:      Uuid,
     pub moved_by_name: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at:    chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ShiftPreFill {
-    pub has_open_shift:       bool,
-    pub open_shift:           Option<Shift>,
-    pub suggested_opening_cash: i32, // from last closed shift's closing_cash_declared
+    pub has_open_shift:         bool,
+    pub open_shift:             Option<Shift>,
+    pub suggested_opening_cash: i32,
 }
 
 // ── Request types ─────────────────────────────────────────────
 
+/// Client may supply its own UUID so offline-created shifts can be
+/// synced without ID translation.  If omitted the server generates one.
 #[derive(Deserialize)]
 pub struct OpenShiftRequest {
+    /// Client-generated UUID (offline support). Server uses it as the PK.
+    pub id:                  Option<Uuid>,
     pub opening_cash:        i32,
     pub opening_cash_edited: Option<bool>,
     pub edit_reason:         Option<String>,
+    /// ISO-8601 timestamp for when the shift was actually opened offline.
+    /// If omitted, NOW() is used.
+    pub opened_at:           Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
 pub struct CashMovementRequest {
-    pub amount: i32,  // positive = cash in, negative = cash out
+    pub amount: i32,
     pub note:   String,
 }
 
@@ -80,6 +87,8 @@ pub struct CloseShiftRequest {
     pub closing_cash_declared: i32,
     pub cash_note:             Option<String>,
     pub inventory_counts:      Vec<InventoryCountInput>,
+    /// ISO-8601 timestamp for when the shift was actually closed offline.
+    pub closed_at:             Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +97,6 @@ pub struct ForceCloseRequest {
 }
 
 // ── GET /shifts/branches/:branch_id/current ───────────────────
-// Returns open shift if exists, or suggested opening cash from last closed shift
 
 pub async fn get_current_shift(
     req:       HttpRequest,
@@ -99,20 +107,15 @@ pub async fn get_current_shift(
     check_permission(pool.get_ref(), &claims, "shifts", "read").await?;
     require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
 
-    // Check for open shift
     let open_shift = sqlx::query_as::<_, Shift>(
         r#"
         SELECT
             s.id, s.branch_id, s.teller_id,
             u.name AS teller_name,
             s.status::text,
-            s.opening_cash,
-            s.opening_cash_original,
-            s.opening_cash_was_edited,
-            s.opening_cash_edit_reason,
-            s.closing_cash_declared,
-            s.closing_cash_system,
-            s.cash_discrepancy,
+            s.opening_cash, s.opening_cash_original,
+            s.opening_cash_was_edited, s.opening_cash_edit_reason,
+            s.closing_cash_declared, s.closing_cash_system, s.cash_discrepancy,
             s.opened_at, s.closed_at, s.closed_by,
             s.force_closed_by, s.force_closed_at, s.force_close_reason,
             s.notes
@@ -133,7 +136,6 @@ pub async fn get_current_shift(
         }));
     }
 
-    // No open shift — get suggested opening cash from last closed shift
     let suggested: Option<i32> = sqlx::query_scalar(
         r#"
         SELECT closing_cash_declared
@@ -158,6 +160,10 @@ pub async fn get_current_shift(
 }
 
 // ── POST /shifts/branches/:branch_id/open ─────────────────────
+//
+// Idempotent: if a shift with the supplied `id` already exists for this
+// branch, return it immediately (HTTP 200) instead of creating a duplicate.
+// This lets the client safely retry after a network failure.
 
 pub async fn open_shift(
     req:       HttpRequest,
@@ -169,7 +175,35 @@ pub async fn open_shift(
     check_permission(pool.get_ref(), &claims, "shifts", "create").await?;
     require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
 
-    // Enforce one open shift per branch
+    let shift_id = body.id.unwrap_or_else(Uuid::new_v4);
+
+    // ── Idempotency check: return existing shift if same UUID ─
+    if let Some(existing) = sqlx::query_as::<_, Shift>(
+        r#"
+        SELECT
+            s.id, s.branch_id, s.teller_id,
+            u.name AS teller_name,
+            s.status::text,
+            s.opening_cash, s.opening_cash_original,
+            s.opening_cash_was_edited, s.opening_cash_edit_reason,
+            s.closing_cash_declared, s.closing_cash_system, s.cash_discrepancy,
+            s.opened_at, s.closed_at, s.closed_by,
+            s.force_closed_by, s.force_closed_at, s.force_close_reason,
+            s.notes
+        FROM shifts s
+        JOIN users u ON u.id = s.teller_id
+        WHERE s.id = $1 AND s.branch_id = $2
+        "#,
+    )
+    .bind(shift_id)
+    .bind(*branch_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    {
+        return Ok(HttpResponse::Ok().json(existing));
+    }
+
+    // ── Enforce one open shift per branch ─────────────────────
     let already_open: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM shifts WHERE branch_id = $1 AND status = 'open')"
     )
@@ -183,7 +217,6 @@ pub async fn open_shift(
         ));
     }
 
-    // Validate edit reason if edited
     let was_edited = body.opening_cash_edited.unwrap_or(false);
     if was_edited && body.edit_reason.as_deref().unwrap_or("").trim().is_empty() {
         return Err(AppError::BadRequest(
@@ -191,18 +224,19 @@ pub async fn open_shift(
         ));
     }
 
+    let opened_at = body.opened_at.unwrap_or_else(chrono::Utc::now);
+
     let mut tx = pool.get_ref().begin().await?;
 
-    // Create the shift
     let shift = sqlx::query_as::<_, Shift>(
         r#"
         INSERT INTO shifts
-            (branch_id, teller_id, opening_cash, opening_cash_original,
-             opening_cash_was_edited, opening_cash_edit_reason)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (id, branch_id, teller_id, opening_cash, opening_cash_original,
+             opening_cash_was_edited, opening_cash_edit_reason, opened_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING
             id, branch_id, teller_id,
-            (SELECT name FROM users WHERE id = $2) AS teller_name,
+            (SELECT name FROM users WHERE id = $3) AS teller_name,
             status::text,
             opening_cash, opening_cash_original,
             opening_cash_was_edited, opening_cash_edit_reason,
@@ -212,16 +246,18 @@ pub async fn open_shift(
             notes
         "#,
     )
+    .bind(shift_id)
     .bind(*branch_id)
     .bind(claims.user_id())
     .bind(body.opening_cash)
-    .bind(body.opening_cash) // opening_cash_original — always the value at open time
+    .bind(body.opening_cash)
     .bind(was_edited)
     .bind(&body.edit_reason)
+    .bind(opened_at)
     .fetch_one(&mut *tx)
     .await?;
 
-    // Snapshot all active inventory items for this branch
+    // Snapshot active inventory items for this branch
     sqlx::query(
         r#"
         INSERT INTO shift_inventory_snapshots (shift_id, inventory_item_id, stock_at_open)
@@ -311,13 +347,13 @@ pub async fn add_cash_movement(
             "Cash movements can only be added to an open shift".into(),
         ));
     }
-
     if body.amount == 0 {
         return Err(AppError::BadRequest("Amount cannot be zero".into()));
     }
-
     if body.note.trim().is_empty() {
-        return Err(AppError::BadRequest("Note is required for cash movements".into()));
+        return Err(AppError::BadRequest(
+            "Note is required for cash movements".into(),
+        ));
     }
 
     let movement = sqlx::query_as::<_, CashMovement>(
@@ -373,6 +409,8 @@ pub async fn list_cash_movements(
 }
 
 // ── POST /shifts/:shift_id/close ──────────────────────────────
+//
+// Idempotent: if the shift is already closed, return the existing data.
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct InventoryCountRow {
@@ -404,12 +442,35 @@ pub async fn close_shift(
     let shift = fetch_shift_or_404(pool.get_ref(), *shift_id).await?;
     require_branch_access(pool.get_ref(), &claims, shift.branch_id).await?;
 
+    // ── Idempotency: already closed → return existing data ────
     if shift.status != "open" {
-        return Err(AppError::BadRequest("Shift is not open".into()));
+        let existing_counts = sqlx::query_as::<_, InventoryCountRow>(
+            r#"
+            SELECT
+                sic.inventory_item_id,
+                ii.name AS item_name,
+                ii.unit::text AS unit,
+                sic.expected_stock,
+                sic.actual_stock,
+                sic.discrepancy,
+                sic.is_suspicious,
+                sic.note
+            FROM shift_inventory_counts sic
+            JOIN inventory_items ii ON ii.id = sic.inventory_item_id
+            WHERE sic.shift_id = $1
+            "#,
+        )
+        .bind(*shift_id)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+        return Ok(HttpResponse::Ok().json(CloseShiftResponse {
+            shift,
+            inventory_counts: existing_counts,
+        }));
     }
 
-    // Calculate expected cash:
-    // opening_cash + sum(cash orders) + sum(cash_in movements) - sum(cash_out movements)
+    // ── Calculate expected cash ───────────────────────────────
     let cash_from_orders: i32 = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(total_amount), 0)::int
@@ -430,16 +491,15 @@ pub async fn close_shift(
     .fetch_one(pool.get_ref())
     .await?;
 
-    let closing_cash_system =
-        shift.opening_cash + cash_from_orders + cash_movements_total;
+    let closing_cash_system = shift.opening_cash + cash_from_orders + cash_movements_total;
+
+    let closed_at = body.closed_at.unwrap_or_else(chrono::Utc::now);
 
     let mut tx = pool.get_ref().begin().await?;
 
-    // Save inventory counts
     let mut inventory_counts: Vec<InventoryCountRow> = Vec::new();
 
     for count in &body.inventory_counts {
-        // Get expected stock = snapshot - consumed during shift
         let snapshot: Option<sqlx::types::BigDecimal> = sqlx::query_scalar(
             "SELECT stock_at_open FROM shift_inventory_snapshots WHERE shift_id = $1 AND inventory_item_id = $2"
         )
@@ -451,10 +511,9 @@ pub async fn close_shift(
 
         let snapshot = match snapshot {
             Some(s) => s,
-            None => continue, // item not in snapshot, skip
+            None    => continue,
         };
 
-        // Total consumed = sum of deduction logs for this item during this shift
         let consumed: sqlx::types::BigDecimal = sqlx::query_scalar(
             r#"
             SELECT COALESCE(SUM(quantity_deducted), 0)
@@ -468,11 +527,10 @@ pub async fn close_shift(
         .fetch_one(&mut *tx)
         .await?;
 
-        let expected = &snapshot - &consumed;
-        let actual = sqlx::types::BigDecimal::try_from(count.actual_stock)
+        let expected     = &snapshot - &consumed;
+        let actual       = sqlx::types::BigDecimal::try_from(count.actual_stock)
             .map_err(|_| AppError::BadRequest("Invalid actual_stock value".into()))?;
-        let _discrepancy = &expected - &actual;
-        let is_suspicious = actual > expected; // more stock than expected
+        let is_suspicious = actual > expected;
 
         let row = sqlx::query_as::<_, InventoryCountRow>(
             r#"
@@ -481,9 +539,9 @@ pub async fn close_shift(
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (shift_id, inventory_item_id)
             DO UPDATE SET
-                actual_stock   = EXCLUDED.actual_stock,
-                is_suspicious  = EXCLUDED.is_suspicious,
-                note           = EXCLUDED.note
+                actual_stock  = EXCLUDED.actual_stock,
+                is_suspicious = EXCLUDED.is_suspicious,
+                note          = EXCLUDED.note
             RETURNING
                 inventory_item_id,
                 (SELECT name FROM inventory_items WHERE id = $2) AS item_name,
@@ -504,16 +562,15 @@ pub async fn close_shift(
         inventory_counts.push(row);
     }
 
-    // Close the shift
     let closed_shift = sqlx::query_as::<_, Shift>(
         r#"
         UPDATE shifts SET
-            status                 = 'closed',
-            closing_cash_declared  = $2,
-            closing_cash_system    = $3,
-            closed_at              = NOW(),
-            closed_by              = $4,
-            notes                  = COALESCE($5, notes)
+            status                = 'closed',
+            closing_cash_declared = $2,
+            closing_cash_system   = $3,
+            closed_at             = $4,
+            closed_by             = $5,
+            notes                 = COALESCE($6, notes)
         WHERE id = $1
         RETURNING
             id, branch_id, teller_id,
@@ -530,6 +587,7 @@ pub async fn close_shift(
     .bind(*shift_id)
     .bind(body.closing_cash_declared)
     .bind(closing_cash_system)
+    .bind(closed_at)
     .bind(claims.user_id())
     .bind(&body.cash_note)
     .fetch_one(&mut *tx)
@@ -557,7 +615,6 @@ pub async fn force_close_shift(
     let shift = fetch_shift_or_404(pool.get_ref(), *shift_id).await?;
     require_branch_access(pool.get_ref(), &claims, shift.branch_id).await?;
 
-    // Only managers and above can force close
     match claims.role {
         UserRole::Teller => {
             return Err(AppError::Forbidden(
@@ -574,11 +631,11 @@ pub async fn force_close_shift(
     let closed = sqlx::query_as::<_, Shift>(
         r#"
         UPDATE shifts SET
-            status           = 'force_closed',
-            closed_at        = NOW(),
-            closed_by        = $2,
-            force_closed_by  = $2,
-            force_closed_at  = NOW(),
+            status             = 'force_closed',
+            closed_at          = NOW(),
+            closed_by          = $2,
+            force_closed_by    = $2,
+            force_closed_at    = NOW(),
             force_close_reason = $3
         WHERE id = $1
         RETURNING

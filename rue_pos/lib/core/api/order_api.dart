@@ -29,7 +29,7 @@ class OrderApi {
         'discount_type':  discountType,
         'discount_value': discountValue,
         'items':          items.map((i) => i.toApiJson()).toList(),
-        if (createdAt != null) 'created_at': createdAt.toIso8601String(),
+        if (createdAt != null) 'created_at': createdAt.toUtc().toIso8601String(),
       },
       options: Options(headers: {'Idempotency-Key': idempotencyKey}),
     );
@@ -58,7 +58,7 @@ class OrderApi {
     final res = await _c.dio.post('/orders/$id/void', data: {
       'reason':            reason,
       'restore_inventory': restoreInventory,
-      if (voidedAt != null) 'voided_at': voidedAt.toIso8601String(),
+      if (voidedAt != null) 'voided_at': voidedAt.toUtc().toIso8601String(),
     });
     return Order.fromJson(res.data as Map<String, dynamic>);
   }

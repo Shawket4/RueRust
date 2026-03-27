@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/order_api.dart';
 import '../api/shift_api.dart';
@@ -13,35 +15,36 @@ const _kMaxRetries = 5;
 
 class OfflineQueueState {
   final List<PendingAction> queue;
-  final bool                isSyncing;
-  final String?             lastError;
+  final bool isSyncing;
+  final String? lastError;
 
   const OfflineQueueState({
-    this.queue     = const [],
+    this.queue = const [],
     this.isSyncing = false,
     this.lastError,
   });
 
   // Counts by type
-  int get orderCount      => queue.whereType<PendingOrder>().length;
-  int get shiftOpenCount  => queue.whereType<PendingShiftOpen>().length;
+  int get orderCount => queue.whereType<PendingOrder>().length;
+  int get shiftOpenCount => queue.whereType<PendingShiftOpen>().length;
   int get shiftCloseCount => queue.whereType<PendingShiftClose>().length;
-  int get voidCount       => queue.whereType<PendingVoidOrder>().length;
-  int get totalCount      => queue.length;
-  int get stuckCount      => queue.where((a) => a.retryCount >= _kMaxRetries).length;
-  bool get hasStuck       => stuckCount > 0;
-  bool get isEmpty        => queue.isEmpty;
+  int get voidCount => queue.whereType<PendingVoidOrder>().length;
+  int get totalCount => queue.length;
+  int get stuckCount => queue.where((a) => a.retryCount >= _kMaxRetries).length;
+  bool get hasStuck => stuckCount > 0;
+  bool get isEmpty => queue.isEmpty;
 
   OfflineQueueState copyWith({
     List<PendingAction>? queue,
-    bool?                isSyncing,
-    String?              lastError,
-    bool                 clearError = false,
-  }) => OfflineQueueState(
-    queue:     queue     ?? this.queue,
-    isSyncing: isSyncing ?? this.isSyncing,
-    lastError: clearError ? null : (lastError ?? this.lastError),
-  );
+    bool? isSyncing,
+    String? lastError,
+    bool clearError = false,
+  }) =>
+      OfflineQueueState(
+        queue: queue ?? this.queue,
+        isSyncing: isSyncing ?? this.isSyncing,
+        lastError: clearError ? null : (lastError ?? this.lastError),
+      );
 }
 
 class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
@@ -83,7 +86,8 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
   }
 
   Future<void> _persist() async {
-    await ref.read(storageServiceProvider)
+    await ref
+        .read(storageServiceProvider)
         .savePendingActions(state.queue.map((a) => a.toJson()).toList());
   }
 
@@ -129,10 +133,11 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
     final shiftApi = ref.read(shiftApiProvider);
     final orderApi = ref.read(orderApiProvider);
 
-    final toProcess  = List<PendingAction>.of(state.queue);
-    final succeeded  = <String>{};
+    final toProcess = List<PendingAction>.of(state.queue);
+    final succeeded = <String>{};
     String? lastErr;
-    bool    chainBlocked = false; // if a shift open/close fails, block dependent actions
+    bool chainBlocked =
+        false; // if a shift open/close fails, block dependent actions
 
     for (final action in toProcess) {
       if (action.retryCount >= _kMaxRetries) continue;
@@ -144,26 +149,37 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
         switch (action) {
           case PendingShiftOpen():
             final shift = await shiftApi.openWithId(
-              branchId:    action.branchId,
-              shiftId:     action.shiftId,
+              branchId: action.branchId,
+              shiftId: action.shiftId,
               openingCash: action.openingCash,
-              openedAt:    action.openedAt,
+              openedAt: action.openedAt,
             );
             succeeded.add(action.localId);
             chainBlocked = false;
             onShiftOpenSynced?.call(shift);
 
           case PendingOrder():
+            final body = {
+              'branch_id': action.branchId,
+              'shift_id': action.shiftId,
+              'payment_method': action.paymentMethod,
+              'customer_name': action.customerName,
+              'discount_type': action.discountType,
+              'discount_value': action.discountValue,
+              'items': action.items.map((i) => i.toApiJson()).toList(),
+              'created_at': action.orderedAt.toIso8601String(),
+            };
+            debugPrint('FULL BODY: ${jsonEncode(body)}');
             final order = await orderApi.create(
-              branchId:       action.branchId,
-              shiftId:        action.shiftId,
-              paymentMethod:  action.paymentMethod,
-              items:          action.items,
-              customerName:   action.customerName,
-              discountType:   action.discountType,
-              discountValue:  action.discountValue,
+              branchId: action.branchId,
+              shiftId: action.shiftId,
+              paymentMethod: action.paymentMethod,
+              items: action.items,
+              customerName: action.customerName,
+              discountType: action.discountType,
+              discountValue: action.discountValue,
               idempotencyKey: action.localId,
-              createdAt:      action.orderedAt,
+              createdAt: action.orderedAt,
             );
             succeeded.add(action.localId);
             onOrderSynced?.call(order);
@@ -171,10 +187,10 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
           case PendingShiftClose():
             final shift = await shiftApi.close(
               action.shiftId,
-              closingCash:     action.closingCash,
-              note:            action.cashNote,
+              closingCash: action.closingCash,
+              note: action.cashNote,
               inventoryCounts: action.inventoryCounts,
-              closedAt:        action.closedAt,
+              closedAt: action.closedAt,
             );
             succeeded.add(action.localId);
             chainBlocked = false;
@@ -183,15 +199,19 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
           case PendingVoidOrder():
             final order = await orderApi.voidOrder(
               action.orderId,
-              reason:           action.reason,
+              reason: action.reason,
               restoreInventory: action.restoreInventory,
-              voidedAt:         action.voidedAt,
+              voidedAt: action.voidedAt,
             );
             succeeded.add(action.localId);
             onVoidSynced?.call(order);
         }
       } catch (e) {
         lastErr = _friendlyError(e);
+        if (e is DioException) {
+          print(
+              'SYNC ERROR: ${e.response?.statusCode} ${e.response?.data} for action ${action.type}');
+        }
         // Increment retry for this action
         final idx = state.queue.indexWhere((a) => a.localId == action.localId);
         if (idx >= 0) {
@@ -209,7 +229,7 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
     }
 
     state = state.copyWith(
-      queue:     state.queue.where((a) => !succeeded.contains(a.localId)).toList(),
+      queue: state.queue.where((a) => !succeeded.contains(a.localId)).toList(),
       isSyncing: false,
       lastError: lastErr,
     );

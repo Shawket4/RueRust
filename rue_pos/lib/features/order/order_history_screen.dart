@@ -11,6 +11,7 @@ import '../../core/services/printer_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/error_banner.dart';
+import '../../shared/widgets/label_value.dart';
 import 'void_order_sheet.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ import 'void_order_sheet.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 class OrderHistoryScreen extends ConsumerStatefulWidget {
   const OrderHistoryScreen({super.key});
+
   @override
   ConsumerState<OrderHistoryScreen> createState() => _OrderHistoryScreenState();
 }
@@ -44,20 +46,18 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
     final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F4F0),
+      backgroundColor: AppColors.bg,
       appBar: AppBar(
         leading: IconButton(
             icon: const Icon(Icons.arrow_back_rounded),
             onPressed: () => context.go('/home')),
-        title: Text('Order History',
-            style: cairo(
-                fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+        title: const Text('Order History'),
         backgroundColor: Colors.white,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         bottom: PreferredSize(
             preferredSize: const Size.fromHeight(1),
-            child: Container(height: 1, color: const Color(0xFFF0EDE8))),
+            child: Container(height: 1, color: AppColors.border)),
         actions: [
           if (shift != null)
             IconButton(
@@ -93,7 +93,7 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  SUMMARY BAR + LIST
+//  ORDER LIST
 // ─────────────────────────────────────────────────────────────────────────────
 class _OrderList extends StatelessWidget {
   final List<Order> orders;
@@ -112,10 +112,11 @@ class _OrderList extends StatelessWidget {
         .fold(0, (s, o) => s + o.totalAmount);
 
     return Column(children: [
+      // Summary bar
       Container(
         color: Colors.white,
         padding:
-            EdgeInsets.fromLTRB(isTablet ? 24 : 16, 14, isTablet ? 24 : 16, 14),
+            EdgeInsets.fromLTRB(isTablet ? 24 : 16, 12, isTablet ? 24 : 16, 12),
         child: Row(children: [
           _StatChip(
               label: 'Orders',
@@ -129,7 +130,7 @@ class _OrderList extends StatelessWidget {
             _StatChip(
                 label: 'Cash',
                 value: egp(cash),
-                color: const Color(0xFF6B7280)),
+                color: AppColors.textSecondary),
           ],
           if (card > 0) ...[
             const SizedBox(width: 8),
@@ -140,7 +141,8 @@ class _OrderList extends StatelessWidget {
           ],
         ]),
       ),
-      Container(height: 1, color: const Color(0xFFF0EDE8)),
+      Container(height: 1, color: AppColors.border),
+
       Expanded(
         child: isTablet
             ? GridView.builder(
@@ -170,17 +172,17 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
         decoration: BoxDecoration(
             color: color.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(10)),
+            borderRadius: BorderRadius.circular(AppRadius.xs)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(label,
               style: cairo(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: color.withOpacity(0.75))),
-          const SizedBox(width: 7),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: color.withOpacity(0.8))),
+          const SizedBox(width: 6),
           Text(value,
               style: cairo(
                   fontSize: 13, fontWeight: FontWeight.w800, color: color)),
@@ -194,6 +196,7 @@ class _StatChip extends StatelessWidget {
 class _OrderTile extends ConsumerStatefulWidget {
   final Order order;
   const _OrderTile({required this.order});
+
   @override
   ConsumerState<_OrderTile> createState() => _OrderTileState();
 }
@@ -244,42 +247,36 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
         duration: const Duration(milliseconds: 150),
         margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
-          color: isVoided ? const Color(0xFFFAFAFA) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          color: isVoided ? AppColors.bg : Colors.white,
+          borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(
-              color:
-                  isVoided ? const Color(0xFFEEEAE4) : const Color(0xFFF0EDE8)),
-          boxShadow: isVoided
-              ? []
-              : [
-                  BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2))
-                ],
+              color: isVoided ? AppColors.border : AppColors.borderLight),
+          boxShadow: isVoided ? [] : AppShadows.card,
         ),
         child: Stack(children: [
           Padding(
             padding: const EdgeInsets.all(14),
             child: Row(children: [
+              // Order number badge
               Container(
-                width: 46,
-                height: 46,
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
                     color: isVoided
-                        ? const Color(0xFFF0EDE8)
-                        : AppColors.primary.withOpacity(0.09),
-                    borderRadius: BorderRadius.circular(13)),
+                        ? AppColors.borderLight
+                        : AppColors.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
                 alignment: Alignment.center,
                 child: Text('#${o.orderNumber}',
                     style: cairo(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: isVoided
                             ? AppColors.textMuted
                             : AppColors.primary)),
               ),
               const SizedBox(width: 12),
+
               Expanded(
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -288,7 +285,7 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
                       _PaymentBadge(method: o.paymentMethod, voided: isVoided),
                       if (isVoided) ...[
                         const SizedBox(width: 6),
-                        const _VoidedBadge()
+                        const _VoidedBadge(),
                       ],
                       const Spacer(),
                       Text(timeShort(o.createdAt),
@@ -312,17 +309,20 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
                               fontSize: 11, color: AppColors.textSecondary)),
                     ],
                   ])),
-              const SizedBox(width: 6),
+
+              const SizedBox(width: 4),
               const Icon(Icons.chevron_right_rounded,
-                  size: 18, color: AppColors.textMuted),
+                  size: 16, color: AppColors.textMuted),
             ]),
           ),
+
+          // Loading overlay
           if (_loading)
             Positioned.fill(
                 child: Container(
               decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.72),
-                  borderRadius: BorderRadius.circular(16)),
+                  color: Colors.white.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(AppRadius.md)),
               alignment: Alignment.center,
               child: const SizedBox(
                   width: 20,
@@ -351,7 +351,7 @@ class _PaymentBadge extends StatelessWidget {
       _ => method[0].toUpperCase() + method.substring(1),
     };
     final color = switch (method) {
-      'cash' => const Color(0xFF059669),
+      'cash' => AppColors.success,
       'card' => const Color(0xFF7C3AED),
       'digital_wallet' => const Color(0xFF0EA5E9),
       _ => AppColors.primary,
@@ -359,8 +359,8 @@ class _PaymentBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: voided ? const Color(0xFFF0EDE8) : color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(6)),
+          color: voided ? AppColors.borderLight : color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(AppRadius.xs)),
       child: Text(label,
           style: cairo(
               fontSize: 10,
@@ -373,12 +373,13 @@ class _PaymentBadge extends StatelessWidget {
 
 class _VoidedBadge extends StatelessWidget {
   const _VoidedBadge();
+
   @override
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: AppColors.danger.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(6)),
+          color: AppColors.danger.withOpacity(0.09),
+          borderRadius: BorderRadius.circular(AppRadius.xs)),
       child: Text('VOIDED',
           style: cairo(
               fontSize: 10,
@@ -393,6 +394,7 @@ class _VoidedBadge extends StatelessWidget {
 class _OrderDetailSheet extends ConsumerStatefulWidget {
   final Order order;
   const _OrderDetailSheet({required this.order});
+
   @override
   ConsumerState<_OrderDetailSheet> createState() => _OrderDetailSheetState();
 }
@@ -414,7 +416,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('No printer configured for this branch'),
         backgroundColor: AppColors.warning,
-        duration: Duration(seconds: 3),
       ));
       return;
     }
@@ -428,12 +429,11 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
         brand: branch.printerBrand!,
         order: _order,
         branchName: branch.name);
-    if (mounted) {
+    if (mounted)
       setState(() {
         _printing = false;
         _printError = err;
       });
-    }
   }
 
   void _onVoided(Order voided) {
@@ -449,9 +449,8 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
     return Container(
       constraints:
           BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.88),
-      decoration: const BoxDecoration(
-          color: Color(0xFFFAF8F5),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: AppRadius.sheetRadius),
       child: Column(children: [
         // Handle
         Padding(
@@ -461,7 +460,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                     width: 36,
                     height: 4,
                     decoration: BoxDecoration(
-                        color: const Color(0xFFDDD8D0),
+                        color: AppColors.border,
                         borderRadius: BorderRadius.circular(2))))),
 
         // Header
@@ -478,7 +477,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                             cairo(fontSize: 18, fontWeight: FontWeight.w800)),
                     if (isVoided) ...[
                       const SizedBox(width: 8),
-                      const _VoidedBadge()
+                      const _VoidedBadge(),
                     ],
                   ]),
                   const SizedBox(height: 3),
@@ -492,7 +491,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                   ],
                 ])),
             if (!isVoided) ...[
-              // Print button
               _printing
                   ? const Padding(
                       padding: EdgeInsets.all(8),
@@ -501,120 +499,61 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                           height: 20,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: AppColors.primary)))
-                  : GestureDetector(
-                      onTap: _print,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                            color: (_printError != null
-                                    ? AppColors.danger
-                                    : AppColors.primary)
-                                .withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(10)),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.print_rounded,
-                              size: 14,
-                              color: _printError != null
-                                  ? AppColors.danger
-                                  : AppColors.primary),
-                          const SizedBox(width: 5),
-                          Text(_printError != null ? 'Retry' : 'Print',
-                              style: cairo(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: _printError != null
-                                      ? AppColors.danger
-                                      : AppColors.primary)),
-                        ]),
-                      )),
+                  : _SheetAction(
+                      icon: Icons.print_rounded,
+                      label: _printError != null ? 'Retry' : 'Print',
+                      color: _printError != null
+                          ? AppColors.danger
+                          : AppColors.primary,
+                      onTap: _print),
               const SizedBox(width: 8),
-              // Void button
-              GestureDetector(
-                onTap: () => VoidOrderSheet.show(context, order, _onVoided),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10)),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const Icon(Icons.cancel_outlined,
-                        size: 14, color: AppColors.danger),
-                    const SizedBox(width: 5),
-                    Text('Void',
-                        style: cairo(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.danger)),
-                  ]),
-                ),
-              ),
+              _SheetAction(
+                  icon: Icons.cancel_outlined,
+                  label: 'Void',
+                  color: AppColors.danger,
+                  onTap: () => VoidOrderSheet.show(context, order, _onVoided)),
             ],
           ]),
         ),
 
-        Container(height: 1, color: const Color(0xFFECE8E0)),
+        Container(height: 1, color: AppColors.border),
 
-        // Scrollable content
         Expanded(
             child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
             // Items
-            if (order.items.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFECE8E0))),
-                child: Text('No item details available',
-                    style: cairo(fontSize: 13, color: AppColors.textMuted)),
-              )
-            else
-              Container(
-                decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFFECE8E0))),
-                child: Column(children: [
-                  for (int i = 0; i < order.items.length; i++) ...[
-                    _ItemRow(item: order.items[i]),
-                    if (i < order.items.length - 1)
-                      const Divider(
-                          height: 1,
-                          indent: 14,
-                          endIndent: 14,
-                          color: Color(0xFFF0EDE8)),
-                  ],
-                ]),
-              ),
+            _SectionCard(
+              child: order.items.isEmpty
+                  ? Text('No item details available',
+                      style: cairo(fontSize: 13, color: AppColors.textMuted))
+                  : Column(children: [
+                      for (int i = 0; i < order.items.length; i++) ...[
+                        _ItemRow(item: order.items[i]),
+                        if (i < order.items.length - 1)
+                          const Divider(
+                              height: 1,
+                              color: AppColors.borderLight,
+                              indent: 14,
+                              endIndent: 14),
+                      ],
+                    ]),
+            ),
 
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
 
             // Totals
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFECE8E0))),
+            _SectionCard(
               child: Column(children: [
-                _TotalRow('Subtotal', egp(order.subtotal), muted: true),
-                if (order.discountAmount > 0) ...[
-                  const SizedBox(height: 6),
-                  _TotalRow('Discount', '− ${egp(order.discountAmount)}',
+                LabelValue('Subtotal', egp(order.subtotal)),
+                if (order.discountAmount > 0)
+                  LabelValue('Discount', '− ${egp(order.discountAmount)}',
                       valueColor: AppColors.success),
-                ],
-                if (order.taxAmount > 0) ...[
-                  const SizedBox(height: 6),
-                  _TotalRow('Tax (14%)', egp(order.taxAmount), muted: true),
-                ],
+                if (order.taxAmount > 0)
+                  LabelValue('Tax (14%)', egp(order.taxAmount)),
                 Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
-                    child:
-                        Container(height: 1, color: const Color(0xFFF0EDE8))),
+                    child: Container(height: 1, color: AppColors.borderLight)),
                 Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -635,15 +574,10 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
               ]),
             ),
 
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
 
             // Meta
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFFECE8E0))),
+            _SectionCard(
               child: Column(children: [
                 _MetaRow(Icons.payments_outlined, 'Payment',
                     _paymentLabel(order.paymentMethod)),
@@ -668,26 +602,70 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
     );
   }
 
-  String _paymentLabel(String method) => switch (method) {
+  String _paymentLabel(String m) => switch (m) {
         'cash' => 'Cash',
         'card' => 'Card',
         'digital_wallet' => 'Digital Wallet',
         'mixed' => 'Mixed',
-        _ => method,
+        _ => m,
       };
 
-  String _voidReasonLabel(String reason) => switch (reason) {
+  String _voidReasonLabel(String r) => switch (r) {
         'customer_request' => 'Customer request',
         'wrong_order' => 'Wrong order',
         'quality_issue' => 'Quality issue',
         'other' => 'Other',
-        _ => reason,
+        _ => r,
       };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ITEM ROW
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Shared sheet widgets ───────────────────────────────────────────────────────
+class _SectionCard extends StatelessWidget {
+  final Widget child;
+  const _SectionCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(color: AppColors.border),
+            boxShadow: AppShadows.card),
+        padding: const EdgeInsets.all(16),
+        child: child,
+      );
+}
+
+class _SheetAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _SheetAction(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(AppRadius.xs)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 5),
+            Text(label,
+                style: cairo(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+          ]),
+        ),
+      );
+}
+
 class _ItemRow extends StatelessWidget {
   final OrderItem item;
   const _ItemRow({required this.item});
@@ -700,13 +678,13 @@ class _ItemRow extends StatelessWidget {
             width: 28,
             height: 28,
             decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.09),
-                borderRadius: BorderRadius.circular(8)),
+                color: AppColors.primary.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(AppRadius.xs)),
             alignment: Alignment.center,
             child: Text('${item.quantity}',
                 style: cairo(
                     fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
                     color: AppColors.primary)),
           ),
           const SizedBox(width: 10),
@@ -732,7 +710,8 @@ class _ItemRow extends StatelessWidget {
                               horizontal: 7, vertical: 3),
                           decoration: BoxDecoration(
                               color: AppColors.primary.withOpacity(0.07),
-                              borderRadius: BorderRadius.circular(6)),
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.xs)),
                           child: Text(
                               hasPrice
                                   ? '${normaliseName(a.addonName)}  +${egp(a.lineTotal)}'
@@ -752,33 +731,6 @@ class _ItemRow extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  SHARED DETAIL WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
-class _TotalRow extends StatelessWidget {
-  final String label, value;
-  final bool muted;
-  final Color? valueColor;
-  const _TotalRow(this.label, this.value,
-      {this.muted = false, this.valueColor});
-
-  @override
-  Widget build(BuildContext context) =>
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label,
-            style: cairo(
-                fontSize: 13,
-                color:
-                    muted ? AppColors.textSecondary : AppColors.textPrimary)),
-        Text(value,
-            style: cairo(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: valueColor ??
-                    (muted ? AppColors.textSecondary : AppColors.textPrimary))),
-      ]);
-}
-
 class _MetaRow extends StatelessWidget {
   final IconData icon;
   final String label, value;
@@ -786,7 +738,7 @@ class _MetaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        Icon(icon, size: 15, color: AppColors.textMuted),
+        Icon(icon, size: 14, color: AppColors.textMuted),
         const SizedBox(width: 8),
         Text(label, style: cairo(fontSize: 12, color: AppColors.textSecondary)),
         const Spacer(),
@@ -794,35 +746,37 @@ class _MetaRow extends StatelessWidget {
       ]);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PLACEHOLDER
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Placeholder ────────────────────────────────────────────────────────────────
 class _Placeholder extends StatelessWidget {
   final IconData icon;
   final String message;
   final bool isTablet;
   final bool useLottie;
-  const _Placeholder(
-      {required this.icon,
-      required this.message,
-      required this.isTablet,
-      this.useLottie = false});
+
+  const _Placeholder({
+    required this.icon,
+    required this.message,
+    required this.isTablet,
+    this.useLottie = false,
+  });
 
   @override
   Widget build(BuildContext context) => Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (useLottie)
-          SizedBox(
-              width: isTablet ? 180 : 150,
-              height: isTablet ? 180 : 150,
-              child: Lottie.asset('assets/lottie/no_orders.json',
-                  fit: BoxFit.contain, repeat: true))
-        else ...[
-          Icon(icon, size: isTablet ? 52 : 44, color: const Color(0xFFD5CFC7)),
-          const SizedBox(height: 12),
-        ],
-        Text(message,
-            style: cairo(
-                fontSize: isTablet ? 16 : 14, color: AppColors.textSecondary)),
-      ]));
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (useLottie)
+            SizedBox(
+                width: isTablet ? 180 : 150,
+                height: isTablet ? 180 : 150,
+                child: Lottie.asset('assets/lottie/no_orders.json',
+                    fit: BoxFit.contain, repeat: true))
+          else ...[
+            Icon(icon, size: isTablet ? 48 : 40, color: AppColors.border),
+            const SizedBox(height: 12),
+          ],
+          Text(message,
+              style: cairo(
+                  fontSize: isTablet ? 15 : 14,
+                  color: AppColors.textSecondary)),
+        ]),
+      );
 }

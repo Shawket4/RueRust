@@ -6,6 +6,7 @@ import '../../shared/widgets/pin_pad.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
+
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
@@ -65,10 +66,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
       _loading = true;
       _error = null;
     });
-
     final err =
         await ref.read(authProvider.notifier).login(name: name, pin: _pin);
-
     if (!mounted) return;
 
     if (err != null) {
@@ -79,7 +78,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
       });
       _shakeCtrl.forward(from: 0);
     }
-    // On success the router redirect navigates automatically
   }
 
   @override
@@ -105,54 +103,54 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   Widget _buildForm(SessionExpiry expiry) {
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 400),
+          constraints: const BoxConstraints(maxWidth: 380),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Image.asset('assets/TheRue.png', height: 52),
-            const SizedBox(height: 10),
-            Text('Point of Sale',
-                style: cairo(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textMuted,
-                    letterSpacing: 1.2)),
-            const SizedBox(height: 20),
+            // ── Logo ────────────────────────────────────────────────────────
+            Image.asset('assets/TheRue.png', height: 48),
+            const SizedBox(height: 8),
+            Text(
+              'Point of Sale',
+              style: cairo(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textMuted,
+                  letterSpacing: 1.6),
+            ),
+            const SizedBox(height: 32),
 
-            // ── Session expiry banner ─────────────────────────────────────
+            // ── Session banners ──────────────────────────────────────────────
             if (expiry == SessionExpiry.expired)
-              const _InfoBanner(
-                icon: Icons.lock_clock_outlined,
-                text: 'Your session expired — please sign in again.',
-                color: AppColors.warning,
-              ),
+              _InfoBanner(
+                  icon: Icons.lock_clock_outlined,
+                  text: 'Your session expired — please sign in again.',
+                  color: AppColors.warning),
 
-            // ── Blocked by another teller's shift ─────────────────────────
             if (expiry == SessionExpiry.blockedByOtherShift && _error != null)
               _InfoBanner(
-                icon: Icons.block_rounded,
-                text: _error!,
-                color: AppColors.danger,
-                bold: true,
-              ),
+                  icon: Icons.block_rounded,
+                  text: _error!,
+                  color: AppColors.danger,
+                  bold: true),
 
-            const SizedBox(height: 8),
+            // ── Divider ──────────────────────────────────────────────────────
             Row(children: [
-              const Expanded(child: Divider(color: Color(0xFFEEEEEE))),
+              const Expanded(child: Divider(color: AppColors.borderLight)),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
                 child: Text('Sign in',
                     style: cairo(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: AppColors.textMuted,
-                        letterSpacing: 0.5)),
+                        letterSpacing: 0.6)),
               ),
-              const Expanded(child: Divider(color: Color(0xFFEEEEEE))),
+              const Expanded(child: Divider(color: AppColors.borderLight)),
             ]),
             const SizedBox(height: 24),
 
-            // ── Name field ────────────────────────────────────────────────
+            // ── Name field ───────────────────────────────────────────────────
             AnimatedBuilder(
               animation: _shakeAnim,
               builder: (_, child) => Transform.translate(
@@ -168,15 +166,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   prefixIcon: const Icon(Icons.person_outline_rounded,
                       size: 18, color: AppColors.textMuted),
                   filled: true,
-                  fillColor: const Color(0xFFF8F8F8),
+                  fillColor: AppColors.bg,
                   border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: Color(0xFFEEEEEE))),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                      borderSide: const BorderSide(color: AppColors.border)),
                   enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: const BorderSide(color: Color(0xFFEEEEEE))),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                      borderSide: const BorderSide(color: AppColors.border)),
                   focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
                       borderSide:
                           const BorderSide(color: AppColors.primary, width: 2)),
                   contentPadding:
@@ -184,9 +182,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 ),
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 32),
 
-            // ── PIN pad ───────────────────────────────────────────────────
+            // ── PIN pad ──────────────────────────────────────────────────────
             AnimatedBuilder(
               animation: _shakeAnim,
               builder: (_, child) => Transform.translate(
@@ -198,23 +196,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                   onBackspace: _back),
             ),
 
-            // ── Inline error (non-block errors only) ──────────────────────
+            // ── Error ────────────────────────────────────────────────────────
             AnimatedSize(
-              duration: const Duration(milliseconds: 250),
+              duration: const Duration(milliseconds: 220),
               curve: Curves.easeOut,
               child: (_error != null &&
                       expiry != SessionExpiry.blockedByOtherShift)
                   ? Padding(
-                      padding: const EdgeInsets.only(top: 18),
+                      padding: const EdgeInsets.only(top: 20),
                       child: Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 12),
+                            horizontal: 16, vertical: 13),
                         decoration: BoxDecoration(
-                          color: AppColors.danger.withOpacity(0.07),
-                          borderRadius: BorderRadius.circular(12),
+                          color: AppColors.danger.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
                           border: Border.all(
-                              color: AppColors.danger.withOpacity(0.2)),
+                              color: AppColors.danger.withOpacity(0.18)),
                         ),
                         child: Row(children: [
                           const Icon(Icons.error_outline_rounded,
@@ -225,7 +223,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                   style: cairo(
                                       fontSize: 13, color: AppColors.danger))),
                         ]),
-                      ))
+                      ),
+                    )
                   : const SizedBox.shrink(),
             ),
 
@@ -234,7 +233,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               const CircularProgressIndicator(
                   strokeWidth: 2.5, color: AppColors.primary),
             ],
-            const SizedBox(height: 32),
           ]),
         ),
       ),
@@ -242,16 +240,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 }
 
+// ── Info Banner ────────────────────────────────────────────────────────────────
 class _InfoBanner extends StatelessWidget {
   final IconData icon;
   final String text;
   final Color color;
   final bool bold;
-  const _InfoBanner(
-      {required this.icon,
-      required this.text,
-      required this.color,
-      this.bold = false});
+
+  const _InfoBanner({
+    required this.icon,
+    required this.text,
+    required this.color,
+    this.bold = false,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
@@ -259,67 +260,97 @@ class _InfoBanner extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.25)),
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          border: Border.all(color: color.withOpacity(0.22)),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(icon, size: 16, color: color),
+          Icon(icon, size: 15, color: color),
           const SizedBox(width: 10),
           Expanded(
               child: Text(text,
                   style: cairo(
                       fontSize: 13,
                       color: color,
-                      fontWeight: bold ? FontWeight.w600 : FontWeight.w400))),
+                      fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                      height: 1.4))),
         ]),
       );
 }
 
+// ── Tablet split layout ────────────────────────────────────────────────────────
 class _TabletLayout extends StatelessWidget {
   final Widget form;
   const _TabletLayout({required this.form});
 
   @override
   Widget build(BuildContext context) => Row(children: [
+        // Left panel — brand
         Expanded(
           flex: 5,
           child: Container(
             decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                    colors: [AppColors.primary, AppColors.secondary],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight)),
+              gradient: LinearGradient(
+                colors: [AppColors.primary, AppColors.secondary],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.all(48),
+                padding: const EdgeInsets.all(52),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Image.asset('assets/TheRue.png',
-                        height: 60,
+                        height: 56,
                         color: Colors.white,
                         colorBlendMode: BlendMode.srcIn),
-                    const SizedBox(height: 32),
-                    Text('Welcome back.',
+                    const SizedBox(height: 40),
+                    Text('Welcome\nback.',
                         style: cairo(
-                            fontSize: 38,
+                            fontSize: 44,
                             fontWeight: FontWeight.w800,
                             color: Colors.white,
-                            height: 1.1)),
-                    const SizedBox(height: 14),
+                            height: 1.05,
+                            letterSpacing: -0.5)),
+                    const SizedBox(height: 16),
                     Text('Sign in to start your shift\nand manage orders.',
                         style: cairo(
                             fontSize: 16,
-                            color: Colors.white.withOpacity(0.75),
-                            height: 1.6)),
+                            color: Colors.white.withOpacity(0.72),
+                            height: 1.65)),
+                    const SizedBox(height: 48),
+                    // Decorative dots
+                    Row(children: [
+                      _Dot(AppColors.surface.withOpacity(0.6)),
+                      const SizedBox(width: 8),
+                      _Dot(AppColors.surface.withOpacity(0.3)),
+                      const SizedBox(width: 8),
+                      _Dot(AppColors.surface.withOpacity(0.15)),
+                    ]),
                   ],
                 ),
               ),
             ),
           ),
         ),
-        Expanded(flex: 4, child: Container(color: Colors.white, child: form)),
+
+        // Right panel — form
+        Expanded(
+          flex: 4,
+          child: Container(color: Colors.white, child: form),
+        ),
       ]);
+}
+
+class _Dot extends StatelessWidget {
+  final Color color;
+  const _Dot(this.color);
+  @override
+  Widget build(BuildContext context) => Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle));
 }

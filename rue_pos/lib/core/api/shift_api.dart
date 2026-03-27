@@ -38,7 +38,7 @@ class ShiftApi {
       data: {
         'id':           shiftId,
         'opening_cash': openingCash,
-        'opened_at':    openedAt.toIso8601String(),
+        'opened_at':    openedAt.toUtc().toIso8601String(),
       },
     );
     return Shift.fromJson(res.data as Map<String, dynamic>);
@@ -57,7 +57,7 @@ class ShiftApi {
       'closing_cash_declared': closingCash,
       'cash_note':             note,
       'inventory_counts':      inventoryCounts,
-      if (closedAt != null) 'closed_at': closedAt.toIso8601String(),
+      if (closedAt != null) 'closed_at': closedAt.toUtc().toIso8601String(),
     });
     final body = res.data as Map<String, dynamic>;
     return Shift.fromJson(body['shift'] as Map<String, dynamic>);

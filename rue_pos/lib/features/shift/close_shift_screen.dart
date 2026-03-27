@@ -13,6 +13,7 @@ import '../../shared/widgets/label_value.dart';
 
 class CloseShiftScreen extends ConsumerStatefulWidget {
   const CloseShiftScreen({super.key});
+
   @override
   ConsumerState<CloseShiftScreen> createState() => _CloseShiftScreenState();
 }
@@ -44,9 +45,7 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
       ..removeListener(_updateDeclared)
       ..dispose();
     _noteCtrl.dispose();
-    for (final c in _invCtrs.values) {
-      c.dispose();
-    }
+    for (final c in _invCtrs.values) c.dispose();
     super.dispose();
   }
 
@@ -99,15 +98,13 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text('Zero Stock Warning',
               style: cairo(fontWeight: FontWeight.w800)),
           content: Text(
-            'The following items have 0 stock:\n\n${zeroItems.join(", ")}'
-            '\n\nAre you sure you want to submit?',
-            style: cairo(fontSize: 14, color: AppColors.textSecondary),
-          ),
+              'The following items have 0 stock:\n\n${zeroItems.join(", ")}'
+              '\n\nAre you sure you want to submit?',
+              style: cairo(
+                  fontSize: 14, color: AppColors.textSecondary, height: 1.5)),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -146,11 +143,9 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
     if (!mounted) return;
 
     if (ok) {
-      // Shift is now closed — check if we should logout (user came from logout guard)
       final canNowLogout = await ref.read(authProvider.notifier).canLogout();
       if (!mounted) return;
       if (canNowLogout) {
-        // Logout was pending, complete it now
         await ref.read(authProvider.notifier).logout();
         if (mounted) context.go('/login');
       } else {
@@ -176,15 +171,13 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
           icon: const Icon(Icons.arrow_back_rounded),
           onPressed: () => context.go('/home'),
         ),
-        title: Text('Close Shift',
-            style: cairo(
-                fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+        title: const Text('Close Shift'),
         backgroundColor: Colors.white,
         elevation: 0,
         surfaceTintColor: Colors.transparent,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: const Color(0xFFF0F0F0)),
+          child: Container(height: 1, color: AppColors.border),
         ),
       ),
       body: shift == null
@@ -233,34 +226,54 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
         ),
         Container(
           color: AppColors.bg,
-          padding: const EdgeInsets.fromLTRB(28, 12, 28, 24),
+          padding: const EdgeInsets.fromLTRB(28, 14, 28, 24),
           child: _SubmitSection(state: this),
         ),
       ]);
 }
 
-// ── Sub-cards ───────────────────────────────────────────────────────────────────
+// ── Section cards ──────────────────────────────────────────────────────────────
+class _SectionHeader extends StatelessWidget {
+  final IconData icon;
+  final Color iconBg;
+  final Color iconColor;
+  final String title;
+
+  const _SectionHeader({
+    required this.icon,
+    required this.iconBg,
+    required this.iconColor,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+                color: iconBg,
+                borderRadius: BorderRadius.circular(AppRadius.xs)),
+            child: Icon(icon, color: iconColor, size: 18)),
+        const SizedBox(width: 12),
+        Text(title, style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
+      ]);
+}
 
 class _SummaryCard extends StatelessWidget {
   final dynamic shift;
   const _SummaryCard({required this.shift});
+
   @override
   Widget build(BuildContext context) => CardContainer(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(11)),
-                child: const Icon(Icons.summarize_outlined,
-                    color: AppColors.primary, size: 18)),
-            const SizedBox(width: 12),
-            Text('Shift Summary',
-                style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
-          ]),
-          const SizedBox(height: 16),
+          const _SectionHeader(
+            icon: Icons.summarize_outlined,
+            iconBg: Color(0xFFEEF2FF),
+            iconColor: AppColors.primary,
+            title: 'Shift Summary',
+          ),
+          const SizedBox(height: 18),
           LabelValue('Teller', shift.tellerName),
           LabelValue('Opening Cash', egp(shift.openingCash)),
           LabelValue('Opened At', dateTime(shift.openedAt)),
@@ -282,25 +295,20 @@ class _CashCard extends ConsumerWidget {
 
     return CardContainer(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                  color: AppColors.success.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(11)),
-              child: const Icon(Icons.payments_outlined,
-                  color: AppColors.success, size: 18)),
-          const SizedBox(width: 12),
-          Text('Cash Count',
-              style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
-        ]),
+        const _SectionHeader(
+          icon: Icons.payments_outlined,
+          iconBg: Color(0xFFECFDF5),
+          iconColor: AppColors.success,
+          title: 'Cash Count',
+        ),
         const SizedBox(height: 18),
+
+        // System cash block
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-              color: const Color(0xFFF8F8F8),
-              borderRadius: BorderRadius.circular(12)),
+              color: AppColors.bg,
+              borderRadius: BorderRadius.circular(AppRadius.sm)),
           child: Row(children: [
             Expanded(
                 child: Column(
@@ -311,7 +319,7 @@ class _CashCard extends ConsumerWidget {
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textSecondary)),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 2),
                   Text('Opening + cash orders + movements',
                       style: cairo(fontSize: 11, color: AppColors.textMuted)),
                 ])),
@@ -325,27 +333,34 @@ class _CashCard extends ConsumerWidget {
                     style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
           ]),
         ),
-        const SizedBox(height: 16),
+
+        const SizedBox(height: 18),
+
         Text('ACTUAL CASH IN DRAWER',
             style: cairo(
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
                 color: AppColors.textMuted,
-                letterSpacing: 1.0)),
+                letterSpacing: 1.2)),
         const SizedBox(height: 8),
+
+        // Big input
         TextField(
           controller: state._cashCtrl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           inputFormatters: [
             FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
           ],
-          style: cairo(fontSize: 28, fontWeight: FontWeight.w800),
+          style: cairo(fontSize: 30, fontWeight: FontWeight.w800),
           decoration: InputDecoration(
             prefixText: 'EGP  ',
-            prefixStyle: cairo(fontSize: 20, color: AppColors.textSecondary),
+            prefixStyle: cairo(
+                fontSize: 20,
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w500),
             hintText: '0',
             hintStyle: cairo(
-                fontSize: 28,
+                fontSize: 30,
                 fontWeight: FontWeight.w800,
                 color: AppColors.border),
             border: InputBorder.none,
@@ -353,17 +368,22 @@ class _CashCard extends ConsumerWidget {
             focusedBorder: InputBorder.none,
           ),
         ),
+
+        // Discrepancy badge
         AnimatedSize(
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
           child: showDiscrep
               ? Padding(
-                  padding: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.only(top: 14),
                   child: _DiscrepancyRow(
                       discrepancy: discrepancy, systemCash: systemCash))
               : const SizedBox.shrink(),
         ),
-        const SizedBox(height: 14),
+
+        const SizedBox(height: 16),
+
+        // Note field
         TextField(
           controller: state._noteCtrl,
           decoration: InputDecoration(
@@ -385,22 +405,16 @@ class _InventoryCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final inventory = ref.watch(shiftProvider.select((s) => s.inventory));
+
     return CardContainer(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                  color: AppColors.warning.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(11)),
-              child: const Icon(Icons.inventory_2_outlined,
-                  color: AppColors.warning, size: 18)),
-          const SizedBox(width: 12),
-          Text('Inventory Count',
-              style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
-        ]),
-        const SizedBox(height: 16),
+        const _SectionHeader(
+          icon: Icons.inventory_2_outlined,
+          iconBg: Color(0xFFFFFBEB),
+          iconColor: AppColors.warning,
+          title: 'Inventory Count',
+        ),
+        const SizedBox(height: 18),
         if (state._loadingInv)
           const Center(
               child: Padding(
@@ -422,13 +436,17 @@ class _InventoryCard extends ConsumerWidget {
                       Text(item.name,
                           style:
                               cairo(fontSize: 14, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 2),
                       Text('System: ${item.currentStock} ${item.unit}',
                           style: cairo(
                               fontSize: 12, color: AppColors.textSecondary)),
                       if (warn)
-                        Text('⚠ Value is 0 — confirm this is correct',
-                            style:
-                                cairo(fontSize: 11, color: AppColors.warning)),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: Text('⚠ Value is 0 — confirm this is correct',
+                              style: cairo(
+                                  fontSize: 11, color: AppColors.warning)),
+                        ),
                     ])),
                 const SizedBox(width: 12),
                 SizedBox(
@@ -446,15 +464,15 @@ class _InventoryCard extends ConsumerWidget {
                       decoration: InputDecoration(
                         suffixText: item.unit,
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 10),
+                            horizontal: 10, vertical: 12),
                         enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppRadius.sm),
                             borderSide: BorderSide(
                                 color: warn
                                     ? AppColors.warning
                                     : AppColors.border)),
                         focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(AppRadius.sm),
                             borderSide: const BorderSide(
                                 color: AppColors.primary, width: 2)),
                       ),
@@ -474,6 +492,7 @@ class _SubmitSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isOnline = ref.watch(isOnlineProvider);
+
     return Column(children: [
       AnimatedSize(
         duration: const Duration(milliseconds: 200),
@@ -484,10 +503,10 @@ class _SubmitSection extends ConsumerWidget {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(12),
-                      border:
-                          Border.all(color: AppColors.danger.withOpacity(0.2))),
+                      color: AppColors.danger.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                      border: Border.all(
+                          color: AppColors.danger.withOpacity(0.18))),
                   child: Row(children: [
                     const Icon(Icons.error_outline_rounded,
                         size: 15, color: AppColors.danger),
@@ -502,12 +521,12 @@ class _SubmitSection extends ConsumerWidget {
       ),
       if (!isOnline)
         Padding(
-          padding: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.only(bottom: 14),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
                 color: const Color(0xFFFFF3CD),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
                 border: Border.all(color: const Color(0xFFFFD700))),
             child: Row(children: [
               const Icon(Icons.wifi_off_rounded,
@@ -532,6 +551,7 @@ class _SubmitSection extends ConsumerWidget {
   }
 }
 
+// ── Discrepancy badge ──────────────────────────────────────────────────────────
 class _DiscrepancyRow extends StatelessWidget {
   final int discrepancy, systemCash;
   const _DiscrepancyRow({required this.discrepancy, required this.systemCash});
@@ -546,7 +566,7 @@ class _DiscrepancyRow extends StatelessWidget {
             ? AppColors.warning
             : AppColors.danger;
     final icon = isExact
-        ? Icons.check_circle_rounded
+        ? Icons.check_circle_outline_rounded
         : isOver
             ? Icons.arrow_upward_rounded
             : Icons.arrow_downward_rounded;
@@ -560,11 +580,11 @@ class _DiscrepancyRow extends StatelessWidget {
       duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(12),
+          color: color.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
           border: Border.all(color: color.withOpacity(0.2))),
       child: Row(children: [
-        Icon(icon, size: 16, color: color),
+        Icon(icon, size: 15, color: color),
         const SizedBox(width: 8),
         Text(label,
             style:
@@ -572,7 +592,7 @@ class _DiscrepancyRow extends StatelessWidget {
         const Spacer(),
         if (!isExact)
           Text('System: ${egp(systemCash)}',
-              style: cairo(fontSize: 11, color: color.withOpacity(0.8))),
+              style: cairo(fontSize: 11, color: color.withOpacity(0.75))),
       ]),
     );
   }

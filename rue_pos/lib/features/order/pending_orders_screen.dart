@@ -1,3 +1,4 @@
+// ─── pending_orders_screen.dart ───────────────────────────────────────────────
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,7 +12,7 @@ class PendingOrdersScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final queue    = ref.watch(offlineQueueProvider);
+    final queue = ref.watch(offlineQueueProvider);
     final isTablet = MediaQuery.of(context).size.width >= 768;
 
     return Scaffold(
@@ -20,36 +21,43 @@ class PendingOrdersScreen extends ConsumerWidget {
         leading: IconButton(
             icon: const Icon(Icons.arrow_back_rounded),
             onPressed: () => context.go('/home')),
-        title: Text('Pending Sync',
-            style: cairo(fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary)),
-        backgroundColor: Colors.white, elevation: 0,
+        title: const Text('Pending Sync'),
+        backgroundColor: Colors.white,
+        elevation: 0,
         surfaceTintColor: Colors.transparent,
-        bottom: PreferredSize(preferredSize: const Size.fromHeight(1),
+        bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
             child: Container(height: 1, color: AppColors.border)),
         actions: [
           if (queue.isSyncing)
             const Padding(
               padding: EdgeInsets.all(14),
-              child: SizedBox(width: 18, height: 18,
+              child: SizedBox(
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: AppColors.primary)),
             )
           else
             IconButton(
               icon: const Icon(Icons.sync_rounded),
-              onPressed: () => ref.read(offlineQueueProvider.notifier).syncAll(),
+              onPressed: () =>
+                  ref.read(offlineQueueProvider.notifier).syncAll(),
               tooltip: 'Sync now',
             ),
         ],
       ),
       body: queue.isEmpty
-          ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.check_circle_outline_rounded,
-                  size: 56, color: AppColors.success),
-              const SizedBox(height: 12),
-              Text('All synced', style: cairo(fontSize: 16,
-                  fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.check_circle_outline_rounded,
+                  size: 52, color: AppColors.success.withOpacity(0.5)),
+              const SizedBox(height: 14),
+              Text('All synced',
+                  style: cairo(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary)),
             ]))
           : Column(children: [
               // Summary bar
@@ -81,20 +89,24 @@ class PendingOrdersScreen extends ConsumerWidget {
                 ]),
               ),
               Container(height: 1, color: AppColors.border),
+
               if (queue.lastError != null)
                 Container(
                   width: double.infinity,
-                  color: AppColors.danger.withOpacity(0.07),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 10),
+                  color: AppColors.danger.withOpacity(0.06),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Row(children: [
                     const Icon(Icons.error_outline_rounded,
                         size: 14, color: AppColors.danger),
                     const SizedBox(width: 8),
-                    Expanded(child: Text(queue.lastError!,
-                        style: cairo(fontSize: 12, color: AppColors.danger))),
+                    Expanded(
+                        child: Text(queue.lastError!,
+                            style:
+                                cairo(fontSize: 12, color: AppColors.danger))),
                   ]),
                 ),
+
               Expanded(
                 child: ListView.builder(
                   padding: EdgeInsets.all(isTablet ? 20 : 14),
@@ -103,12 +115,14 @@ class PendingOrdersScreen extends ConsumerWidget {
                     final action = queue.queue[i];
                     final isStuck = action.retryCount >= 5;
                     return _ActionTile(
-                      action:  action,
+                      action: action,
                       isStuck: isStuck,
-                      onDiscard: () => ref.read(offlineQueueProvider.notifier)
+                      onDiscard: () => ref
+                          .read(offlineQueueProvider.notifier)
                           .discard(action.localId),
                       onRetry: isStuck
-                          ? () => ref.read(offlineQueueProvider.notifier)
+                          ? () => ref
+                              .read(offlineQueueProvider.notifier)
                               .resetRetry(action.localId)
                           : null,
                     );
@@ -121,65 +135,95 @@ class PendingOrdersScreen extends ConsumerWidget {
 }
 
 class _Chip extends StatelessWidget {
-  final String label; final Color color;
+  final String label;
+  final Color color;
   const _Chip(this.label, this.color);
+
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-    decoration: BoxDecoration(color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8)),
-    child: Text(label, style: cairo(fontSize: 11,
-        fontWeight: FontWeight.w700, color: color)),
-  );
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(AppRadius.xs)),
+        child: Text(label,
+            style:
+                cairo(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+      );
 }
 
 class _ActionTile extends StatelessWidget {
   final PendingAction action;
-  final bool          isStuck;
-  final VoidCallback  onDiscard;
+  final bool isStuck;
+  final VoidCallback onDiscard;
   final VoidCallback? onRetry;
-  const _ActionTile({required this.action, required this.isStuck,
-      required this.onDiscard, this.onRetry});
+
+  const _ActionTile({
+    required this.action,
+    required this.isStuck,
+    required this.onDiscard,
+    this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
     final (icon, label, color) = switch (action) {
-      PendingShiftOpen()  => (Icons.play_arrow_rounded,  'Open Shift',   AppColors.primary),
-      PendingOrder()      => (Icons.receipt_rounded,      'Order',        AppColors.success),
-      PendingShiftClose() => (Icons.lock_outline_rounded, 'Close Shift',  AppColors.warning),
-      PendingVoidOrder()  => (Icons.cancel_outlined,      'Void Order',   AppColors.danger),
-      _                   => (Icons.help_outline_rounded, 'Unknown',      AppColors.textMuted),
+      PendingShiftOpen() => (
+          Icons.play_arrow_rounded,
+          'Open Shift',
+          AppColors.primary
+        ),
+      PendingOrder() => (Icons.receipt_rounded, 'Order', AppColors.success),
+      PendingShiftClose() => (
+          Icons.lock_outline_rounded,
+          'Close Shift',
+          AppColors.warning
+        ),
+      PendingVoidOrder() => (
+          Icons.cancel_outlined,
+          'Void Order',
+          AppColors.danger
+        ),
+      _ => (Icons.help_outline_rounded, 'Unknown', AppColors.textMuted),
     };
 
     final subtitle = switch (action) {
       PendingOrder() => '${(action as PendingOrder).items.length} item(s) · '
           '${egp((action as PendingOrder).items.fold(0, (s, i) => s + i.lineTotal))}',
-      PendingShiftOpen() => 'Opening cash: ${egp((action as PendingShiftOpen).openingCash)}',
-      PendingShiftClose() => 'Closing cash: ${egp((action as PendingShiftClose).closingCash)}',
-      PendingVoidOrder() => 'Reason: ${(action as PendingVoidOrder).reason.replaceAll("_", " ")}',
+      PendingShiftOpen() =>
+        'Opening cash: ${egp((action as PendingShiftOpen).openingCash)}',
+      PendingShiftClose() =>
+        'Closing cash: ${egp((action as PendingShiftClose).closingCash)}',
+      PendingVoidOrder() =>
+        'Reason: ${(action as PendingVoidOrder).reason.replaceAll("_", " ")}',
       _ => '',
     };
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color:        Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: isStuck
-            ? AppColors.danger.withOpacity(0.3) : AppColors.border),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(
+            color: isStuck
+                ? AppColors.danger.withOpacity(0.25)
+                : AppColors.border),
+        boxShadow: AppShadows.card,
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         leading: Container(
-          width: 40, height: 40,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-              color:        color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10)),
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(AppRadius.xs)),
           alignment: Alignment.center,
           child: Icon(icon, size: 18, color: color),
         ),
-        title: Text(label, style: cairo(fontSize: 14, fontWeight: FontWeight.w600)),
-        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        title: Text(label,
+            style: cairo(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle:
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (subtitle.isNotEmpty)
             Text(subtitle,
                 style: cairo(fontSize: 12, color: AppColors.textSecondary)),
@@ -196,12 +240,15 @@ class _ActionTile extends StatelessWidget {
           if (onRetry != null)
             TextButton(
               onPressed: onRetry,
-              child: Text('Retry', style: cairo(fontSize: 12,
-                  color: AppColors.primary, fontWeight: FontWeight.w600)),
+              child: Text('Retry',
+                  style: cairo(
+                      fontSize: 12,
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600)),
             ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded,
-                size: 18, color: AppColors.danger),
+                size: 17, color: AppColors.danger),
             onPressed: () => _confirmDiscard(context),
             tooltip: 'Discard',
           ),
@@ -211,21 +258,28 @@ class _ActionTile extends StatelessWidget {
   }
 
   void _confirmDiscard(BuildContext context) => showDialog(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Text('Discard?', style: cairo(fontWeight: FontWeight.w800)),
-      content: Text('This action will be permanently removed from the queue.',
-          style: cairo(fontSize: 14, color: AppColors.textSecondary)),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: cairo(color: AppColors.textSecondary))),
-        TextButton(
-          onPressed: () { Navigator.pop(ctx); onDiscard(); },
-          child: Text('Discard', style: cairo(
-              color: AppColors.danger, fontWeight: FontWeight.w700)),
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Discard?', style: cairo(fontWeight: FontWeight.w800)),
+          content: Text(
+              'This action will be permanently removed from the queue.',
+              style: cairo(
+                  fontSize: 14, color: AppColors.textSecondary, height: 1.5)),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('Cancel',
+                    style: cairo(color: AppColors.textSecondary))),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                onDiscard();
+              },
+              child: Text('Discard',
+                  style: cairo(
+                      color: AppColors.danger, fontWeight: FontWeight.w700)),
+            ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 }

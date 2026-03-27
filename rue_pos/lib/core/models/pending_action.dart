@@ -81,12 +81,12 @@ class PendingShiftOpen extends PendingAction {
   Map<String, dynamic> toJson() => {
         'local_id': localId,
         'type': type.name,
-        'created_at': createdAt.toIso8601String(),
+        'created_at': createdAt.toUtc().toIso8601String(),
         'retry_count': retryCount,
         'branch_id': branchId,
         'shift_id': shiftId,
         'opening_cash': openingCash,
-        'opened_at': openedAt.toIso8601String(),
+        'opened_at': openedAt.toUtc().toIso8601String(),
       };
 
   factory PendingShiftOpen.fromJson(Map<String, dynamic> j) => PendingShiftOpen(
@@ -160,7 +160,7 @@ class PendingOrder extends PendingAction {
   Map<String, dynamic> toJson() => {
         'local_id': localId,
         'type': type.name,
-        'created_at': createdAt.toIso8601String(),
+        'created_at': createdAt.toUtc().toIso8601String(),
         'retry_count': retryCount,
         'branch_id': branchId,
         'shift_id': shiftId,
@@ -168,7 +168,7 @@ class PendingOrder extends PendingAction {
         'customer_name': customerName,
         'discount_type': discountType,
         'discount_value': discountValue,
-        'ordered_at': orderedAt.toIso8601String(),
+        'ordered_at': orderedAt.toUtc().toIso8601String(),
         'items': items.map((i) => i.toStorageJson()).toList(),
       };
 
@@ -242,14 +242,14 @@ class PendingShiftClose extends PendingAction {
   Map<String, dynamic> toJson() => {
         'local_id': localId,
         'type': type.name,
-        'created_at': createdAt.toIso8601String(),
+        'created_at': createdAt.toUtc().toIso8601String(),
         'retry_count': retryCount,
         'branch_id': branchId,
         'shift_id': shiftId,
         'closing_cash': closingCash,
         'cash_note': cashNote,
         'inventory_counts': inventoryCounts,
-        'closed_at': closedAt.toIso8601String(),
+        'closed_at': closedAt.toUtc().toIso8601String(),
       };
 
   factory PendingShiftClose.fromJson(Map<String, dynamic> j) =>
@@ -311,12 +311,12 @@ class PendingVoidOrder extends PendingAction {
   Map<String, dynamic> toJson() => {
         'local_id': localId,
         'type': type.name,
-        'created_at': createdAt.toIso8601String(),
+        'created_at': createdAt.toUtc().toIso8601String(),
         'retry_count': retryCount,
         'order_id': orderId,
         'reason': reason,
         'restore_inventory': restoreInventory,
-        'voided_at': voidedAt.toIso8601String(),
+        'voided_at': voidedAt.toUtc().toIso8601String(),
       };
 
   factory PendingVoidOrder.fromJson(Map<String, dynamic> j) => PendingVoidOrder(

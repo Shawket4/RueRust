@@ -53,19 +53,42 @@ pub struct ShiftPreFill {
     pub suggested_opening_cash: i32,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct PaymentSummaryRow {
+    pub payment_method: String,
+    pub total:          i64,
+    pub order_count:    i64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct CashMovementSummaryRow {
+    pub amount:        i32,
+    pub note:          String,
+    pub moved_by_name: String,
+    pub created_at:    chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ShiftReportResponse {
+    pub shift:              Shift,
+    pub payment_summary:    Vec<PaymentSummaryRow>,
+    pub total_payments:     i64,
+    pub total_returns:      i64,
+    pub net_payments:       i64,
+    pub cash_movements:     Vec<CashMovementSummaryRow>,
+    pub cash_movements_in:  i64,
+    pub cash_movements_out: i64,
+    pub printed_at:         chrono::DateTime<chrono::Utc>,
+}
+
 // ── Request types ─────────────────────────────────────────────
 
-/// Client may supply its own UUID so offline-created shifts can be
-/// synced without ID translation.  If omitted the server generates one.
 #[derive(Deserialize)]
 pub struct OpenShiftRequest {
-    /// Client-generated UUID (offline support). Server uses it as the PK.
     pub id:                  Option<Uuid>,
     pub opening_cash:        i32,
     pub opening_cash_edited: Option<bool>,
     pub edit_reason:         Option<String>,
-    /// ISO-8601 timestamp for when the shift was actually opened offline.
-    /// If omitted, NOW() is used.
     pub opened_at:           Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -87,7 +110,6 @@ pub struct CloseShiftRequest {
     pub closing_cash_declared: i32,
     pub cash_note:             Option<String>,
     pub inventory_counts:      Vec<InventoryCountInput>,
-    /// ISO-8601 timestamp for when the shift was actually closed offline.
     pub closed_at:             Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -95,6 +117,8 @@ pub struct CloseShiftRequest {
 pub struct ForceCloseRequest {
     pub reason: Option<String>,
 }
+
+
 
 // ── GET /shifts/branches/:branch_id/current ───────────────────
 
@@ -160,10 +184,6 @@ pub async fn get_current_shift(
 }
 
 // ── POST /shifts/branches/:branch_id/open ─────────────────────
-//
-// Idempotent: if a shift with the supplied `id` already exists for this
-// branch, return it immediately (HTTP 200) instead of creating a duplicate.
-// This lets the client safely retry after a network failure.
 
 pub async fn open_shift(
     req:       HttpRequest,
@@ -177,7 +197,6 @@ pub async fn open_shift(
 
     let shift_id = body.id.unwrap_or_else(Uuid::new_v4);
 
-    // ── Idempotency check: return existing shift if same UUID ─
     if let Some(existing) = sqlx::query_as::<_, Shift>(
         r#"
         SELECT
@@ -203,7 +222,6 @@ pub async fn open_shift(
         return Ok(HttpResponse::Ok().json(existing));
     }
 
-    // ── Enforce one open shift per branch ─────────────────────
     let already_open: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM shifts WHERE branch_id = $1 AND status = 'open')"
     )
@@ -257,7 +275,6 @@ pub async fn open_shift(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Snapshot active inventory items for this branch
     sqlx::query(
         r#"
         INSERT INTO shift_inventory_snapshots (shift_id, inventory_item_id, stock_at_open)
@@ -326,6 +343,94 @@ pub async fn get_shift(
     require_branch_access(pool.get_ref(), &claims, shift.branch_id).await?;
 
     Ok(HttpResponse::Ok().json(shift))
+}
+
+// ── GET /shifts/:shift_id/report ──────────────────────────────
+//
+// Returns payment breakdown + cash movement totals for any shift
+// (open or closed). printed_at is always NOW() so the client can
+// use: closed_at if available, otherwise printed_at.
+
+pub async fn get_shift_report(
+    req:      HttpRequest,
+    pool:     web::Data<PgPool>,
+    shift_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "shifts", "read").await?;
+
+    let shift = fetch_shift_or_404(pool.get_ref(), *shift_id).await?;
+    require_branch_access(pool.get_ref(), &claims, shift.branch_id).await?;
+
+    let payment_summary = sqlx::query_as::<_, PaymentSummaryRow>(
+        r#"
+        SELECT
+            payment_method::text,
+            COALESCE(SUM(total_amount), 0)::bigint AS total,
+            COUNT(*)::bigint                        AS order_count
+        FROM orders
+        WHERE shift_id = $1
+          AND status NOT IN ('voided', 'refunded')
+        GROUP BY payment_method
+        ORDER BY payment_method
+        "#,
+    )
+    .bind(*shift_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let total_returns: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(total_amount), 0)::bigint
+        FROM orders
+        WHERE shift_id = $1 AND status = 'voided'
+        "#,
+    )
+    .bind(*shift_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    let cash_movements = sqlx::query_as::<_, CashMovementSummaryRow>(
+        r#"
+        SELECT
+            m.amount,
+            m.note,
+            u.name AS moved_by_name,
+            m.created_at
+        FROM shift_cash_movements m
+        JOIN users u ON u.id = m.moved_by
+        WHERE m.shift_id = $1
+        ORDER BY m.created_at ASC
+        "#,
+    )
+    .bind(*shift_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let cash_movements_in: i64 = cash_movements.iter()
+        .filter(|m| m.amount > 0)
+        .map(|m| m.amount as i64)
+        .sum();
+
+    let cash_movements_out: i64 = cash_movements.iter()
+        .filter(|m| m.amount < 0)
+        .map(|m| m.amount.unsigned_abs() as i64)
+        .sum();
+
+    let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
+    let net_payments = total_payments - total_returns;
+
+    Ok(HttpResponse::Ok().json(ShiftReportResponse {
+        shift,
+        payment_summary,
+        total_payments,
+        total_returns,
+        net_payments,
+        cash_movements,
+        cash_movements_in,
+        cash_movements_out,
+        printed_at: chrono::Utc::now(),
+    }))
 }
 
 // ── POST /shifts/:shift_id/cash-movements ─────────────────────
@@ -409,8 +514,6 @@ pub async fn list_cash_movements(
 }
 
 // ── POST /shifts/:shift_id/close ──────────────────────────────
-//
-// Idempotent: if the shift is already closed, return the existing data.
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct InventoryCountRow {
@@ -442,7 +545,6 @@ pub async fn close_shift(
     let shift = fetch_shift_or_404(pool.get_ref(), *shift_id).await?;
     require_branch_access(pool.get_ref(), &claims, shift.branch_id).await?;
 
-    // ── Idempotency: already closed → return existing data ────
     if shift.status != "open" {
         let existing_counts = sqlx::query_as::<_, InventoryCountRow>(
             r#"
@@ -470,7 +572,6 @@ pub async fn close_shift(
         }));
     }
 
-    // ── Calculate expected cash ───────────────────────────────
     let cash_from_orders: i32 = sqlx::query_scalar(
         r#"
         SELECT COALESCE(SUM(total_amount), 0)::int
@@ -492,11 +593,9 @@ pub async fn close_shift(
     .await?;
 
     let closing_cash_system = shift.opening_cash + cash_from_orders + cash_movements_total;
-
     let closed_at = body.closed_at.unwrap_or_else(chrono::Utc::now);
 
     let mut tx = pool.get_ref().begin().await?;
-
     let mut inventory_counts: Vec<InventoryCountRow> = Vec::new();
 
     for count in &body.inventory_counts {
@@ -527,8 +626,8 @@ pub async fn close_shift(
         .fetch_one(&mut *tx)
         .await?;
 
-        let expected     = &snapshot - &consumed;
-        let actual       = sqlx::types::BigDecimal::try_from(count.actual_stock)
+        let expected      = &snapshot - &consumed;
+        let actual        = sqlx::types::BigDecimal::try_from(count.actual_stock)
             .map_err(|_| AppError::BadRequest("Invalid actual_stock value".into()))?;
         let is_suspicious = actual > expected;
 

@@ -838,9 +838,10 @@ async fn require_branch_access(
 
 fn validate_payment_method(method: &str) -> Result<(), AppError> {
     match method {
-        "cash" | "card" | "digital_wallet" | "mixed" => Ok(()),
+        "cash" | "card" | "digital_wallet" | "mixed"
+        | "talabat_online" | "talabat_cash" => Ok(()),
         _ => Err(AppError::BadRequest(
-            "payment_method must be one of: cash, card, digital_wallet, mixed".into(),
+            "payment_method must be one of: cash, card, digital_wallet, mixed, talabat_online, talabat_cash".into(),
         )),
     }
 }

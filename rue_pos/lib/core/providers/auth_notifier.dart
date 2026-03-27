@@ -16,6 +16,7 @@ class AuthState {
   final Branch? branch;
   final String? error;
   final SessionExpiry sessionExpiry;
+  final String? blockedByName;
 
   const AuthState({
     this.isLoading = true,
@@ -23,6 +24,7 @@ class AuthState {
     this.branch,
     this.error,
     this.sessionExpiry = SessionExpiry.none,
+    this.blockedByName,
   });
 
   bool get isAuthenticated => user != null;
@@ -33,9 +35,11 @@ class AuthState {
     Branch? branch,
     String? error,
     SessionExpiry? sessionExpiry,
+    String? blockedByName,
     bool clearUser = false,
     bool clearBranch = false,
     bool clearError = false,
+    bool clearBlocked = false,
   }) =>
       AuthState(
         isLoading: isLoading ?? this.isLoading,
@@ -43,13 +47,14 @@ class AuthState {
         branch: clearBranch ? null : (branch ?? this.branch),
         error: clearError ? null : (error ?? this.error),
         sessionExpiry: sessionExpiry ?? this.sessionExpiry,
+        blockedByName:
+            clearBlocked ? null : (blockedByName ?? this.blockedByName),
       );
 }
 
 class AuthNotifier extends Notifier<AuthState> {
   @override
   AuthState build() {
-    // Wire 401 → auto-logout (fires from Dio interceptor)
     onUnauthorizedCallback = () {
       if (state.user != null) {
         _forceLogout(expiry: SessionExpiry.expired);
@@ -71,10 +76,13 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   // ── Login ──────────────────────────────────────────────────────────────────
-  /// Returns null on success, or an error string.
   Future<String?> login({required String name, required String pin}) async {
     state = state.copyWith(
-        isLoading: true, clearError: true, sessionExpiry: SessionExpiry.none);
+      isLoading: true,
+      clearError: true,
+      clearBlocked: true,
+      sessionExpiry: SessionExpiry.none,
+    );
     try {
       final session =
           await ref.read(authRepositoryProvider).login(name: name, pin: pin);
@@ -82,14 +90,13 @@ class AuthNotifier extends Notifier<AuthState> {
           await _hydrateAfterAuth(session.user, emitLoading: true);
       return blockError;
     } catch (e) {
-      state = state.copyWith(isLoading: false, error: _friendly(e));
-      return _friendly(e);
+      final msg = _friendly(e);
+      state = state.copyWith(isLoading: false, error: msg);
+      return msg;
     }
   }
 
   // ── Post-auth hydration + shift guard ─────────────────────────────────────
-  /// Loads branch, then checks shift ownership.
-  /// Returns a non-null error string if login should be BLOCKED.
   Future<String?> _hydrateAfterAuth(User user,
       {required bool emitLoading}) async {
     if (emitLoading) state = state.copyWith(isLoading: true);
@@ -109,7 +116,7 @@ class AuthNotifier extends Notifier<AuthState> {
       }
     }
 
-    // 2. Shift ownership guard — only when branch is assigned
+    // 2. Shift ownership guard
     if (user.branchId != null) {
       try {
         final preFill =
@@ -119,16 +126,20 @@ class AuthNotifier extends Notifier<AuthState> {
         if (openShift != null &&
             openShift.isOpen &&
             openShift.tellerId != user.id) {
-          // Another teller's shift is open on this branch → BLOCK
+          // Another teller's shift is open — block login
           await ref.read(authRepositoryProvider).logout();
-          state = const AuthState(
-            isLoading: false,
-            sessionExpiry: SessionExpiry.blockedByOtherShift,
-          );
-          return 'Branch has an open shift belonging to '
+          final msg = 'Branch has an open shift belonging to '
               '"${openShift.tellerName}". '
               'That shift must be closed before anyone else can sign in.';
+          state = AuthState(
+            isLoading: false,
+            sessionExpiry: SessionExpiry.blockedByOtherShift,
+            blockedByName: openShift.tellerName,
+            error: msg,
+          );
+          return msg;
         }
+
         // Cache the open shift if it belongs to this user
         if (openShift != null) {
           await ref
@@ -136,24 +147,23 @@ class AuthNotifier extends Notifier<AuthState> {
               .saveShift(user.branchId!, openShift.toJson());
         }
       } catch (_) {
-        // Network error during shift check — allow login, shift screen will handle it
+        // Network error during shift check — allow login
       }
     }
 
-    // 3. All good
+    // 3. All good — set authenticated state
     state = state.copyWith(
       isLoading: false,
       user: user,
       branch: branch,
       clearError: true,
+      clearBlocked: true,
       sessionExpiry: SessionExpiry.none,
     );
     return null;
   }
 
   // ── Logout guard ───────────────────────────────────────────────────────────
-  /// Checks if a shift is open. Returns true if logout is safe.
-  /// If a shift is open, the router redirects to close-shift instead.
   Future<bool> canLogout() async {
     final branchId = state.user?.branchId;
     if (branchId == null) return true;
@@ -161,7 +171,6 @@ class AuthNotifier extends Notifier<AuthState> {
       final preFill = await ref.read(shiftApiProvider).current(branchId);
       return !(preFill.openShift?.isOpen ?? false);
     } catch (_) {
-      // If we can't check (offline), check local cache
       final cached = ref.read(storageServiceProvider).loadShift(branchId);
       if (cached != null) {
         final shift = Shift.fromJson(cached);

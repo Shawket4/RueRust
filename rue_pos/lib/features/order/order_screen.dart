@@ -30,7 +30,6 @@ const _skeletonHighlight = Color(0xFFE4E7ED);
 // ─────────────────────────────────────────────────────────────────────────────
 class OrderScreen extends ConsumerStatefulWidget {
   const OrderScreen({super.key});
-
   @override
   ConsumerState<OrderScreen> createState() => _OrderScreenState();
 }
@@ -59,7 +58,6 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   @override
   Widget build(BuildContext context) {
     final isTablet = MediaQuery.of(context).size.width >= 768;
-
     return Scaffold(
       backgroundColor: AppColors.bg,
       floatingActionButton: isTablet ? null : _MobileCartFab(),
@@ -128,11 +126,9 @@ class _TopBar extends ConsumerWidget {
         const SizedBox(width: 6),
         _SyncBtn(),
         const SizedBox(width: 6),
-        Text('$lastSynced',
+        Text(lastSynced,
             style: cairo(fontSize: 11, color: AppColors.textMuted)),
         const SizedBox(width: 14),
-
-        // Search
         Expanded(
           child: Container(
             height: 38,
@@ -164,8 +160,6 @@ class _TopBar extends ConsumerWidget {
             ),
           ),
         ),
-
-        // Cart pill (tablet)
         if (isTablet) ...[
           const SizedBox(width: 12),
           AnimatedSwitcher(
@@ -229,12 +223,13 @@ class _StatusBanner extends StatelessWidget {
   final String text;
   final Color textColor;
   final bool animate;
-  const _StatusBanner(
-      {required this.color,
-      required this.icon,
-      required this.text,
-      required this.textColor,
-      this.animate = false});
+  const _StatusBanner({
+    required this.color,
+    required this.icon,
+    required this.text,
+    required this.textColor,
+    this.animate = false,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
@@ -327,7 +322,6 @@ class _CategoryRail extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final menu = ref.watch(menuProvider);
-
     return Container(
       width: 88,
       decoration: const BoxDecoration(
@@ -339,7 +333,6 @@ class _CategoryRail extends ConsumerWidget {
         itemBuilder: (_, i) {
           final cat = menu.categories[i];
           final sel = cat.id == menu.selectedCategoryId;
-
           return GestureDetector(
             onTap: () => ref.read(menuProvider.notifier).selectCategory(cat.id),
             child: AnimatedContainer(
@@ -567,7 +560,6 @@ class _MobileCartSheet extends ConsumerWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _MenuCardSkeleton extends StatefulWidget {
   const _MenuCardSkeleton();
-
   @override
   State<_MenuCardSkeleton> createState() => _MenuCardSkeletonState();
 }
@@ -576,7 +568,6 @@ class _MenuCardSkeletonState extends State<_MenuCardSkeleton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
-
   @override
   void initState() {
     super.initState();
@@ -641,7 +632,6 @@ class _ImageSkeletonState extends State<_ImageSkeleton>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
-
   @override
   void initState() {
     super.initState();
@@ -670,7 +660,6 @@ class _ImageSkeletonState extends State<_ImageSkeleton>
 class _CatStyle {
   final IconData icon;
   final Color bgTop, bgBottom, iconColor, accent;
-
   const _CatStyle({
     required this.icon,
     required this.bgTop,
@@ -681,14 +670,13 @@ class _CatStyle {
 
   static _CatStyle of(String name) {
     final n = name.toLowerCase();
-    if (n.contains('matcha')) {
+    if (n.contains('matcha'))
       return const _CatStyle(
           icon: Icons.eco_rounded,
           bgTop: Color(0xFFE8F5E9),
           bgBottom: Color(0xFFC8E6C9),
           iconColor: Color(0xFF2E7D32),
           accent: Color(0xFF388E3C));
-    }
     if (n.contains('latte') ||
         n.contains('espresso') ||
         n.contains('americano') ||
@@ -698,90 +686,81 @@ class _CatStyle {
         n.contains('coffee') ||
         n.contains('v60') ||
         n.contains('blended') ||
-        n.contains('cold brew')) {
+        n.contains('cold brew'))
       return const _CatStyle(
           icon: Icons.coffee_rounded,
           bgTop: Color(0xFFF5EEE6),
           bgBottom: Color(0xFFEDD9C0),
           iconColor: Color(0xFF5D4037),
           accent: Color(0xFF795548));
-    }
-    if (n.contains('chocolate') || n.contains('mocha')) {
+    if (n.contains('chocolate') || n.contains('mocha'))
       return const _CatStyle(
           icon: Icons.coffee_rounded,
           bgTop: Color(0xFFF3E5E5),
           bgBottom: Color(0xFFE8CECE),
           iconColor: Color(0xFF6D4C41),
           accent: Color(0xFF8D3A3A));
-    }
     if (n.contains('croissant') ||
         n.contains('brownie') ||
         n.contains('cookie') ||
         n.contains('pastry') ||
         n.contains('pastries') ||
         n.contains('cake') ||
-        n.contains('waffle')) {
+        n.contains('waffle'))
       return const _CatStyle(
           icon: Icons.bakery_dining_rounded,
           bgTop: Color(0xFFFFF8E8),
           bgBottom: Color(0xFFFFF0C8),
           iconColor: Color(0xFFE65100),
           accent: Color(0xFFF57C00));
-    }
     if (n.contains('sandwich') ||
         n.contains('chicken') ||
         n.contains('turkey') ||
-        n.contains('food')) {
+        n.contains('food'))
       return const _CatStyle(
           icon: Icons.lunch_dining_rounded,
           bgTop: Color(0xFFFFF3E0),
           bgBottom: Color(0xFFFFE0B2),
           iconColor: Color(0xFFE64A19),
           accent: Color(0xFFEF6C00));
-    }
-    if (n.contains('affogato') || n.contains('ice cream')) {
+    if (n.contains('affogato') || n.contains('ice cream'))
       return const _CatStyle(
           icon: Icons.icecream_rounded,
           bgTop: Color(0xFFF3E5F5),
           bgBottom: Color(0xFFE1BEE7),
           iconColor: Color(0xFF7B1FA2),
           accent: Color(0xFF9C27B0));
-    }
     if (n.contains('lemon') ||
         n.contains('lemonade') ||
         n.contains('refresher') ||
-        n.contains('juice')) {
+        n.contains('juice'))
       return const _CatStyle(
           icon: Icons.local_drink_rounded,
           bgTop: Color(0xFFFFFDE7),
           bgBottom: Color(0xFFFFF9C4),
           iconColor: Color(0xFFF57F17),
           accent: Color(0xFFFBC02D));
-    }
-    if (n.contains('tea') || n.contains('chai')) {
+    if (n.contains('tea') || n.contains('chai'))
       return const _CatStyle(
           icon: Icons.emoji_food_beverage_rounded,
           bgTop: Color(0xFFE8F5E9),
           bgBottom: Color(0xFFC8E6C9),
           iconColor: Color(0xFF388E3C),
           accent: Color(0xFF43A047));
-    }
-    if (n.contains('water') || n.contains('sparkling')) {
+    if (n.contains('water') || n.contains('sparkling'))
       return const _CatStyle(
           icon: Icons.water_drop_rounded,
           bgTop: Color(0xFFE3F2FD),
           bgBottom: Color(0xFFBBDEFB),
           iconColor: Color(0xFF1565C0),
           accent: Color(0xFF1976D2));
-    }
-    if (n.contains('iced')) {
+    if (n.contains('iced'))
       return const _CatStyle(
           icon: Icons.ac_unit_rounded,
           bgTop: Color(0xFFE3F2FD),
           bgBottom: Color(0xFFBBDEFB),
           iconColor: Color(0xFF0277BD),
           accent: Color(0xFF0288D1));
-    }
     return const _CatStyle(
         icon: Icons.local_cafe_rounded,
         bgTop: Color(0xFFF5EEE6),
@@ -797,7 +776,6 @@ class _CatStyle {
 class _MenuCard extends ConsumerStatefulWidget {
   final MenuItem item;
   const _MenuCard({required this.item});
-
   @override
   ConsumerState<_MenuCard> createState() => _MenuCardState();
 }
@@ -855,32 +833,27 @@ class _MenuCardState extends ConsumerState<_MenuCard>
           child: ClipRRect(
             borderRadius: BorderRadius.circular(AppRadius.md),
             child: Column(children: [
-              // Image / background
               Expanded(
-                child: Stack(children: [
-                  Positioned.fill(
-                      child: hasImage
-                          ? Image.network(item.imageUrl!,
-                              fit: BoxFit.cover,
-                              loadingBuilder: (_, child, prog) =>
-                                  prog == null ? child : _ImageSkeleton(),
-                              errorBuilder: (_, __, ___) =>
-                                  _CardBg(style: style))
-                          : _CardBg(style: style)),
-                  if (!hasImage)
-                    Center(
-                        child: Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                          color: style.iconColor.withOpacity(0.11),
-                          shape: BoxShape.circle),
-                      child: Icon(style.icon, size: 26, color: style.iconColor),
-                    )),
-                ]),
-              ),
-
-              // Name + price row
+                  child: Stack(children: [
+                Positioned.fill(
+                    child: hasImage
+                        ? Image.network(item.imageUrl!,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (_, child, prog) =>
+                                prog == null ? child : _ImageSkeleton(),
+                            errorBuilder: (_, __, ___) => _CardBg(style: style))
+                        : _CardBg(style: style)),
+                if (!hasImage)
+                  Center(
+                      child: Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                        color: style.iconColor.withOpacity(0.11),
+                        shape: BoxShape.circle),
+                    child: Icon(style.icon, size: 26, color: style.iconColor),
+                  )),
+              ])),
               Container(
                 color: Colors.white,
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
@@ -921,7 +894,6 @@ class _MenuCardState extends ConsumerState<_MenuCard>
 class _CardBg extends StatelessWidget {
   final _CatStyle style;
   const _CardBg({required this.style});
-
   @override
   Widget build(BuildContext context) => Container(
       decoration: BoxDecoration(
@@ -998,9 +970,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   void _toggleSingle(String gId, String oId, bool req) => setState(() {
         if (_single[gId] == oId) {
           if (!req) _single.remove(gId);
-        } else {
+        } else
           _single[gId] = oId;
-        }
       });
 
   void _toggleMulti(String gId, String oId) => setState(() {
@@ -1057,7 +1028,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: AppRadius.sheetRadius),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Handle
           Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Center(
@@ -1067,8 +1037,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: AppColors.border,
                           borderRadius: BorderRadius.circular(2))))),
-
-          // Header
           Container(
             padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
             decoration: const BoxDecoration(
@@ -1093,8 +1061,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                     ],
                   ])),
               const SizedBox(width: 16),
-
-              // Price badge — animates on change
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 200),
                 transitionBuilder: (child, anim) => SlideTransition(
@@ -1118,8 +1084,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               ),
             ]),
           ),
-
-          // Options
           Flexible(
               child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
@@ -1157,15 +1121,12 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               const SizedBox(height: 6),
             ]),
           )),
-
-          // Footer
           Container(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
             decoration: const BoxDecoration(
                 color: Colors.white,
                 border: Border(top: BorderSide(color: AppColors.border))),
             child: Row(children: [
-              // Quantity control
               Container(
                 decoration: BoxDecoration(
                     color: AppColors.bg,
@@ -1220,7 +1181,6 @@ class _OptionGroupCard extends StatefulWidget {
   final Set<String> selectedMulti;
   final void Function(String) onToggleSingle;
   final void Function(String) onToggleMulti;
-
   const _OptionGroupCard({
     required this.group,
     required this.selectedSingle,
@@ -1228,7 +1188,6 @@ class _OptionGroupCard extends StatefulWidget {
     required this.onToggleSingle,
     required this.onToggleMulti,
   });
-
   @override
   State<_OptionGroupCard> createState() => _OptionGroupCardState();
 }
@@ -1236,7 +1195,6 @@ class _OptionGroupCard extends StatefulWidget {
 class _OptionGroupCardState extends State<_OptionGroupCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
-
   @override
   void initState() {
     super.initState();
@@ -1374,7 +1332,6 @@ class _CartPanel extends ConsumerWidget {
           color: Colors.white,
           border: Border(left: BorderSide(color: AppColors.border))),
       child: Column(children: [
-        // Header
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: const BoxDecoration(
@@ -1408,8 +1365,6 @@ class _CartPanel extends ConsumerWidget {
               ),
           ]),
         ),
-
-        // Items
         Expanded(
             child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 250),
@@ -1422,7 +1377,6 @@ class _CartPanel extends ConsumerWidget {
                   separatorBuilder: (_, __) => const SizedBox(height: 6),
                   itemBuilder: (_, i) => _CartRow(index: i)),
         )),
-
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
           child: cart.isEmpty ? const SizedBox.shrink() : const _CartFooter(),
@@ -1460,7 +1414,6 @@ class _CartPanel extends ConsumerWidget {
 
 class _EmptyCart extends StatelessWidget {
   const _EmptyCart();
-
   @override
   Widget build(BuildContext context) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1575,7 +1528,6 @@ class _CartFooter extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cart = ref.watch(cartProvider);
-
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 16),
       decoration: const BoxDecoration(
@@ -1621,6 +1573,49 @@ class _CartFooter extends ConsumerWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  PAYMENT METHOD DATA
+// ─────────────────────────────────────────────────────────────────────────────
+class _PaymentMethod {
+  final String value;
+  final String label;
+  final IconData icon;
+  final Color color;
+  const _PaymentMethod({
+    required this.value,
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+}
+
+const _kPaymentMethods = [
+  _PaymentMethod(
+    value: 'cash',
+    label: 'Cash',
+    icon: Icons.payments_outlined,
+    color: AppColors.primary,
+  ),
+  _PaymentMethod(
+    value: 'card',
+    label: 'Card',
+    icon: Icons.credit_card_rounded,
+    color: AppColors.primary,
+  ),
+  _PaymentMethod(
+    value: 'talabat_online',
+    label: 'Talabat Online',
+    icon: Icons.delivery_dining_rounded,
+    color: Color(0xFFFF6B00),
+  ),
+  _PaymentMethod(
+    value: 'talabat_cash',
+    label: 'Talabat Cash',
+    icon: Icons.delivery_dining_rounded,
+    color: Color(0xFFFF6B00),
+  ),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  CHECKOUT SHEET
 // ─────────────────────────────────────────────────────────────────────────────
 class CheckoutSheet extends ConsumerStatefulWidget {
@@ -1640,7 +1635,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   bool _loading = false;
   String? _error;
   final _customerCtrl = TextEditingController();
-  static const _methods = ['cash', 'card'];
 
   @override
   void dispose() {
@@ -1755,7 +1749,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Handle
             Center(
                 child: Container(
                     width: 36,
@@ -1785,7 +1778,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 LabelValue('Total', egp(cart.total), bold: true),
               ]),
             ),
-
             const SizedBox(height: 18),
 
             // Customer
@@ -1806,10 +1798,9 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                   prefixIcon: const Icon(Icons.person_outline_rounded,
                       size: 18, color: AppColors.textMuted),
                 )),
-
             const SizedBox(height: 18),
 
-            // Payment
+            // Payment label
             Text('PAYMENT',
                 style: cairo(
                     fontSize: 10,
@@ -1818,40 +1809,55 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                     letterSpacing: 1.2)),
             const SizedBox(height: 10),
 
-            Row(
-                children: _methods.map((m) {
-              final sel = cart.payment == m;
-              final label = m[0].toUpperCase() + m.substring(1);
-              final icon = m == 'cash'
-                  ? Icons.payments_outlined
-                  : Icons.credit_card_rounded;
-              return Expanded(
-                  child: GestureDetector(
-                onTap: () => ref.read(cartProvider.notifier).setPayment(m),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  decoration: BoxDecoration(
-                      color: sel ? AppColors.primary : AppColors.bg,
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
-                      border: Border.all(
-                          color: sel ? AppColors.primary : AppColors.border)),
-                  child: Column(children: [
-                    Icon(icon,
-                        size: 22,
-                        color: sel ? Colors.white : AppColors.textSecondary),
-                    const SizedBox(height: 6),
-                    Text(label,
-                        style: cairo(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color:
-                                sel ? Colors.white : AppColors.textSecondary)),
-                  ]),
-                ),
-              ));
-            }).toList()),
+            // ── Payment grid ────────────────────────────────────────────────────
+            // Uses LayoutBuilder so width is always correct regardless of context
+            // (bottom sheet, tablet constraint, etc.)
+            LayoutBuilder(builder: (ctx, constraints) {
+              final btnW = (constraints.maxWidth - 8) / 2; // 2 cols, 8px gap
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _kPaymentMethods.map((m) {
+                  final sel = cart.payment == m.value;
+                  return GestureDetector(
+                    onTap: () =>
+                        ref.read(cartProvider.notifier).setPayment(m.value),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: btnW,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 11),
+                      decoration: BoxDecoration(
+                          color: sel ? m.color : AppColors.bg,
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                          border: Border.all(
+                              color: sel ? m.color : AppColors.border,
+                              width: sel ? 1.5 : 1)),
+                      child: Row(children: [
+                        Icon(m.icon,
+                            size: 20, color: sel ? Colors.white : m.color),
+                        const SizedBox(width: 10),
+                        Expanded(
+                            child: Text(m.label,
+                                style: cairo(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: sel
+                                        ? Colors.white
+                                        : AppColors.textPrimary),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis)),
+                        if (sel) ...[
+                          const SizedBox(width: 4),
+                          const Icon(Icons.check_circle_rounded,
+                              size: 15, color: Colors.white),
+                        ],
+                      ]),
+                    ),
+                  );
+                }).toList(),
+              );
+            }),
 
             // Error
             AnimatedSize(
@@ -1978,10 +1984,7 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
               borderRadius: BorderRadius.circular(AppRadius.sm),
               border: Border.all(color: AppColors.border)),
           child: Column(children: [
-            LabelValue(
-                'Payment',
-                o.paymentMethod[0].toUpperCase() +
-                    o.paymentMethod.substring(1).replaceAll('_', ' ')),
+            LabelValue('Payment', _paymentLabel(o.paymentMethod)),
             if (o.customerName != null && o.customerName!.isNotEmpty)
               LabelValue('Customer', o.customerName!),
             LabelValue('Total', egp(o.totalAmount), bold: true),
@@ -2039,6 +2042,16 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
       ]),
     );
   }
+
+  String _paymentLabel(String method) => switch (method) {
+        'cash' => 'Cash',
+        'card' => 'Card',
+        'digital_wallet' => 'Digital Wallet',
+        'mixed' => 'Mixed',
+        'talabat_online' => 'Talabat Online',
+        'talabat_cash' => 'Talabat Cash',
+        _ => method[0].toUpperCase() + method.substring(1).replaceAll('_', ' '),
+      };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2047,7 +2060,6 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
 class _SectionLabel extends StatelessWidget {
   final String label;
   const _SectionLabel(this.label);
-
   @override
   Widget build(BuildContext context) => Text(label.toUpperCase(),
       style: cairo(
@@ -2061,7 +2073,6 @@ class _Pill extends StatelessWidget {
   final String text;
   final Color color;
   const _Pill(this.text, this.color);
-
   @override
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -2079,7 +2090,6 @@ class _Pill extends StatelessWidget {
 class _CountBadge extends StatelessWidget {
   final int count;
   const _CountBadge({super.key, required this.count});
-
   @override
   Widget build(BuildContext context) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -2099,7 +2109,6 @@ class _Chip extends StatelessWidget {
   final bool selected;
   final bool checkbox;
   final VoidCallback onTap;
-
   const _Chip({
     required this.label,
     this.sublabel,
@@ -2159,7 +2168,6 @@ class _QtyBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   const _QtyBtn({required this.icon, required this.onTap});
-
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
@@ -2174,7 +2182,6 @@ class _InlineBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   const _InlineBtn({required this.icon, required this.onTap});
-
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
@@ -2193,7 +2200,6 @@ class _IconBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   const _IconBtn({required this.icon, required this.onTap});
-
   @override
   Widget build(BuildContext context) => GestureDetector(
       onTap: onTap,
@@ -2212,7 +2218,6 @@ class _ErrorState extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
   const _ErrorState({required this.message, required this.onRetry});
-
   @override
   Widget build(BuildContext context) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [

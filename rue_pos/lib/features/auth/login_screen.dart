@@ -16,7 +16,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   final _nameCtrl = TextEditingController();
   String _pin = '';
   bool _loading = false;
-  String? _error;
   static const _max = 6;
 
   late final AnimationController _shakeCtrl;
@@ -38,10 +37,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
   void _digit(String d) {
     if (_loading || _pin.length >= _max) return;
-    setState(() {
-      _pin += d;
-      _error = null;
-    });
+    setState(() => _pin += d);
+    // Clear error when user starts typing again
+    if (ref.read(authProvider).error != null) {
+      ref.read(authProvider.notifier).state =
+          ref.read(authProvider).copyWith(clearError: true);
+    }
     if (_pin.length == _max) _submit();
   }
 
@@ -53,29 +54,27 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   Future<void> _submit() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      setState(() {
-        _error = 'Please enter your name';
-        _pin = '';
-      });
       _shakeCtrl.forward(from: 0);
+      setState(() => _pin = '');
+      // Set error via notifier state so it persists
+      ref.read(authProvider.notifier).state =
+          ref.read(authProvider).copyWith(error: 'Please enter your name');
       return;
     }
     if (_pin.length < 4) return;
 
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    setState(() => _loading = true);
+
     final err =
         await ref.read(authProvider.notifier).login(name: name, pin: _pin);
+
     if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _pin = '';
+    });
 
     if (err != null) {
-      setState(() {
-        _error = err;
-        _pin = '';
-        _loading = false;
-      });
       _shakeCtrl.forward(from: 0);
     }
   }
@@ -90,17 +89,37 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   @override
   Widget build(BuildContext context) {
     final expiry = ref.watch(authProvider.select((s) => s.sessionExpiry));
+    final blockedBy = ref.watch(authProvider.select((s) => s.blockedByName));
+    final authError = ref.watch(authProvider.select((s) => s.error));
     final isTablet = MediaQuery.of(context).size.width >= 768;
+
+    // Show error from AuthState (survives router rebuilds)
+    final displayError = expiry == SessionExpiry.blockedByOtherShift
+        ? null // shown in banner instead
+        : authError;
 
     return Scaffold(
       backgroundColor: Colors.white,
       body: isTablet
-          ? _TabletLayout(form: _buildForm(expiry))
-          : _buildForm(expiry),
+          ? _TabletLayout(
+              form: _buildForm(
+              expiry: expiry,
+              blockedBy: blockedBy,
+              displayError: displayError,
+            ))
+          : _buildForm(
+              expiry: expiry,
+              blockedBy: blockedBy,
+              displayError: displayError,
+            ),
     );
   }
 
-  Widget _buildForm(SessionExpiry expiry) {
+  Widget _buildForm({
+    required SessionExpiry expiry,
+    required String? blockedBy,
+    required String? displayError,
+  }) {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
@@ -123,16 +142,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             // ── Session banners ──────────────────────────────────────────────
             if (expiry == SessionExpiry.expired)
               _InfoBanner(
-                  icon: Icons.lock_clock_outlined,
-                  text: 'Your session expired — please sign in again.',
-                  color: AppColors.warning),
+                icon: Icons.lock_clock_outlined,
+                text: 'Your session expired — please sign in again.',
+                color: AppColors.warning,
+              ),
 
-            if (expiry == SessionExpiry.blockedByOtherShift && _error != null)
+            if (expiry == SessionExpiry.blockedByOtherShift &&
+                blockedBy != null)
               _InfoBanner(
-                  icon: Icons.block_rounded,
-                  text: _error!,
-                  color: AppColors.danger,
-                  bold: true),
+                icon: Icons.block_rounded,
+                text: 'Branch has an open shift belonging to "$blockedBy". '
+                    'They must close it before you can sign in.',
+                color: AppColors.danger,
+                bold: true,
+              ),
 
             // ── Divider ──────────────────────────────────────────────────────
             Row(children: [
@@ -159,7 +182,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 controller: _nameCtrl,
                 enabled: !_loading,
                 textCapitalization: TextCapitalization.words,
-                onChanged: (_) => setState(() => _error = null),
+                onChanged: (_) {
+                  // Clear error when user edits name
+                  if (ref.read(authProvider).error != null) {
+                    ref.read(authProvider.notifier).state =
+                        ref.read(authProvider).copyWith(clearError: true);
+                  }
+                },
                 style: cairo(fontSize: 15),
                 decoration: InputDecoration(
                   hintText: 'Your name',
@@ -190,18 +219,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               builder: (_, child) => Transform.translate(
                   offset: Offset(_shakeAnim.value, 0), child: child),
               child: PinPad(
-                  pin: _pin,
-                  maxLength: _max,
-                  onDigit: _digit,
-                  onBackspace: _back),
+                pin: _pin,
+                maxLength: _max,
+                onDigit: _digit,
+                onBackspace: _back,
+              ),
             ),
 
             // ── Error ────────────────────────────────────────────────────────
             AnimatedSize(
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOut,
-              child: (_error != null &&
-                      expiry != SessionExpiry.blockedByOtherShift)
+              child: displayError != null
                   ? Padding(
                       padding: const EdgeInsets.only(top: 20),
                       child: Container(
@@ -219,7 +248,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                               size: 15, color: AppColors.danger),
                           const SizedBox(width: 8),
                           Flexible(
-                              child: Text(_error!,
+                              child: Text(displayError,
                                   style: cairo(
                                       fontSize: 13, color: AppColors.danger))),
                         ]),
@@ -285,7 +314,6 @@ class _TabletLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        // Left panel — brand
         Expanded(
           flex: 5,
           child: Container(
@@ -322,7 +350,6 @@ class _TabletLayout extends StatelessWidget {
                             color: Colors.white.withOpacity(0.72),
                             height: 1.65)),
                     const SizedBox(height: 48),
-                    // Decorative dots
                     Row(children: [
                       _Dot(AppColors.surface.withOpacity(0.6)),
                       const SizedBox(width: 8),
@@ -336,8 +363,6 @@ class _TabletLayout extends StatelessWidget {
             ),
           ),
         ),
-
-        // Right panel — form
         Expanded(
           flex: 4,
           child: Container(color: Colors.white, child: form),

@@ -348,12 +348,18 @@ class _PaymentBadge extends StatelessWidget {
       'card' => 'Card',
       'digital_wallet' => 'Wallet',
       'mixed' => 'Mixed',
+      'talabat_online' => 'Talabat Online',
+      'talabat_cash' => 'Talabat Cash',
       _ => method[0].toUpperCase() + method.substring(1),
     };
+
     final color = switch (method) {
-      'cash' => AppColors.success,
+      'cash' => const Color(0xFF059669),
       'card' => const Color(0xFF7C3AED),
       'digital_wallet' => const Color(0xFF0EA5E9),
+      'mixed' => AppColors.primary,
+      'talabat_online' => const Color(0xFFFF6B00),
+      'talabat_cash' => const Color(0xFFFF6B00),
       _ => AppColors.primary,
     };
     return Container(
@@ -602,12 +608,14 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
     );
   }
 
-  String _paymentLabel(String m) => switch (m) {
+  String _paymentLabel(String method) => switch (method) {
         'cash' => 'Cash',
         'card' => 'Card',
         'digital_wallet' => 'Digital Wallet',
         'mixed' => 'Mixed',
-        _ => m,
+        'talabat_online' => 'Talabat Online',
+        'talabat_cash' => 'Talabat Cash',
+        _ => method,
       };
 
   String _voidReasonLabel(String r) => switch (r) {

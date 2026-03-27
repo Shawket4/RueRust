@@ -18,29 +18,48 @@ final routerProvider = Provider<GoRouter>((ref) {
     initialLocation: '/login',
     refreshListenable: authListenable,
     redirect: (context, state) {
-      final auth    = ref.read(authProvider);
-      final authed  = auth.isAuthenticated;
+      final auth = ref.read(authProvider);
+      final authed = auth.isAuthenticated;
+      final loading = auth.isLoading;
       final onLogin = state.matchedLocation == '/login';
+
+      // Never redirect while auth is in progress —
+      // prevents mid-login redirects back to /login
+      if (loading) return null;
+
       if (!authed && !onLogin) return '/login';
-      if (authed  &&  onLogin) return '/home';
+      if (authed && onLogin) return '/home';
       return null;
     },
     routes: [
-      GoRoute(path: '/login',           builder: (_, __) => const LoginScreen()),
-      GoRoute(path: '/home',            builder: (_, __) => const HomeScreen()),
-      GoRoute(path: '/open-shift',      builder: (_, __) => const OpenShiftScreen()),
-      GoRoute(path: '/close-shift',     builder: (_, __) => const CloseShiftScreen()),
-      GoRoute(path: '/shift-history',   builder: (_, __) => const ShiftHistoryScreen()),
-      GoRoute(path: '/order',           builder: (_, __) => const OrderScreen()),
-      GoRoute(path: '/order-history',   builder: (_, __) => const OrderHistoryScreen()),
-      GoRoute(path: '/pending-orders',  builder: (_, __) => const PendingOrdersScreen()),
+      GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
+      GoRoute(path: '/home', builder: (_, __) => const HomeScreen()),
+      GoRoute(path: '/open-shift', builder: (_, __) => const OpenShiftScreen()),
+      GoRoute(
+          path: '/close-shift', builder: (_, __) => const CloseShiftScreen()),
+      GoRoute(
+          path: '/shift-history',
+          builder: (_, __) => const ShiftHistoryScreen()),
+      GoRoute(path: '/order', builder: (_, __) => const OrderScreen()),
+      GoRoute(
+          path: '/order-history',
+          builder: (_, __) => const OrderHistoryScreen()),
+      GoRoute(
+          path: '/pending-orders',
+          builder: (_, __) => const PendingOrdersScreen()),
     ],
   );
 });
 
 class _AuthListenable extends ChangeNotifier {
   _AuthListenable(this._ref) {
-    _ref.listen(authProvider, (_, __) => notifyListeners());
+    _ref.listen(authProvider, (prev, next) {
+      // Only notify router when loading finishes or auth state changes —
+      // not on every state update (e.g. error messages, blocked name)
+      final loadingChanged = prev?.isLoading != next.isLoading;
+      final authChanged = prev?.isAuthenticated != next.isAuthenticated;
+      if (loadingChanged || authChanged) notifyListeners();
+    });
   }
   final Ref _ref;
 }

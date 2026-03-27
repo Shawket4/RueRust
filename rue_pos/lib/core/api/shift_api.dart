@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/shift.dart';
+import '../models/shift_report.dart';
 import 'client.dart';
 
 class ShiftApi {
@@ -80,6 +81,11 @@ class ShiftApi {
     } catch (_) {}
 
     return openingCash + cashFromOrders + movements;
+  }
+
+  Future<ShiftReport> getReport(String shiftId) async {
+    final res = await _c.dio.get('/shifts/$shiftId/report');
+    return ShiftReport.fromJson(res.data as Map<String, dynamic>);
   }
 }
 

@@ -18,6 +18,7 @@ mod uploads;
 use actix_cors::Cors;
 use actix_files::Files;
 use actix_web::{web, App, HttpServer};
+use actix_web::middleware::Compress;
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, fs};
@@ -64,6 +65,7 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            .wrap(Compress::default())
             .app_data(pool.clone())
             .app_data(jwt_secret.clone())
             .route("/health", web::get().to(|| async { actix_web::HttpResponse::Ok().finish() }))

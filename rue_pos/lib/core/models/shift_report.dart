@@ -92,8 +92,6 @@ class ShiftReport {
     required this.printedAt,
   });
 
-  /// closed_at if shift is closed, printed_at (now) if still open
-  DateTime get reportTimestamp => closedAt ?? printedAt;
   bool get isOpen => status == 'open';
 
   factory ShiftReport.fromJson(Map<String, dynamic> j) {

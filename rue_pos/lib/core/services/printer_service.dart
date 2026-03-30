@@ -15,7 +15,7 @@ class PrinterService {
   static const _printerWidth = 576;
   static const _timeout      = Duration(seconds: 5);
 
-  // ── Order receipt ──────────────────────────────────────────────────────────
+  // ── Public entry points ────────────────────────────────────────────────────
 
   static Future<String?> print({
     required String       ip,
@@ -24,15 +24,9 @@ class PrinterService {
     required Order        order,
     required String       branchName,
   }) async {
-    final cleanIp  = ip.split('/').first;
     final pdfBytes = await _buildReceiptPdf(order: order, branchName: branchName);
-    return switch (brand) {
-      PrinterBrand.star  => _printStar(ip: cleanIp, pdfBytes: pdfBytes),
-      PrinterBrand.epson => _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes),
-    };
+    return _send(ip: ip, port: port, brand: brand, pdfBytes: pdfBytes);
   }
-
-  // ── Shift report ───────────────────────────────────────────────────────────
 
   static Future<String?> printShiftReport({
     required String       ip,
@@ -41,15 +35,24 @@ class PrinterService {
     required ShiftReport  report,
     required String       branchName,
   }) async {
-    final cleanIp  = ip.split('/').first;
     final pdfBytes = await _buildShiftReportPdf(report: report, branchName: branchName);
+    return _send(ip: ip, port: port, brand: brand, pdfBytes: pdfBytes);
+  }
+
+  // ── Transport ──────────────────────────────────────────────────────────────
+
+  static Future<String?> _send({
+    required String       ip,
+    required int          port,
+    required PrinterBrand brand,
+    required Uint8List    pdfBytes,
+  }) {
+    final cleanIp = ip.split('/').first;
     return switch (brand) {
       PrinterBrand.star  => _printStar(ip: cleanIp, pdfBytes: pdfBytes),
       PrinterBrand.epson => _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes),
     };
   }
-
-  // ── Transport ──────────────────────────────────────────────────────────────
 
   static Future<String?> _printStar({
     required String    ip,
@@ -117,13 +120,13 @@ class PrinterService {
           final x = xB * 8 + bit;
           if (x < w) {
             final idx = (y * w + x) * 4;
-            final r  = pixels[idx];
-            final g  = pixels[idx + 1];
-            final b  = pixels[idx + 2];
-            final a  = pixels[idx + 3];
-            final rW = ((r * a) + (255 * (255 - a))) ~/ 255;
-            final gW = ((g * a) + (255 * (255 - a))) ~/ 255;
-            final bW = ((b * a) + (255 * (255 - a))) ~/ 255;
+            final r   = pixels[idx];
+            final g   = pixels[idx + 1];
+            final b   = pixels[idx + 2];
+            final a   = pixels[idx + 3];
+            final rW  = ((r * a) + (255 * (255 - a))) ~/ 255;
+            final gW  = ((g * a) + (255 * (255 - a))) ~/ 255;
+            final bW  = ((b * a) + (255 * (255 - a))) ~/ 255;
             if ((0.299 * rW + 0.587 * gW + 0.114 * bW).round() < 128) {
               byte |= (0x80 >> bit);
             }
@@ -135,6 +138,69 @@ class PrinterService {
     buf.addAll([0x1B, 0x64, 0x05, 0x1D, 0x56, 0x41, 0x05]);
     return Uint8List.fromList(buf);
   }
+
+  // ── Shared PDF helpers ─────────────────────────────────────────────────────
+  //
+  //  _row()  — two-column layout using pw.Row + pw.Expanded so numbers are
+  //             always flush-right regardless of Cairo glyph widths.
+  //  _divider / _thinDivider — consistent separators.
+
+  static pw.Widget _row(
+    String    label,
+    String    value, {
+    required  pw.Font font,
+    required  pw.Font fontB,
+    double    sz        = 8,
+    bool      bold      = false,
+    bool      boldValue = false,
+    PdfColor? valueColor,
+    double    leftIndent = 0,
+  }) {
+    final labelStyle = pw.TextStyle(
+      font:     bold ? fontB : font,
+      fontSize: sz,
+    );
+    final valueStyle = pw.TextStyle(
+      font:     (bold || boldValue) ? fontB : font,
+      fontSize: sz,
+      color:    valueColor,
+    );
+    return pw.Padding(
+      padding: pw.EdgeInsets.only(left: leftIndent, bottom: 1.5),
+      child: pw.Row(children: [
+        pw.Expanded(child: pw.Text(label, style: labelStyle)),
+        pw.Text(value, style: valueStyle, textAlign: pw.TextAlign.right),
+      ]),
+    );
+  }
+
+  static pw.Widget _divider() =>
+      pw.Divider(thickness: 0.4, color: PdfColors.grey600, height: 6);
+
+  static pw.Widget _thinDivider() =>
+      pw.Divider(thickness: 0.2, color: PdfColors.grey400, height: 4);
+
+  static String _fmtDt(DateTime dt) {
+    final l = dt.toLocal();
+    final d = l.day.toString().padLeft(2, '0');
+    final m = l.month.toString().padLeft(2, '0');
+    final hh = l.hour.toString().padLeft(2, '0');
+    final mm = l.minute.toString().padLeft(2, '0');
+    return '$d/$m/${l.year}  $hh:$mm';
+  }
+
+  /// Formats a payment method string for the order receipt footer.
+  /// Handles all known Talabat variants and underscore-separated names.
+  static String _fmtPayment(String raw) => switch (raw) {
+    'cash'           => 'Cash',
+    'card'           => 'Card',
+    'digital_wallet' => 'Digital Wallet',
+    'mixed'          => 'Mixed',
+    'talabat_online' => 'Talabat Online',
+    'talabat_cash'   => 'Talabat Cash',
+    _                => raw[0].toUpperCase() +
+                        raw.substring(1).replaceAll('_', ' '),
+  };
 
   // ── Order receipt PDF ──────────────────────────────────────────────────────
 
@@ -150,65 +216,78 @@ class PrinterService {
     final logo  = pw.MemoryImage(
         (await rootBundle.load('assets/TheRue.png')).buffer.asUint8List());
 
-    const cw = 40;
-    pw.TextStyle ts(pw.Font f, {double sz = 8}) => pw.TextStyle(font: f, fontSize: sz);
-    pw.Widget div() => pw.Divider(thickness: 0.3, color: PdfColors.grey600, height: 4);
-    String pad(String l, String r) {
-      final sp = cw - l.length - r.length;
-      return sp <= 0 ? '$l $r' : l + ' ' * sp + r;
-    }
+    pw.TextStyle ts(pw.Font f, {double sz = 8, PdfColor? color}) =>
+        pw.TextStyle(font: f, fontSize: sz, color: color);
 
-    final dt  = order.createdAt.toLocal();
-    final dts = '${dt.day.toString().padLeft(2, '0')}/'
-                '${dt.month.toString().padLeft(2, '0')}/'
-                '${dt.year}  ${timeShort(order.createdAt)}';
+    final dts = _fmtDt(order.createdAt);
 
     pdf.addPage(pw.Page(
       pageFormat: const PdfPageFormat(
           72 * PdfPageFormat.mm, double.infinity,
-          marginTop: 2 * PdfPageFormat.mm, marginBottom: 2 * PdfPageFormat.mm,
-          marginLeft: 2 * PdfPageFormat.mm, marginRight: 2 * PdfPageFormat.mm),
+          marginTop:    2 * PdfPageFormat.mm,
+          marginBottom: 2 * PdfPageFormat.mm,
+          marginLeft:   2 * PdfPageFormat.mm,
+          marginRight:  2 * PdfPageFormat.mm),
       build: (ctx) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
+
+        // Header
         pw.Center(child: pw.Image(logo, width: 56)),
+        pw.SizedBox(height: 2),
         pw.Center(child: pw.Text(branchName, style: ts(font, sz: 7.5))),
         pw.SizedBox(height: 2),
-        div(),
-        pw.Text(pad('Order #${order.orderNumber}', dts), style: ts(fontB, sz: 8)),
-        div(),
+        _divider(),
+
+        // Order number + timestamp
+        _row('Order #${order.orderNumber}', dts, font: font, fontB: fontB,
+            bold: true, sz: 8),
+        _divider(),
+
+        // Items
         ...order.items.expand((item) {
-          final sz = item.sizeLabel != null ? ' (${item.sizeLabel})' : '';
+          final sizePart = item.sizeLabel != null ? ' (${item.sizeLabel})' : '';
           return [
-            pw.Text(pad('${item.quantity}x ${item.itemName}$sz', egp(item.lineTotal)),
-                style: ts(fontB, sz: 8)),
+            _row('${item.quantity}x ${item.itemName}$sizePart',
+                egp(item.lineTotal), font: font, fontB: fontB, bold: true, sz: 8),
             ...item.addons.map((a) {
-              final ap = a.unitPrice > 0 ? '+${egp(a.unitPrice)}' : '';
-              final al = '  + ${a.addonName}';
-              return pw.Text(ap.isNotEmpty ? pad(al, ap) : al, style: ts(font, sz: 7.5));
+              final aPrice = a.unitPrice > 0 ? '+${egp(a.unitPrice)}' : '';
+              return aPrice.isNotEmpty
+                  ? _row('  + ${a.addonName}', aPrice,
+                      font: font, fontB: fontB, sz: 7.5, leftIndent: 4)
+                  : pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 4, bottom: 1.5),
+                      child: pw.Text('  + ${a.addonName}', style: ts(font, sz: 7.5)));
             }),
           ];
         }),
-        div(),
-        pw.Text(pad('Subtotal', egp(order.subtotal)), style: ts(font, sz: 8)),
+        _divider(),
+
+        // Totals
         if (order.discountAmount > 0)
-          pw.Text(pad('Discount', '- ${egp(order.discountAmount)}'), style: ts(font, sz: 8)),
+          _row('Subtotal', egp(order.subtotal), font: font, fontB: fontB, sz: 8),
+        if (order.discountAmount > 0)
+          _row('Discount', '- ${egp(order.discountAmount)}',
+              font: font, fontB: fontB, sz: 8,
+              valueColor: PdfColors.red700),
         if (order.taxAmount > 0)
-          pw.Text(pad('Tax', egp(order.taxAmount)), style: ts(font, sz: 8)),
-        pw.Text(pad('TOTAL', egp(order.totalAmount)), style: ts(fontB, sz: 10)),
-        div(),
-        pw.Text(
-            pad('Payment',
-                order.paymentMethod[0].toUpperCase() +
-                order.paymentMethod.substring(1).replaceAll('_', ' ')),
-            style: ts(font, sz: 7.5)),
+          _row('Tax', egp(order.taxAmount), font: font, fontB: fontB, sz: 8),
+        _row('TOTAL', egp(order.totalAmount),
+            font: font, fontB: fontB, bold: true, boldValue: true, sz: 10),
+        _divider(),
+
+        // Footer metadata
+        _row('Payment', _fmtPayment(order.paymentMethod),
+            font: font, fontB: fontB, sz: 7.5),
         if (order.customerName != null && order.customerName!.isNotEmpty)
-          pw.Text(pad('Customer', order.customerName!), style: ts(font, sz: 7.5)),
+          _row('Customer', order.customerName!,
+              font: font, fontB: fontB, sz: 7.5),
         if (order.tellerName.isNotEmpty)
-          pw.Text(pad('Teller', order.tellerName), style: ts(font, sz: 7.5)),
-        pw.SizedBox(height: 3),
+          _row('Teller', order.tellerName, font: font, fontB: fontB, sz: 7.5),
+
+        pw.SizedBox(height: 4),
         pw.Center(child: pw.Text('Thank you for visiting!', style: ts(font, sz: 7.5))),
         pw.SizedBox(height: 2),
-        div(),
+        _divider(),
       ]),
     ));
     return pdf.save();
@@ -228,114 +307,199 @@ class PrinterService {
     final logo  = pw.MemoryImage(
         (await rootBundle.load('assets/TheRue.png')).buffer.asUint8List());
 
-    const cw = 40;
-    pw.TextStyle ts(pw.Font f, {double sz = 8}) => pw.TextStyle(font: f, fontSize: sz);
-    pw.Widget div()     => pw.Divider(thickness: 0.3,  color: PdfColors.grey600, height: 4);
-    pw.Widget thinDiv() => pw.Divider(thickness: 0.15, color: PdfColors.grey400, height: 3);
+    pw.TextStyle ts(pw.Font f, {double sz = 8, PdfColor? color}) =>
+        pw.TextStyle(font: f, fontSize: sz, color: color);
 
-    String pad(String l, String r) {
-      final sp = cw - l.length - r.length;
-      return sp <= 0 ? '$l $r' : l + ' ' * sp + r;
-    }
+    // Helpers that close over font/fontB
+    pw.Widget row(String l, String v,
+            {bool bold = false, bool boldVal = false,
+             double sz = 8, PdfColor? color, double indent = 0}) =>
+        _row(l, v,
+            font: font, fontB: fontB,
+            bold: bold, boldValue: boldVal,
+            sz: sz, valueColor: color, leftIndent: indent);
 
-    // Timestamps
-    String fmtDt(DateTime dt) {
-      final l = dt.toLocal();
-      return '${l.year}/${l.month.toString().padLeft(2,'0')}/${l.day.toString().padLeft(2,'0')}'
-             ' ${timeShort(dt)}';
-    }
+    pw.Widget div()     => _divider();
+    pw.Widget thinDiv() => _thinDivider();
 
-    final reportTs = fmtDt(report.reportTimestamp);
-    final openTs   = fmtDt(report.openedAt);
-    final closeTs  = report.closedAt != null ? fmtDt(report.closedAt!) : null;
-    final openDt   = report.openedAt.toLocal();
-    final bizDate  = '${openDt.year}/${openDt.month.toString().padLeft(2,'0')}/${openDt.day.toString().padLeft(2,'0')}';
+    // Formatted timestamps
+    final openDt  = report.openedAt.toLocal();
+    final bizDate = '${openDt.day.toString().padLeft(2,'0')}/'
+                    '${openDt.month.toString().padLeft(2,'0')}/${openDt.year}';
+    final openTs  = _fmtDt(report.openedAt);
+    final closeTs = report.closedAt != null ? _fmtDt(report.closedAt!) : null;
 
-    final shortage = (report.closingCashDeclared != null && report.closingCashSystem != null)
-        ? report.closingCashDeclared! - report.closingCashSystem!
+    // The timestamp shown at the top:
+    //  • closed shift  → "Closed at: HH:MM" (the close time, not now)
+    //  • open shift    → "Printed at: HH:MM" (now)
+    final topTsLabel = report.isOpen ? 'Printed at' : 'Closed at';
+    final topTsValue = report.closedAt != null
+        ? _fmtDt(report.closedAt!)
+        : _fmtDt(report.printedAt);
+
+    // Cash shortage: positive = drawer short (declared < system), negative = over
+    // shortage = system - declared  →  positive means you're missing money
+    final shortage = (report.closingCashDeclared != null &&
+                      report.closingCashSystem   != null)
+        ? report.closingCashSystem! - report.closingCashDeclared!
         : null;
 
     pdf.addPage(pw.Page(
       pageFormat: const PdfPageFormat(
           72 * PdfPageFormat.mm, double.infinity,
-          marginTop: 3 * PdfPageFormat.mm, marginBottom: 3 * PdfPageFormat.mm,
-          marginLeft: 2 * PdfPageFormat.mm, marginRight: 2 * PdfPageFormat.mm),
+          marginTop:    3 * PdfPageFormat.mm,
+          marginBottom: 3 * PdfPageFormat.mm,
+          marginLeft:   3 * PdfPageFormat.mm,
+          marginRight:  3 * PdfPageFormat.mm),
       build: (ctx) => pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.stretch, children: [
 
         // ── Header ────────────────────────────────────────────────────────────
         pw.Center(child: pw.Image(logo, width: 56)),
-        pw.SizedBox(height: 2),
-        pw.Center(child: pw.Text(branchName,        style: ts(fontB, sz: 8))),
-        pw.SizedBox(height: 1),
-        pw.Center(child: pw.Text('Till Close Report', style: ts(fontB, sz: 9))),
+        pw.SizedBox(height: 3),
+        pw.Center(child: pw.Text(branchName,         style: ts(fontB, sz: 8.5))),
+        pw.Center(child: pw.Text('Till Close Report', style: ts(fontB, sz: 9.5))),
+        pw.SizedBox(height: 4),
         pw.Center(child: pw.Text('Business Date: $bizDate', style: ts(font, sz: 7.5))),
-        pw.Center(child: pw.Text('Printed at: $reportTs',   style: ts(font, sz: 7.5))),
+        pw.Center(child: pw.Text('$topTsLabel: $topTsValue', style: ts(font, sz: 7.5))),
+        pw.SizedBox(height: 4),
         div(),
 
         // ── Shift info ────────────────────────────────────────────────────────
-        pw.SizedBox(height: 3),
-        pw.Center(child: pw.Text('User: ${report.tellerName}', style: ts(font, sz: 8))),
-        pw.Center(child: pw.Text('Opened At: $openTs',         style: ts(font, sz: 7.5))),
+        pw.SizedBox(height: 2),
+        row('Teller', report.tellerName, sz: 8),
+        row('Opened', openTs, sz: 7.5),
         if (closeTs != null)
-          pw.Center(child: pw.Text('Closed At: $closeTs', style: ts(font, sz: 7.5)))
+          row('Closed', closeTs, sz: 7.5)
         else
-          pw.Center(child: pw.Text('Status: Open (Interim Report)', style: ts(font, sz: 7.5))),
+          pw.Center(child: pw.Text(
+              '— Interim Report (Shift Still Open) —',
+              style: ts(font, sz: 7, color: PdfColors.grey600))),
+        pw.SizedBox(height: 2),
         div(),
 
         // ── Payments breakdown ────────────────────────────────────────────────
-        pw.Center(child: pw.Text('Payments', style: ts(fontB, sz: 8))),
-        pw.SizedBox(height: 3),
-        ...report.paymentSummary.map((p) =>
-            pw.Text(pad('${p.displayLabel}:', egp(p.total)), style: ts(font, sz: 8))),
+        pw.SizedBox(height: 2),
+        pw.Center(child: pw.Text('PAYMENTS', style: ts(fontB, sz: 7.5,
+            color: PdfColors.grey700))),
+        pw.SizedBox(height: 4),
+
+        // Each payment method — label, order count sub-line, amount right-aligned
+        ...report.paymentSummary.map((p) => pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 3),
+          child: pw.Row(children: [
+            pw.Expanded(child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
+                pw.Text(p.displayLabel,
+                    style: ts(fontB, sz: 8)),
+                pw.Text('${p.orderCount} order${p.orderCount == 1 ? '' : 's'}',
+                    style: ts(font, sz: 7, color: PdfColors.grey600)),
+              ],
+            )),
+            pw.Text(egp(p.total),
+                style: ts(fontB, sz: 8), textAlign: pw.TextAlign.right),
+          ]),
+        )),
+
         pw.SizedBox(height: 2),
         thinDiv(),
-        pw.Text(pad('Total Payments:', egp(report.totalPayments)), style: ts(fontB, sz: 8)),
-        pw.Text(pad('Total Returns:',  egp(report.totalReturns)),  style: ts(font,  sz: 8)),
-        pw.Text(pad('Net Payments:',   egp(report.netPayments)),   style: ts(fontB, sz: 8)),
+
+        row('Total Payments', egp(report.totalPayments),
+            bold: true, boldVal: true, sz: 8),
+        if (report.totalReturns > 0)
+          row('Total Returns', '- ${egp(report.totalReturns)}',
+              sz: 8, color: PdfColors.red700),
+        pw.SizedBox(height: 1),
+        row('Net Payments', egp(report.netPayments),
+            bold: true, boldVal: true, sz: 9),
+        pw.SizedBox(height: 2),
         div(),
 
         // ── Drawer operations ─────────────────────────────────────────────────
-        pw.Center(child: pw.Text('Drawer Operations', style: ts(fontB, sz: 8))),
-        pw.SizedBox(height: 3),
-        pw.Text(pad('Total Pay In:',  egp(report.cashMovementsIn)),  style: ts(font, sz: 8)),
-        pw.Text(pad('Total Pay Out:', egp(report.cashMovementsOut)), style: ts(font, sz: 8)),
+        pw.SizedBox(height: 2),
+        pw.Center(child: pw.Text('DRAWER OPERATIONS', style: ts(fontB, sz: 7.5,
+            color: PdfColors.grey700))),
+        pw.SizedBox(height: 4),
 
-        // Individual movements
+        row('Pay In',  egp(report.cashMovementsIn),  sz: 8),
+        row('Pay Out', egp(report.cashMovementsOut), sz: 8),
+
         if (report.cashMovements.isNotEmpty) ...[
-          pw.SizedBox(height: 2),
+          pw.SizedBox(height: 3),
           thinDiv(),
+          pw.SizedBox(height: 2),
           ...report.cashMovements.map((m) {
-            final sign   = m.isIn ? '+' : '-';
-            final amount = '$sign${egp(m.amount.abs())}';
-            // Truncate note to fit on one line
-            final note   = m.note.length > 16 ? '${m.note.substring(0, 16)}…' : m.note;
-            final label  = '  ${timeShort(m.createdAt)} $note';
-            return pw.Text(pad(label, amount), style: ts(font, sz: 7));
+            final sign   = m.isIn ? '+' : '−';
+            final amount = '$sign ${egp(m.amount.abs())}';
+            final time   = () {
+              final l = m.createdAt.toLocal();
+              return '${l.hour.toString().padLeft(2,'0')}:${l.minute.toString().padLeft(2,'0')}';
+            }();
+            // Two-line: note on top, time + amount on the row
+            return pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 4),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(m.note, style: ts(font, sz: 7.5)),
+                  pw.Row(children: [
+                    pw.Text(time,
+                        style: ts(font, sz: 7, color: PdfColors.grey600)),
+                    pw.Spacer(),
+                    pw.Text(amount,
+                        style: ts(m.isIn ? fontB : font, sz: 7.5,
+                            color: m.isIn ? PdfColors.green700 : PdfColors.red700),
+                        textAlign: pw.TextAlign.right),
+                  ]),
+                ],
+              ),
+            );
           }),
         ],
+
+        pw.SizedBox(height: 2),
         div(),
 
         // ── Cash reconciliation ───────────────────────────────────────────────
-        pw.Text(pad('Opening Amount:', egp(report.openingCash)), style: ts(font, sz: 8)),
-        if (report.closingCashDeclared != null) ...[
-          pw.Text(pad('Closing Amount:', egp(report.closingCashDeclared!)), style: ts(font, sz: 8)),
-          if (report.closingCashSystem != null)
-            pw.Text(pad('Expected Cash:', egp(report.closingCashSystem!)), style: ts(font, sz: 8)),
-          if (shortage != null)
-            pw.Text(
-                pad('Cash Shortage:',
-                    shortage == 0
-                        ? egp(0)
-                        : '${shortage < 0 ? "-" : "+"}${egp(shortage.abs())}'),
-                style: ts(shortage == 0 ? font : fontB, sz: 8)),
-        ] else
-          pw.Text('(Shift not yet closed)', style: ts(font, sz: 7.5)),
+        pw.SizedBox(height: 2),
+        pw.Center(child: pw.Text('CASH RECONCILIATION', style: ts(fontB, sz: 7.5,
+            color: PdfColors.grey700))),
+        pw.SizedBox(height: 4),
+
+        row('Opening Cash', egp(report.openingCash), sz: 8),
+
+        if (report.closingCashSystem != null)
+          row('Expected in Drawer', egp(report.closingCashSystem!), sz: 8),
+
+        if (report.closingCashDeclared != null)
+          row('Actual in Drawer', egp(report.closingCashDeclared!),
+              bold: true, sz: 8)
+        else
+          pw.Center(child: pw.Text('(Shift not yet closed)',
+              style: ts(font, sz: 7.5, color: PdfColors.grey600))),
+
+        if (shortage != null) ...[
+          pw.SizedBox(height: 2),
+          thinDiv(),
+          pw.SizedBox(height: 2),
+          if (shortage == 0)
+            row('Difference', egp(0),
+                bold: true, color: PdfColors.green700, sz: 8.5)
+          else if (shortage > 0)
+            row('Short by', egp(shortage),
+                bold: true, color: PdfColors.red700, sz: 8.5)
+          else
+            row('Over by', egp(shortage.abs()),
+                bold: true, color: PdfColors.orange700, sz: 8.5),
+        ],
+
+        pw.SizedBox(height: 4),
         div(),
 
         // ── Footer ────────────────────────────────────────────────────────────
-        pw.SizedBox(height: 3),
-        pw.Center(child: pw.Text('End Of Report', style: ts(fontB, sz: 8))),
+        pw.SizedBox(height: 4),
+        pw.Center(child: pw.Text('— End of Report —',
+            style: ts(fontB, sz: 8, color: PdfColors.grey600))),
         pw.SizedBox(height: 2),
         div(),
       ]),

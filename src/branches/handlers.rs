@@ -52,16 +52,39 @@ pub struct CreateBranchRequest {
     pub printer_port:  Option<i32>,
 }
 
+// UpdateBranchRequest uses Option<Option<T>> (double-option) so that:
+//   - field absent from JSON  → outer None → don't touch DB column
+//   - field present as null   → outer Some(None) → set DB column to NULL
+//   - field present as value  → outer Some(Some(v)) → update DB column
+//
+// Serde's `default` + `deserialize_with` handles this via a small helper.
 #[derive(Deserialize)]
 pub struct UpdateBranchRequest {
-    pub name:          Option<String>,
-    pub address:       Option<String>,
-    pub phone:         Option<String>,
-    pub timezone:      Option<String>,
-    pub printer_brand: Option<PrinterBrand>,
-    pub printer_ip:    Option<String>,
-    pub printer_port:  Option<i32>,
-    pub is_active:     Option<bool>,
+    pub name:      Option<String>,
+    pub address:   Option<String>,
+    pub phone:     Option<String>,
+    pub timezone:  Option<String>,
+    pub is_active: Option<bool>,
+
+    // Nullable fields — use double-option pattern
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_brand: Option<Option<PrinterBrand>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_ip:    Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_port:  Option<Option<i32>>,
+}
+
+/// Deserializes a field that can be:
+///  - absent          → None        (don't update)
+///  - present as null → Some(None)  (set to null)
+///  - present as value→ Some(Some(v))(set to value)
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
 }
 
 pub async fn list_branches(
@@ -148,6 +171,16 @@ pub async fn update_branch(
     let existing = fetch_branch(pool.get_ref(), *id).await?;
     require_same_org(&claims, Some(existing.org_id))?;
 
+    // Resolve each nullable field:
+    //   Some(Some(v)) → use v
+    //   Some(None)    → explicit null (clear the field)
+    //   None          → keep existing value
+    let new_printer_brand: Option<Option<PrinterBrand>> = body.printer_brand.clone();
+    let new_printer_ip:    Option<Option<String>>       = body.printer_ip.clone();
+    let new_printer_port:  Option<Option<i32>>          = body.printer_port;
+
+    // We build an explicit UPDATE rather than relying on COALESCE for
+    // nullable fields, so that an explicit null can clear the column.
     let branch = sqlx::query_as::<_, Branch>(
         r#"
         UPDATE branches SET
@@ -155,10 +188,19 @@ pub async fn update_branch(
             address       = COALESCE($3, address),
             phone         = COALESCE($4, phone),
             timezone      = COALESCE($5, timezone),
-            printer_brand = COALESCE($6, printer_brand),
-            printer_ip    = COALESCE($7::inet, printer_ip),
-            printer_port  = COALESCE($8, printer_port),
-            is_active     = COALESCE($9, is_active)
+            is_active     = COALESCE($6, is_active),
+            printer_brand = CASE
+                              WHEN $7 THEN $8
+                              ELSE printer_brand
+                            END,
+            printer_ip    = CASE
+                              WHEN $9  THEN $10::inet
+                              ELSE printer_ip
+                            END,
+            printer_port  = CASE
+                              WHEN $11 THEN $12
+                              ELSE printer_port
+                            END
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, org_id, name, address, phone, timezone,
                   printer_brand, printer_ip::text, printer_port,
@@ -170,10 +212,16 @@ pub async fn update_branch(
     .bind(&body.address)
     .bind(&body.phone)
     .bind(&body.timezone)
-    .bind(&body.printer_brand)
-    .bind(&body.printer_ip)
-    .bind(body.printer_port)
     .bind(body.is_active)
+    // printer_brand: $7 = should_update (bool), $8 = new value (nullable)
+    .bind(new_printer_brand.is_some())
+    .bind(new_printer_brand.as_ref().and_then(|o| o.clone()))
+    // printer_ip: $9 = should_update, $10 = new value
+    .bind(new_printer_ip.is_some())
+    .bind(new_printer_ip.as_ref().and_then(|o| o.clone()))
+    // printer_port: $11 = should_update, $12 = new value
+    .bind(new_printer_port.is_some())
+    .bind(new_printer_port.and_then(|o| o))
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;

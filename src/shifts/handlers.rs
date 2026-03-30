@@ -70,15 +70,17 @@ pub struct CashMovementSummaryRow {
 
 #[derive(Debug, Serialize)]
 pub struct ShiftReportResponse {
-    pub shift:              Shift,
-    pub payment_summary:    Vec<PaymentSummaryRow>,
-    pub total_payments:     i64,
-    pub total_returns:      i64,
-    pub net_payments:       i64,
-    pub cash_movements:     Vec<CashMovementSummaryRow>,
-    pub cash_movements_in:  i64,
-    pub cash_movements_out: i64,
-    pub printed_at:         chrono::DateTime<chrono::Utc>,
+    pub shift:               Shift,
+    pub payment_summary:     Vec<PaymentSummaryRow>,
+    pub total_payments:      i64,
+    pub total_returns:       i64,
+    pub net_payments:        i64,
+    pub cash_movements:      Vec<CashMovementSummaryRow>,
+    pub cash_movements_in:   i64,
+    pub cash_movements_out:  i64,
+    /// Net of all cash movements (in - out) as a signed integer
+    pub cash_movements_net:  i64,
+    pub printed_at:          chrono::DateTime<chrono::Utc>,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -420,6 +422,7 @@ pub async fn get_shift_report(
     let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
     let net_payments = total_payments - total_returns;
 
+    let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
     Ok(HttpResponse::Ok().json(ShiftReportResponse {
         shift,
         payment_summary,
@@ -429,6 +432,7 @@ pub async fn get_shift_report(
         cash_movements,
         cash_movements_in,
         cash_movements_out,
+        cash_movements_net: cash_movements_net_signed,
         printed_at: chrono::Utc::now(),
     }))
 }

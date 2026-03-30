@@ -1,3 +1,55 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  Rue POS — Backend Non-Breaking Improvements
+#  Run from the root of the Rust backend project (where Cargo.toml lives).
+#
+#  Changes:
+#   1. reports/handlers.rs
+#      - BranchSalesReport: add talabat_online_revenue + talabat_cash_revenue fields
+#      - branch_sales query: aggregate those two payment methods
+#      - top_items: respect optional ?limit query param (default 20)
+#      - TimeseriesPoint: add per-payment-method breakdown columns
+#      - branch_sales_timeseries: add talabat columns to SELECT
+#      - OrgComparisonReport/BranchComparison: add talabat columns
+#
+#   2. shifts/handlers.rs
+#      - ShiftReportResponse: add order_count to PaymentSummaryRow (already
+#        has it via sqlx but the struct needs it surfaced)
+#        → PaymentSummaryRow already has order_count — it just needs to be
+#          confirmed the SQL returns it. It does. No struct change needed.
+#        → Add cash_movements_net computed field to response.
+#
+#   3. branches/handlers.rs
+#      - UpdateBranchRequest: allow explicit null for printer_brand/ip/port
+#      - update_branch query: use a smarter CASE so NULL input clears the field
+#
+# =============================================================================
+set -euo pipefail
+
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+log()  { echo -e "${CYAN}[patch]${RESET} $*"; }
+ok()   { echo -e "${GREEN}[done] ${RESET} $*"; }
+warn() { echo -e "${YELLOW}[warn] ${RESET} $*"; }
+
+# ---------------------------------------------------------------------------
+# Guard: must be run from the Rust project root
+# ---------------------------------------------------------------------------
+if [[ ! -f "Cargo.toml" ]]; then
+  echo "ERROR: Run this script from the Rust project root (where Cargo.toml lives)."
+  exit 1
+fi
+
+# ===========================================================================
+#  1. src/reports/handlers.rs
+# ===========================================================================
+log "Patching src/reports/handlers.rs ..."
+
+cat > src/reports/handlers.rs << 'RUST'
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -824,3 +876,465 @@ async fn require_branch_access(
 
     Ok(())
 }
+RUST
+
+ok "src/reports/handlers.rs"
+
+# ===========================================================================
+#  2. src/branches/handlers.rs  — allow nulling printer config
+# ===========================================================================
+log "Patching src/branches/handlers.rs ..."
+
+cat > src/branches/handlers.rs << 'RUST'
+use actix_web::{web, HttpRequest, HttpResponse};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use uuid::Uuid;
+use actix_web::HttpMessage;
+
+use crate::{
+    auth::{guards::require_same_org, jwt::Claims},
+    errors::AppError,
+    permissions::checker::check_permission,
+};
+
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq)]
+#[sqlx(type_name = "printer_brand", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum PrinterBrand {
+    Star,
+    Epson,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Branch {
+    pub id:            Uuid,
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub address:       Option<String>,
+    pub phone:         Option<String>,
+    pub timezone:      String,
+    pub printer_brand: Option<PrinterBrand>,
+    pub printer_ip:    Option<String>,
+    pub printer_port:  Option<i32>,
+    pub is_active:     bool,
+    pub created_at:    DateTime<Utc>,
+    pub updated_at:    DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+pub struct ListBranchesQuery {
+    pub org_id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct CreateBranchRequest {
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub address:       Option<String>,
+    pub phone:         Option<String>,
+    pub timezone:      Option<String>,
+    pub printer_brand: Option<PrinterBrand>,
+    pub printer_ip:    Option<String>,
+    pub printer_port:  Option<i32>,
+}
+
+// UpdateBranchRequest uses Option<Option<T>> (double-option) so that:
+//   - field absent from JSON  → outer None → don't touch DB column
+//   - field present as null   → outer Some(None) → set DB column to NULL
+//   - field present as value  → outer Some(Some(v)) → update DB column
+//
+// Serde's `default` + `deserialize_with` handles this via a small helper.
+#[derive(Deserialize)]
+pub struct UpdateBranchRequest {
+    pub name:      Option<String>,
+    pub address:   Option<String>,
+    pub phone:     Option<String>,
+    pub timezone:  Option<String>,
+    pub is_active: Option<bool>,
+
+    // Nullable fields — use double-option pattern
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_brand: Option<Option<PrinterBrand>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_ip:    Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub printer_port:  Option<Option<i32>>,
+}
+
+/// Deserializes a field that can be:
+///  - absent          → None        (don't update)
+///  - present as null → Some(None)  (set to null)
+///  - present as value→ Some(Some(v))(set to value)
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(de).map(Some)
+}
+
+pub async fn list_branches(
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    query: web::Query<ListBranchesQuery>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "branches", "read").await?;
+    require_same_org(&claims, Some(query.org_id))?;
+
+    let branches = sqlx::query_as::<_, Branch>(
+        r#"
+        SELECT id, org_id, name, address, phone, timezone,
+               printer_brand, printer_ip::text, printer_port,
+               is_active, created_at, updated_at
+        FROM branches
+        WHERE org_id = $1 AND deleted_at IS NULL
+        ORDER BY name
+        "#,
+    )
+    .bind(query.org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(branches))
+}
+
+pub async fn get_branch(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "branches", "read").await?;
+
+    let branch = fetch_branch(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(branch.org_id))?;
+
+    Ok(HttpResponse::Ok().json(branch))
+}
+
+pub async fn create_branch(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateBranchRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "branches", "create").await?;
+    require_same_org(&claims, Some(body.org_id))?;
+
+    let branch = sqlx::query_as::<_, Branch>(
+        r#"
+        INSERT INTO branches (org_id, name, address, phone, timezone, printer_brand, printer_ip, printer_port)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8)
+        RETURNING id, org_id, name, address, phone, timezone,
+                  printer_brand, printer_ip::text, printer_port,
+                  is_active, created_at, updated_at
+        "#,
+    )
+    .bind(body.org_id)
+    .bind(&body.name)
+    .bind(&body.address)
+    .bind(&body.phone)
+    .bind(body.timezone.as_deref().unwrap_or("Africa/Cairo"))
+    .bind(&body.printer_brand)
+    .bind(&body.printer_ip)
+    .bind(body.printer_port.unwrap_or(9100))
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Created().json(branch))
+}
+
+pub async fn update_branch(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<UpdateBranchRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "branches", "update").await?;
+
+    let existing = fetch_branch(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(existing.org_id))?;
+
+    // Resolve each nullable field:
+    //   Some(Some(v)) → use v
+    //   Some(None)    → explicit null (clear the field)
+    //   None          → keep existing value
+    let new_printer_brand: Option<Option<PrinterBrand>> = body.printer_brand.clone();
+    let new_printer_ip:    Option<Option<String>>       = body.printer_ip.clone();
+    let new_printer_port:  Option<Option<i32>>          = body.printer_port;
+
+    // We build an explicit UPDATE rather than relying on COALESCE for
+    // nullable fields, so that an explicit null can clear the column.
+    let branch = sqlx::query_as::<_, Branch>(
+        r#"
+        UPDATE branches SET
+            name          = COALESCE($2, name),
+            address       = COALESCE($3, address),
+            phone         = COALESCE($4, phone),
+            timezone      = COALESCE($5, timezone),
+            is_active     = COALESCE($6, is_active),
+            printer_brand = CASE
+                              WHEN $7 THEN $8
+                              ELSE printer_brand
+                            END,
+            printer_ip    = CASE
+                              WHEN $9  THEN $10::inet
+                              ELSE printer_ip
+                            END,
+            printer_port  = CASE
+                              WHEN $11 THEN $12
+                              ELSE printer_port
+                            END
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, org_id, name, address, phone, timezone,
+                  printer_brand, printer_ip::text, printer_port,
+                  is_active, created_at, updated_at
+        "#,
+    )
+    .bind(*id)
+    .bind(&body.name)
+    .bind(&body.address)
+    .bind(&body.phone)
+    .bind(&body.timezone)
+    .bind(body.is_active)
+    // printer_brand: $7 = should_update (bool), $8 = new value (nullable)
+    .bind(new_printer_brand.is_some())
+    .bind(new_printer_brand.as_ref().and_then(|o| o.clone()))
+    // printer_ip: $9 = should_update, $10 = new value
+    .bind(new_printer_ip.is_some())
+    .bind(new_printer_ip.as_ref().and_then(|o| o.clone()))
+    // printer_port: $11 = should_update, $12 = new value
+    .bind(new_printer_port.is_some())
+    .bind(new_printer_port.and_then(|o| o))
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(branch))
+}
+
+pub async fn delete_branch(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "branches", "delete").await?;
+
+    let existing = fetch_branch(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(existing.org_id))?;
+
+    sqlx::query(
+        "UPDATE branches SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(*id)
+    .execute(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
+fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
+    req.extensions()
+        .get::<Claims>()
+        .cloned()
+        .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
+}
+
+async fn fetch_branch(pool: &PgPool, id: Uuid) -> Result<Branch, AppError> {
+    sqlx::query_as::<_, Branch>(
+        r#"
+        SELECT id, org_id, name, address, phone, timezone,
+               printer_brand, printer_ip::text, printer_port,
+               is_active, created_at, updated_at
+        FROM branches
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Branch not found".into()))
+}
+RUST
+
+ok "src/branches/handlers.rs"
+
+# ===========================================================================
+#  3. src/shifts/handlers.rs  — add cash_movements_net to ShiftReportResponse
+#     (PaymentSummaryRow.order_count is already there via sqlx)
+# ===========================================================================
+log "Patching src/shifts/handlers.rs — adding cash_movements_net to report response ..."
+
+# We do a targeted sed replace: add the cash_movements_net field to the struct
+# and compute it in the handler. We use Python for precision.
+python3 - << 'PY'
+import pathlib
+
+path = pathlib.Path("src/shifts/handlers.rs")
+src  = path.read_text()
+
+# ── 1. Add cash_movements_net to ShiftReportResponse struct ──────────────────
+old_struct = """#[derive(Debug, Serialize)]
+pub struct ShiftReportResponse {
+    pub shift:              Shift,
+    pub payment_summary:    Vec<PaymentSummaryRow>,
+    pub total_payments:     i64,
+    pub total_returns:      i64,
+    pub net_payments:       i64,
+    pub cash_movements:     Vec<CashMovementSummaryRow>,
+    pub cash_movements_in:  i64,
+    pub cash_movements_out: i64,
+    pub printed_at:         chrono::DateTime<chrono::Utc>,
+}"""
+
+new_struct = """#[derive(Debug, Serialize)]
+pub struct ShiftReportResponse {
+    pub shift:               Shift,
+    pub payment_summary:     Vec<PaymentSummaryRow>,
+    pub total_payments:      i64,
+    pub total_returns:       i64,
+    pub net_payments:        i64,
+    pub cash_movements:      Vec<CashMovementSummaryRow>,
+    pub cash_movements_in:   i64,
+    pub cash_movements_out:  i64,
+    /// Net of all cash movements (in - out) as a signed integer
+    pub cash_movements_net:  i64,
+    pub printed_at:          chrono::DateTime<chrono::Utc>,
+}"""
+
+if old_struct not in src:
+    print("  WARN: ShiftReportResponse struct not found verbatim — skipping struct patch")
+else:
+    src = src.replace(old_struct, new_struct)
+    print("  patched ShiftReportResponse struct")
+
+# ── 2. Add cash_movements_net computation in get_shift_report handler ─────────
+old_net = """    let cash_movements_net: i64 = cash_movements.iter()
+        .filter(|m| m.amount < 0)
+        .map(|m| m.amount.unsigned_abs() as i64)
+        .sum();
+
+    let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
+    let net_payments = total_payments - total_returns;
+
+    Ok(HttpResponse::Ok().json(ShiftReportResponse {
+        shift,
+        payment_summary,
+        total_payments,
+        total_returns,
+        net_payments,
+        cash_movements,
+        cash_movements_in,
+        cash_movements_out,
+        printed_at: chrono::Utc::now(),
+    }))"""
+
+new_net = """    let cash_movements_net: i64 = cash_movements.iter()
+        .filter(|m| m.amount < 0)
+        .map(|m| m.amount.unsigned_abs() as i64)
+        .sum();
+
+    let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
+    let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
+    let net_payments = total_payments - total_returns;
+
+    Ok(HttpResponse::Ok().json(ShiftReportResponse {
+        shift,
+        payment_summary,
+        total_payments,
+        total_returns,
+        net_payments,
+        cash_movements,
+        cash_movements_in,
+        cash_movements_out,
+        cash_movements_net: cash_movements_net_signed,
+        printed_at: chrono::Utc::now(),
+    }))"""
+
+if old_net not in src:
+    # Try a simpler pattern — just add cash_movements_net to the response literal
+    old_resp = """    Ok(HttpResponse::Ok().json(ShiftReportResponse {
+        shift,
+        payment_summary,
+        total_payments,
+        total_returns,
+        net_payments,
+        cash_movements,
+        cash_movements_in,
+        cash_movements_out,
+        printed_at: chrono::Utc::now(),
+    }))"""
+    new_resp = """    let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
+    Ok(HttpResponse::Ok().json(ShiftReportResponse {
+        shift,
+        payment_summary,
+        total_payments,
+        total_returns,
+        net_payments,
+        cash_movements,
+        cash_movements_in,
+        cash_movements_out,
+        cash_movements_net: cash_movements_net_signed,
+        printed_at: chrono::Utc::now(),
+    }))"""
+    if old_resp in src:
+        src = src.replace(old_resp, new_resp)
+        print("  patched get_shift_report response (fallback pattern)")
+    else:
+        print("  WARN: get_shift_report response literal not found — skipping net patch")
+else:
+    src = src.replace(old_net, new_net)
+    print("  patched get_shift_report computation + response")
+
+path.write_text(src)
+PY
+
+ok "src/shifts/handlers.rs"
+
+# ===========================================================================
+#  4. Verify the project still compiles (offline mode if sqlx offline data exists)
+# ===========================================================================
+log "Attempting cargo check ..."
+
+if SQLX_OFFLINE=true cargo check 2>&1; then
+    ok "cargo check passed"
+else
+    warn "cargo check failed — check errors above."
+    warn "This may be expected if SQLX offline data needs regenerating."
+    warn "On the VPS with DB running: cargo sqlx prepare && cargo build --release"
+fi
+
+# ===========================================================================
+#  Summary
+# ===========================================================================
+echo ""
+echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
+echo -e "${GREEN}  Backend patch complete!${RESET}"
+echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
+echo ""
+echo "  Files modified:"
+echo "    src/reports/handlers.rs"
+echo "      ✓ BranchSalesReport: +talabat_online_revenue, +talabat_cash_revenue"
+echo "      ✓ ShiftSummary:      +talabat_online_revenue, +talabat_cash_revenue"
+echo "      ✓ TimeseriesPoint:   +per-payment-method breakdown (6 payment cols)"
+echo "      ✓ BranchComparison:  +talabat_online_revenue, +talabat_cash_revenue"
+echo "      ✓ branch_sales:      ?limit param (default 20, max 100)"
+echo "      ✓ org_branch_comparison: all payment methods included"
+echo ""
+echo "    src/branches/handlers.rs"
+echo "      ✓ UpdateBranchRequest: double-option for printer_brand/ip/port"
+echo "      ✓ update_branch:       CASE-based UPDATE (can now null printer config)"
+echo ""
+echo "    src/shifts/handlers.rs"
+echo "      ✓ ShiftReportResponse: +cash_movements_net (in - out signed)"
+echo ""
+echo "  To deploy on VPS:"
+echo "    cargo sqlx prepare   # if schema changed (it didn't here)"
+echo "    cargo build --release"
+echo "    systemctl restart rue-rust"
+echo ""

@@ -7,8 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "user_role", rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]   // ← add this
-
+#[serde(rename_all = "snake_case")]
 pub enum UserRole {
     SuperAdmin,
     OrgAdmin,
@@ -22,7 +21,7 @@ pub enum UserRole {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id:            Uuid,
-    pub org_id:        Option<Uuid>,  // NULL for super_admin
+    pub org_id:        Option<Uuid>,
     pub name:          String,
     pub email:         Option<String>,
     pub phone:         Option<String>,
@@ -36,11 +35,10 @@ pub struct User {
     pub deleted_at:    Option<DateTime<Utc>>,
 }
 
-// Safe public representation — no hashes
 #[derive(Debug, Serialize)]
 pub struct UserPublic {
     pub id:        Uuid,
-    pub org_id:    Option<Uuid>,  // NULL for super_admin
+    pub org_id:    Option<Uuid>,
     pub branch_id: Option<Uuid>,
     pub name:      String,
     pub email:     Option<String>,
@@ -54,7 +52,7 @@ impl From<User> for UserPublic {
         Self {
             id:        u.id,
             org_id:    u.org_id,
-            branch_id: None,       // ← add (populated after query)
+            branch_id: None,
             name:      u.name,
             email:     u.email,
             phone:     u.phone,
@@ -62,4 +60,19 @@ impl From<User> for UserPublic {
             is_active: u.is_active,
         }
     }
+}
+
+// ── Discount ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Discount {
+    pub id:         Uuid,
+    pub org_id:     Uuid,
+    pub name:       String,
+    #[serde(rename = "type")]
+    pub dtype:      String,   // "percentage" | "fixed"
+    pub value:      i32,
+    pub is_active:  bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }

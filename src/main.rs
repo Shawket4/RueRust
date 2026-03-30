@@ -13,6 +13,7 @@ mod soft_serve;
 mod shifts;
 mod orders;
 mod reports;
+mod discounts;
 mod uploads;
 
 use actix_cors::Cors;
@@ -81,6 +82,7 @@ async fn main() -> std::io::Result<()> {
             .configure(soft_serve::routes::configure)
             .configure(shifts::routes::configure)
             .configure(orders::routes::configure)
+            .configure(discounts::routes::configure)
             .configure(reports::routes::configure)
             .configure(uploads::routes::configure)
             .service(Files::new("/uploads", &uploads_clone).use_last_modified(true))

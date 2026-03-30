@@ -231,12 +231,12 @@ pub async fn shift_summary(
             COUNT(o.id) FILTER (WHERE o.status != 'voided')::bigint     AS total_orders,
             COUNT(o.id) FILTER (WHERE o.status = 'voided')::bigint      AS voided_orders,
             COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'), 0)::bigint                                            AS total_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'cash'),           0)::bigint    AS cash_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'card'),           0)::bigint    AS card_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'digital_wallet'), 0)::bigint    AS digital_wallet_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'mixed'),          0)::bigint    AS mixed_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_online'), 0)::bigint    AS talabat_online_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_cash'),   0)::bigint    AS talabat_cash_revenue,
+                        COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'cash'), 0)::bigint           AS cash_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'card'), 0)::bigint           AS card_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'mixed'), 0)::bigint          AS mixed_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_online'), 0)::bigint  AS talabat_online_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_cash'), 0)::bigint   AS talabat_cash_revenue
             COALESCE(SUM(o.discount_amount) FILTER (WHERE o.status != 'voided'), 0)::bigint AS total_discount,
             COALESCE(SUM(o.tax_amount)      FILTER (WHERE o.status != 'voided'), 0)::bigint AS total_tax
         FROM shifts s
@@ -372,12 +372,12 @@ pub async fn branch_sales(
             COALESCE(SUM(discount_amount) FILTER (WHERE status != 'voided'), 0),
             COALESCE(SUM(tax_amount)      FILTER (WHERE status != 'voided'), 0),
             COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'cash'),           0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'card'),           0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'digital_wallet'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'mixed'),          0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_online'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_cash'),   0)
+                        COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'cash'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'card'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'digital_wallet'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'mixed'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_online'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_cash'), 0)
         FROM orders
         WHERE branch_id = $1
           AND ($2::timestamptz IS NULL OR created_at >= $2)
@@ -556,12 +556,12 @@ pub async fn branch_sales_timeseries(
             COUNT(*)        FILTER (WHERE status = 'voided')::bigint   AS voided,
             COALESCE(SUM(discount_amount) FILTER (WHERE status != 'voided'), 0)::bigint AS discount,
             COALESCE(SUM(tax_amount)      FILTER (WHERE status != 'voided'), 0)::bigint AS tax,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'cash'),           0)::bigint AS cash_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'card'),           0)::bigint AS card_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'mixed'),          0)::bigint AS mixed_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_online'), 0)::bigint AS talabat_online_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_cash'),   0)::bigint AS talabat_cash_revenue
+                        COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'cash'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'card'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'digital_wallet'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'mixed'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_online'), 0),
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_cash'), 0)
         FROM orders
         WHERE branch_id = $1
           AND ($2::timestamptz IS NULL OR created_at >= $2)
@@ -709,12 +709,12 @@ pub async fn org_branch_comparison(
             COUNT(o.id) FILTER (WHERE o.status != 'voided')::bigint AS total_orders,
             COUNT(o.id) FILTER (WHERE o.status = 'voided')::bigint  AS voided_orders,
             COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'),                                            0)::bigint AS total_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'cash'),              0)::bigint AS cash_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'card'),              0)::bigint AS card_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'digital_wallet'),    0)::bigint AS digital_wallet_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'mixed'),             0)::bigint AS mixed_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_online'),    0)::bigint AS talabat_online_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_cash'),      0)::bigint AS talabat_cash_revenue
+                        COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'cash'), 0)::bigint           AS cash_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'card'), 0)::bigint           AS card_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'mixed'), 0)::bigint          AS mixed_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_online'), 0)::bigint  AS talabat_online_revenue,
+            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_cash'), 0)::bigint   AS talabat_cash_revenue
         FROM branches b
         LEFT JOIN orders o ON o.branch_id = b.id
           AND ($2::timestamptz IS NULL OR o.created_at >= $2)

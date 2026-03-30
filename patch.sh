@@ -1,55 +1,37 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Rue POS — Backend Non-Breaking Improvements
-#  Run from the root of the Rust backend project (where Cargo.toml lives).
-#
-#  Changes:
-#   1. reports/handlers.rs
-#      - BranchSalesReport: add talabat_online_revenue + talabat_cash_revenue fields
-#      - branch_sales query: aggregate those two payment methods
-#      - top_items: respect optional ?limit query param (default 20)
-#      - TimeseriesPoint: add per-payment-method breakdown columns
-#      - branch_sales_timeseries: add talabat columns to SELECT
-#      - OrgComparisonReport/BranchComparison: add talabat columns
-#
-#   2. shifts/handlers.rs
-#      - ShiftReportResponse: add order_count to PaymentSummaryRow (already
-#        has it via sqlx but the struct needs it surfaced)
-#        → PaymentSummaryRow already has order_count — it just needs to be
-#          confirmed the SQL returns it. It does. No struct change needed.
-#        → Add cash_movements_net computed field to response.
-#
-#   3. branches/handlers.rs
-#      - UpdateBranchRequest: allow explicit null for printer_brand/ip/port
-#      - update_branch query: use a smarter CASE so NULL input clears the field
-#
+# Rue POS — Rust backend patch (all 7 features)
+# Run from the root of the Rust project (where Cargo.toml lives)
 # =============================================================================
-set -euo pipefail
+set -e
 
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-RESET='\033[0m'
+echo "=== Rue POS — Rust backend patch ==="
 
-log()  { echo -e "${CYAN}[patch]${RESET} $*"; }
-ok()   { echo -e "${GREEN}[done] ${RESET} $*"; }
-warn() { echo -e "${YELLOW}[warn] ${RESET} $*"; }
+# ── 1. New module: discounts ──────────────────────────────────────────────────
+mkdir -p src/discounts
 
-# ---------------------------------------------------------------------------
-# Guard: must be run from the Rust project root
-# ---------------------------------------------------------------------------
-if [[ ! -f "Cargo.toml" ]]; then
-  echo "ERROR: Run this script from the Rust project root (where Cargo.toml lives)."
-  exit 1
-fi
+cat > src/discounts/mod.rs << 'EOF'
+pub mod handlers;
+pub mod routes;
+EOF
 
-# ===========================================================================
-#  1. src/reports/handlers.rs
-# ===========================================================================
-log "Patching src/reports/handlers.rs ..."
+cat > src/discounts/routes.rs << 'EOF'
+use actix_web::web;
+use crate::{auth::middleware::JwtMiddleware, discounts::handlers};
 
-cat > src/reports/handlers.rs << 'RUST'
+pub fn configure(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/discounts")
+            .wrap(JwtMiddleware)
+            .route("",      web::get().to(handlers::list_discounts))
+            .route("",      web::post().to(handlers::create_discount))
+            .route("/{id}", web::patch().to(handlers::update_discount))
+            .route("/{id}", web::delete().to(handlers::delete_discount)),
+    );
+}
+EOF
+
+cat > src/discounts/handlers.rs << 'EOF'
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -60,937 +42,55 @@ use crate::{
     auth::jwt::Claims,
     errors::AppError,
     models::UserRole,
-    permissions::checker::check_permission,
 };
 
-// ── Query params ──────────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct DateRangeQuery {
-    pub from:  Option<DateTime<Utc>>,
-    pub to:    Option<DateTime<Utc>>,
-    pub limit: Option<i64>, // for top_items (default 20)
-}
-
-#[derive(Deserialize)]
-pub struct TimeseriesQuery {
-    pub from:        Option<DateTime<Utc>>,
-    pub to:          Option<DateTime<Utc>>,
-    pub granularity: Option<String>, // "hourly" | "daily" | "monthly"
-}
-
-// ── Response types ────────────────────────────────────────────
-
 #[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct ShiftSummary {
-    pub shift_id:               Uuid,
-    pub branch_id:              Uuid,
-    pub branch_name:            String,
-    pub teller_id:              Uuid,
-    pub teller_name:            String,
-    pub status:                 String,
-    pub opened_at:              DateTime<Utc>,
-    pub closed_at:              Option<DateTime<Utc>>,
-    pub opening_cash:           i64,
-    pub closing_cash_declared:  Option<i64>,
-    pub closing_cash_system:    Option<i64>,
-    pub cash_discrepancy:       Option<i64>,
-    pub total_orders:           i64,
-    pub voided_orders:          i64,
-    pub total_revenue:          i64,
-    pub cash_revenue:           i64,
-    pub card_revenue:           i64,
-    pub digital_wallet_revenue: i64,
-    pub mixed_revenue:          i64,
-    pub talabat_online_revenue: i64,
-    pub talabat_cash_revenue:   i64,
-    pub total_discount:         i64,
-    pub total_tax:              i64,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct InventoryDiscrepancy {
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub stock_at_open:     f64,
-    pub expected_stock:    f64,
-    pub actual_count:      Option<f64>,
-    pub discrepancy:       Option<f64>,
-    pub notes:             Option<String>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct DeductionLogRow {
-    pub id:                Uuid,
-    pub order_id:          Option<Uuid>,
-    pub order_item_id:     Option<Uuid>,
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub quantity_deducted: f64,
-    pub source:            String,
-    pub created_at:        DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CategorySales {
-    pub category_id:   Option<Uuid>,
-    pub category_name: Option<String>,
-    pub item_count:    i64,
-    pub quantity_sold: i64,
-    pub revenue:       i64,
-    pub items:         Vec<ItemSales>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct ItemSales {
-    pub menu_item_id:  Uuid,
-    pub item_name:     String,
-    pub quantity_sold: i64,
-    pub revenue:       i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BranchSalesReport {
-    pub branch_id:              Uuid,
-    pub branch_name:            String,
-    pub from:                   Option<DateTime<Utc>>,
-    pub to:                     Option<DateTime<Utc>>,
-    pub total_orders:           i64,
-    pub voided_orders:          i64,
-    pub subtotal:               i64,
-    pub total_discount:         i64,
-    pub total_tax:              i64,
-    pub total_revenue:          i64,
-    pub cash_revenue:           i64,
-    pub card_revenue:           i64,
-    pub digital_wallet_revenue: i64,
-    pub mixed_revenue:          i64,
-    pub talabat_online_revenue: i64,
-    pub talabat_cash_revenue:   i64,
-    pub top_items:              Vec<ItemSales>,
-    pub by_category:            Vec<CategorySales>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct StockRow {
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub current_stock:     f64,
-    pub reorder_threshold: f64,
-    pub cost_per_unit:     Option<f64>,
-    pub below_reorder:     bool,
-    pub is_active:         bool,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BranchStockReport {
-    pub branch_id:   Uuid,
-    pub branch_name: String,
-    pub items:       Vec<StockRow>,
-}
-
-// Timeseries now includes per-payment-method breakdown
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct TimeseriesPoint {
-    pub period:                 String,
-    pub orders:                 i64,
-    pub revenue:                i64,
-    pub voided:                 i64,
-    pub discount:               i64,
-    pub tax:                    i64,
-    pub cash_revenue:           i64,
-    pub card_revenue:           i64,
-    pub digital_wallet_revenue: i64,
-    pub mixed_revenue:          i64,
-    pub talabat_online_revenue: i64,
-    pub talabat_cash_revenue:   i64,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct TellerStats {
-    pub teller_id:       Uuid,
-    pub teller_name:     String,
-    pub orders:          i64,
-    pub revenue:         i64,
-    pub avg_order_value: i64,
-    pub voided:          i64,
-    pub shifts:          i64,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct AddonSalesRow {
-    pub addon_item_id: Uuid,
-    pub addon_name:    String,
-    pub addon_type:    String,
-    pub quantity_sold: i64,
-    pub revenue:       i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct BranchComparison {
-    pub branch_id:              Uuid,
-    pub branch_name:            String,
-    pub total_orders:           i64,
-    pub voided_orders:          i64,
-    pub total_revenue:          i64,
-    pub cash_revenue:           i64,
-    pub card_revenue:           i64,
-    pub digital_wallet_revenue: i64,
-    pub mixed_revenue:          i64,
-    pub talabat_online_revenue: i64,
-    pub talabat_cash_revenue:   i64,
-    pub avg_order_value:        i64,
-    pub void_rate_pct:          f64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OrgComparisonReport {
-    pub org_id:   Uuid,
-    pub from:     Option<DateTime<Utc>>,
-    pub to:       Option<DateTime<Utc>>,
-    pub branches: Vec<BranchComparison>,
-}
-
-// ── GET /reports/shifts/:id/summary ──────────────────────────
-
-pub async fn shift_summary(
-    req:      HttpRequest,
-    pool:     web::Data<PgPool>,
-    shift_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "shifts", "read").await?;
-    require_shift_branch_access(pool.get_ref(), &claims, *shift_id).await?;
-
-    let summary = sqlx::query_as::<_, ShiftSummary>(
-        r#"
-        SELECT
-            s.id                                        AS shift_id,
-            s.branch_id,
-            b.name                                      AS branch_name,
-            s.teller_id,
-            u.name                                      AS teller_name,
-            s.status::text,
-            s.created_at                                AS opened_at,
-            s.closed_at,
-            s.opening_cash::bigint,
-            s.closing_cash_declared::bigint,
-            s.closing_cash_system::bigint,
-            s.cash_discrepancy::bigint,
-            COUNT(o.id) FILTER (WHERE o.status != 'voided')::bigint     AS total_orders,
-            COUNT(o.id) FILTER (WHERE o.status = 'voided')::bigint      AS voided_orders,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'), 0)::bigint                                            AS total_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'cash'),           0)::bigint    AS cash_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'card'),           0)::bigint    AS card_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'digital_wallet'), 0)::bigint    AS digital_wallet_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'mixed'),          0)::bigint    AS mixed_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_online'), 0)::bigint    AS talabat_online_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_cash'),   0)::bigint    AS talabat_cash_revenue,
-            COALESCE(SUM(o.discount_amount) FILTER (WHERE o.status != 'voided'), 0)::bigint AS total_discount,
-            COALESCE(SUM(o.tax_amount)      FILTER (WHERE o.status != 'voided'), 0)::bigint AS total_tax
-        FROM shifts s
-        JOIN branches b ON b.id = s.branch_id
-        JOIN users    u ON u.id = s.teller_id
-        LEFT JOIN orders o ON o.shift_id = s.id
-        WHERE s.id = $1
-        GROUP BY s.id, b.name, u.name
-        "#,
-    )
-    .bind(*shift_id)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .ok_or_else(|| AppError::NotFound("Shift not found".into()))?;
-
-    Ok(HttpResponse::Ok().json(summary))
-}
-
-// ── GET /reports/shifts/:id/inventory ────────────────────────
-
-pub async fn shift_inventory_discrepancies(
-    req:      HttpRequest,
-    pool:     web::Data<PgPool>,
-    shift_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "shift_counts", "read").await?;
-    require_shift_branch_access(pool.get_ref(), &claims, *shift_id).await?;
-
-    let rows = sqlx::query_as::<_, InventoryDiscrepancy>(
-        r#"
-        SELECT
-            ii.id                                           AS inventory_item_id,
-            ii.name                                         AS item_name,
-            ii.unit::text                                   AS unit,
-            snap.quantity_at_open::float8                   AS stock_at_open,
-            GREATEST(0,
-                snap.quantity_at_open::float8
-                - COALESCE(deduct.total_deducted, 0)
-            )                                               AS expected_stock,
-            cnt.actual_count::float8,
-            cnt.discrepancy::float8,
-            cnt.notes
-        FROM shift_inventory_snapshots snap
-        JOIN inventory_items ii ON ii.id = snap.inventory_item_id
-        LEFT JOIN (
-            SELECT inventory_item_id, SUM(quantity_deducted) AS total_deducted
-            FROM inventory_deduction_logs
-            WHERE order_id IN (SELECT id FROM orders WHERE shift_id = $1)
-            GROUP BY inventory_item_id
-        ) deduct ON deduct.inventory_item_id = snap.inventory_item_id
-        LEFT JOIN shift_inventory_counts cnt
-               ON cnt.shift_id = snap.shift_id
-              AND cnt.inventory_item_id = snap.inventory_item_id
-        WHERE snap.shift_id = $1
-        ORDER BY ii.name ASC
-        "#,
-    )
-    .bind(*shift_id)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── GET /reports/shifts/:id/deductions ───────────────────────
-
-pub async fn shift_deductions(
-    req:      HttpRequest,
-    pool:     web::Data<PgPool>,
-    shift_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
-    require_shift_branch_access(pool.get_ref(), &claims, *shift_id).await?;
-
-    let rows = sqlx::query_as::<_, DeductionLogRow>(
-        r#"
-        SELECT
-            dl.id,
-            dl.order_id,
-            dl.order_item_id,
-            dl.inventory_item_id,
-            ii.name         AS item_name,
-            ii.unit::text   AS unit,
-            dl.quantity_deducted::float8,
-            dl.source,
-            dl.created_at
-        FROM inventory_deduction_logs dl
-        JOIN inventory_items ii ON ii.id = dl.inventory_item_id
-        WHERE dl.order_id IN (
-            SELECT id FROM orders WHERE shift_id = $1
-        )
-        ORDER BY dl.created_at ASC
-        "#,
-    )
-    .bind(*shift_id)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── GET /reports/branches/:id/sales ──────────────────────────
-
-pub async fn branch_sales(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-    query:     web::Query<DateRangeQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let branch_name: String = sqlx::query_scalar(
-        "SELECT name FROM branches WHERE id = $1 AND deleted_at IS NULL"
-    )
-    .bind(*branch_id)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .flatten()
-    .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
-
-    // 12-column aggregate — includes talabat variants
-    #[allow(clippy::type_complexity)]
-    let totals: (i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64) = sqlx::query_as(
-        r#"
-        SELECT
-            COUNT(*) FILTER (WHERE status != 'voided'),
-            COUNT(*) FILTER (WHERE status = 'voided'),
-            COALESCE(SUM(subtotal)        FILTER (WHERE status != 'voided'), 0),
-            COALESCE(SUM(discount_amount) FILTER (WHERE status != 'voided'), 0),
-            COALESCE(SUM(tax_amount)      FILTER (WHERE status != 'voided'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'cash'),           0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'card'),           0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'digital_wallet'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'mixed'),          0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_online'), 0),
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_cash'),   0)
-        FROM orders
-        WHERE branch_id = $1
-          AND ($2::timestamptz IS NULL OR created_at >= $2)
-          AND ($3::timestamptz IS NULL OR created_at <= $3)
-        "#,
-    )
-    .bind(*branch_id).bind(query.from).bind(query.to)
-    .fetch_one(pool.get_ref()).await?;
-
-    let item_limit = query.limit.unwrap_or(20).min(100).max(1);
-
-    let top_items = sqlx::query_as::<_, ItemSales>(
-        r#"
-        SELECT oi.menu_item_id, oi.item_name,
-               SUM(oi.quantity)::bigint   AS quantity_sold,
-               SUM(oi.line_total)::bigint AS revenue
-        FROM order_items oi
-        JOIN orders o ON o.id = oi.order_id
-        WHERE o.branch_id = $1 AND o.status != 'voided'
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2)
-          AND ($3::timestamptz IS NULL OR o.created_at <= $3)
-        GROUP BY oi.menu_item_id, oi.item_name
-        ORDER BY revenue DESC
-        LIMIT $4
-        "#,
-    )
-    .bind(*branch_id).bind(query.from).bind(query.to).bind(item_limit)
-    .fetch_all(pool.get_ref()).await?;
-
-    #[derive(sqlx::FromRow)]
-    struct CategoryItemRow {
-        category_id:   Option<Uuid>,
-        category_name: Option<String>,
-        menu_item_id:  Uuid,
-        item_name:     String,
-        quantity_sold: i64,
-        revenue:       i64,
-    }
-
-    let cat_rows = sqlx::query_as::<_, CategoryItemRow>(
-        r#"
-        SELECT m.category_id, c.name AS category_name,
-               oi.menu_item_id, oi.item_name,
-               SUM(oi.quantity)::bigint   AS quantity_sold,
-               SUM(oi.line_total)::bigint AS revenue
-        FROM order_items oi
-        JOIN orders o     ON o.id  = oi.order_id
-        JOIN menu_items m ON m.id  = oi.menu_item_id
-        LEFT JOIN categories c ON c.id = m.category_id
-        WHERE o.branch_id = $1 AND o.status != 'voided'
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2)
-          AND ($3::timestamptz IS NULL OR o.created_at <= $3)
-        GROUP BY m.category_id, c.name, oi.menu_item_id, oi.item_name
-        ORDER BY c.name NULLS LAST, revenue DESC
-        "#,
-    )
-    .bind(*branch_id).bind(query.from).bind(query.to)
-    .fetch_all(pool.get_ref()).await?;
-
-    let mut by_category: Vec<CategorySales> = Vec::new();
-    for row in cat_rows {
-        let item = ItemSales {
-            menu_item_id:  row.menu_item_id,
-            item_name:     row.item_name,
-            quantity_sold: row.quantity_sold,
-            revenue:       row.revenue,
-        };
-        match by_category.iter_mut().find(|c| c.category_id == row.category_id) {
-            Some(cat) => {
-                cat.item_count    += 1;
-                cat.quantity_sold += item.quantity_sold;
-                cat.revenue       += item.revenue;
-                cat.items.push(item);
-            }
-            None => {
-                by_category.push(CategorySales {
-                    category_id:   row.category_id,
-                    category_name: row.category_name,
-                    item_count:    1,
-                    quantity_sold: item.quantity_sold,
-                    revenue:       item.revenue,
-                    items:         vec![item],
-                });
-            }
-        }
-    }
-
-    Ok(HttpResponse::Ok().json(BranchSalesReport {
-        branch_id:              *branch_id,
-        branch_name,
-        from:                   query.from,
-        to:                     query.to,
-        total_orders:           totals.0,
-        voided_orders:          totals.1,
-        subtotal:               totals.2,
-        total_discount:         totals.3,
-        total_tax:              totals.4,
-        total_revenue:          totals.5,
-        cash_revenue:           totals.6,
-        card_revenue:           totals.7,
-        digital_wallet_revenue: totals.8,
-        mixed_revenue:          totals.9,
-        talabat_online_revenue: totals.10,
-        talabat_cash_revenue:   totals.11,
-        top_items,
-        by_category,
-    }))
-}
-
-// ── GET /reports/branches/:id/stock ──────────────────────────
-
-pub async fn branch_stock(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let branch_name: String = sqlx::query_scalar(
-        "SELECT name FROM branches WHERE id = $1 AND deleted_at IS NULL"
-    )
-    .bind(*branch_id)
-    .fetch_optional(pool.get_ref()).await?.flatten()
-    .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
-
-    let items = sqlx::query_as::<_, StockRow>(
-        r#"
-        SELECT id AS inventory_item_id, name AS item_name, unit::text,
-               current_stock::float8, reorder_threshold::float8, cost_per_unit::float8,
-               (current_stock <= reorder_threshold) AS below_reorder, is_active
-        FROM inventory_items
-        WHERE branch_id = $1 AND deleted_at IS NULL
-        ORDER BY (current_stock <= reorder_threshold) DESC, name ASC
-        "#,
-    )
-    .bind(*branch_id)
-    .fetch_all(pool.get_ref()).await?;
-
-    Ok(HttpResponse::Ok().json(BranchStockReport {
-        branch_id:   *branch_id,
-        branch_name,
-        items,
-    }))
-}
-
-// ── GET /reports/branches/:id/sales/timeseries ───────────────
-
-pub async fn branch_sales_timeseries(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-    query:     web::Query<TimeseriesQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let trunc = match query.granularity.as_deref().unwrap_or("daily") {
-        "hourly"  => "hour",
-        "monthly" => "month",
-        _         => "day",
-    };
-
-    // trunc is server-controlled — not user input, safe to interpolate
-    let sql = format!(
-        r#"
-        SELECT
-            to_char(
-                date_trunc('{trunc}', created_at AT TIME ZONE 'Africa/Cairo'),
-                'YYYY-MM-DD"T"HH24:MI:SS'
-            ) AS period,
-            COUNT(*)        FILTER (WHERE status != 'voided')::bigint  AS orders,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided'), 0)::bigint AS revenue,
-            COUNT(*)        FILTER (WHERE status = 'voided')::bigint   AS voided,
-            COALESCE(SUM(discount_amount) FILTER (WHERE status != 'voided'), 0)::bigint AS discount,
-            COALESCE(SUM(tax_amount)      FILTER (WHERE status != 'voided'), 0)::bigint AS tax,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'cash'),           0)::bigint AS cash_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'card'),           0)::bigint AS card_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'mixed'),          0)::bigint AS mixed_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_online'), 0)::bigint AS talabat_online_revenue,
-            COALESCE(SUM(total_amount)    FILTER (WHERE status != 'voided' AND payment_method = 'talabat_cash'),   0)::bigint AS talabat_cash_revenue
-        FROM orders
-        WHERE branch_id = $1
-          AND ($2::timestamptz IS NULL OR created_at >= $2)
-          AND ($3::timestamptz IS NULL OR created_at <= $3)
-        GROUP BY date_trunc('{trunc}', created_at AT TIME ZONE 'Africa/Cairo')
-        ORDER BY 1 ASC
-        "#,
-        trunc = trunc
-    );
-
-    let rows = sqlx::query_as::<_, TimeseriesPoint>(&sql)
-        .bind(*branch_id)
-        .bind(query.from)
-        .bind(query.to)
-        .fetch_all(pool.get_ref())
-        .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── GET /reports/branches/:id/tellers ────────────────────────
-
-pub async fn branch_teller_stats(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-    query:     web::Query<DateRangeQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let rows = sqlx::query_as::<_, TellerStats>(
-        r#"
-        SELECT
-            o.teller_id,
-            u.name AS teller_name,
-            COUNT(o.id) FILTER (WHERE o.status != 'voided')::bigint AS orders,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'), 0)::bigint AS revenue,
-            CASE
-                WHEN COUNT(o.id) FILTER (WHERE o.status != 'voided') = 0 THEN 0
-                ELSE (
-                    COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'), 0)
-                    / COUNT(o.id) FILTER (WHERE o.status != 'voided')
-                )::bigint
-            END AS avg_order_value,
-            COUNT(o.id) FILTER (WHERE o.status = 'voided')::bigint AS voided,
-            COUNT(DISTINCT o.shift_id)::bigint AS shifts
-        FROM orders o
-        JOIN users u ON u.id = o.teller_id
-        WHERE o.branch_id = $1
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2)
-          AND ($3::timestamptz IS NULL OR o.created_at <= $3)
-        GROUP BY o.teller_id, u.name
-        ORDER BY revenue DESC
-        "#,
-    )
-    .bind(*branch_id)
-    .bind(query.from)
-    .bind(query.to)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── GET /reports/branches/:id/addons ─────────────────────────
-
-pub async fn branch_addon_sales(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-    query:     web::Query<DateRangeQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let rows = sqlx::query_as::<_, AddonSalesRow>(
-        r#"
-        SELECT
-            oia.addon_item_id,
-            oia.addon_name,
-            COALESCE(ai.type, 'extra') AS addon_type,
-            SUM(oia.quantity)::bigint  AS quantity_sold,
-            SUM(oia.line_total)::bigint AS revenue
-        FROM order_item_addons oia
-        JOIN order_items oi ON oi.id  = oia.order_item_id
-        JOIN orders o       ON o.id   = oi.order_id
-        LEFT JOIN addon_items ai ON ai.id = oia.addon_item_id
-        WHERE o.branch_id = $1
-          AND o.status != 'voided'
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2)
-          AND ($3::timestamptz IS NULL OR o.created_at <= $3)
-        GROUP BY oia.addon_item_id, oia.addon_name, ai.type
-        ORDER BY quantity_sold DESC
-        "#,
-    )
-    .bind(*branch_id)
-    .bind(query.from)
-    .bind(query.to)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── GET /reports/orgs/:org_id/comparison ─────────────────────
-
-pub async fn org_branch_comparison(
-    req:    HttpRequest,
-    pool:   web::Data<PgPool>,
-    org_id: web::Path<Uuid>,
-    query:  web::Query<DateRangeQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
-
-    if claims.role != UserRole::SuperAdmin {
-        if claims.org_id() != Some(*org_id) {
-            return Err(AppError::Forbidden("Not your org".into()));
-        }
-    }
-
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        branch_id:              Uuid,
-        branch_name:            String,
-        total_orders:           i64,
-        voided_orders:          i64,
-        total_revenue:          i64,
-        cash_revenue:           i64,
-        card_revenue:           i64,
-        digital_wallet_revenue: i64,
-        mixed_revenue:          i64,
-        talabat_online_revenue: i64,
-        talabat_cash_revenue:   i64,
-    }
-
-    let rows = sqlx::query_as::<_, Row>(
-        r#"
-        SELECT
-            b.id   AS branch_id,
-            b.name AS branch_name,
-            COUNT(o.id) FILTER (WHERE o.status != 'voided')::bigint AS total_orders,
-            COUNT(o.id) FILTER (WHERE o.status = 'voided')::bigint  AS voided_orders,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided'),                                            0)::bigint AS total_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'cash'),              0)::bigint AS cash_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'card'),              0)::bigint AS card_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'digital_wallet'),    0)::bigint AS digital_wallet_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'mixed'),             0)::bigint AS mixed_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_online'),    0)::bigint AS talabat_online_revenue,
-            COALESCE(SUM(o.total_amount) FILTER (WHERE o.status != 'voided' AND o.payment_method = 'talabat_cash'),      0)::bigint AS talabat_cash_revenue
-        FROM branches b
-        LEFT JOIN orders o ON o.branch_id = b.id
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2)
-          AND ($3::timestamptz IS NULL OR o.created_at <= $3)
-        WHERE b.org_id = $1 AND b.deleted_at IS NULL
-        GROUP BY b.id, b.name
-        ORDER BY total_revenue DESC
-        "#,
-    )
-    .bind(*org_id)
-    .bind(query.from)
-    .bind(query.to)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    let branches = rows.into_iter().map(|r| BranchComparison {
-        branch_id:              r.branch_id,
-        branch_name:            r.branch_name,
-        total_orders:           r.total_orders,
-        voided_orders:          r.voided_orders,
-        total_revenue:          r.total_revenue,
-        cash_revenue:           r.cash_revenue,
-        card_revenue:           r.card_revenue,
-        digital_wallet_revenue: r.digital_wallet_revenue,
-        mixed_revenue:          r.mixed_revenue,
-        talabat_online_revenue: r.talabat_online_revenue,
-        talabat_cash_revenue:   r.talabat_cash_revenue,
-        avg_order_value: if r.total_orders == 0 { 0 }
-                         else { r.total_revenue / r.total_orders },
-        void_rate_pct:   if (r.total_orders + r.voided_orders) == 0 { 0.0 }
-                         else { r.voided_orders as f64
-                                / (r.total_orders + r.voided_orders) as f64
-                                * 100.0 },
-    }).collect();
-
-    Ok(HttpResponse::Ok().json(OrgComparisonReport {
-        org_id:   *org_id,
-        from:     query.from,
-        to:       query.to,
-        branches,
-    }))
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-
-fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
-    req.extensions()
-        .get::<Claims>()
-        .cloned()
-        .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
-}
-
-async fn require_shift_branch_access(
-    pool:     &PgPool,
-    claims:   &Claims,
-    shift_id: Uuid,
-) -> Result<Uuid, AppError> {
-    let branch_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT branch_id FROM shifts WHERE id = $1"
-    )
-    .bind(shift_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-
-    let branch_id = branch_id
-        .ok_or_else(|| AppError::NotFound("Shift not found".into()))?;
-    require_branch_access(pool, claims, branch_id).await?;
-    Ok(branch_id)
-}
-
-async fn require_branch_access(
-    pool:      &PgPool,
-    claims:    &Claims,
-    branch_id: Uuid,
-) -> Result<(), AppError> {
-    if claims.role == UserRole::SuperAdmin { return Ok(()); }
-
-    let branch_org: Option<Uuid> = sqlx::query_scalar(
-        "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
-    )
-    .bind(branch_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-
-    let branch_org = branch_org
-        .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
-
-    if claims.org_id() != Some(branch_org) {
-        return Err(AppError::Forbidden("Branch belongs to a different org".into()));
-    }
-
-    if claims.role == UserRole::OrgAdmin { return Ok(()); }
-
-    let assigned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_branch_assignments WHERE user_id = $1 AND branch_id = $2)"
-    )
-    .bind(claims.user_id())
-    .bind(branch_id)
-    .fetch_one(pool)
-    .await?;
-
-    if !assigned {
-        return Err(AppError::Forbidden("Not assigned to this branch".into()));
-    }
-
-    Ok(())
-}
-RUST
-
-ok "src/reports/handlers.rs"
-
-# ===========================================================================
-#  2. src/branches/handlers.rs  — allow nulling printer config
-# ===========================================================================
-log "Patching src/branches/handlers.rs ..."
-
-cat > src/branches/handlers.rs << 'RUST'
-use actix_web::{web, HttpRequest, HttpResponse};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
-use uuid::Uuid;
-use actix_web::HttpMessage;
-
-use crate::{
-    auth::{guards::require_same_org, jwt::Claims},
-    errors::AppError,
-    permissions::checker::check_permission,
-};
-
-#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq)]
-#[sqlx(type_name = "printer_brand", rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum PrinterBrand {
-    Star,
-    Epson,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct Branch {
-    pub id:            Uuid,
-    pub org_id:        Uuid,
-    pub name:          String,
-    pub address:       Option<String>,
-    pub phone:         Option<String>,
-    pub timezone:      String,
-    pub printer_brand: Option<PrinterBrand>,
-    pub printer_ip:    Option<String>,
-    pub printer_port:  Option<i32>,
-    pub is_active:     bool,
-    pub created_at:    DateTime<Utc>,
-    pub updated_at:    DateTime<Utc>,
+pub struct Discount {
+    pub id:         Uuid,
+    pub org_id:     Uuid,
+    pub name:       String,
+    pub dtype:      String,
+    pub value:      i32,
+    pub is_active:  bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
-pub struct ListBranchesQuery {
+pub struct ListQuery {
     pub org_id: Uuid,
 }
 
 #[derive(Deserialize)]
-pub struct CreateBranchRequest {
-    pub org_id:        Uuid,
-    pub name:          String,
-    pub address:       Option<String>,
-    pub phone:         Option<String>,
-    pub timezone:      Option<String>,
-    pub printer_brand: Option<PrinterBrand>,
-    pub printer_ip:    Option<String>,
-    pub printer_port:  Option<i32>,
-}
-
-// UpdateBranchRequest uses Option<Option<T>> (double-option) so that:
-//   - field absent from JSON  → outer None → don't touch DB column
-//   - field present as null   → outer Some(None) → set DB column to NULL
-//   - field present as value  → outer Some(Some(v)) → update DB column
-//
-// Serde's `default` + `deserialize_with` handles this via a small helper.
-#[derive(Deserialize)]
-pub struct UpdateBranchRequest {
-    pub name:      Option<String>,
-    pub address:   Option<String>,
-    pub phone:     Option<String>,
-    pub timezone:  Option<String>,
+pub struct CreateDiscountRequest {
+    pub org_id:    Uuid,
+    pub name:      String,
+    pub dtype:     String,
+    pub value:     i32,
     pub is_active: Option<bool>,
-
-    // Nullable fields — use double-option pattern
-    #[serde(default, deserialize_with = "double_option")]
-    pub printer_brand: Option<Option<PrinterBrand>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub printer_ip:    Option<Option<String>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub printer_port:  Option<Option<i32>>,
 }
 
-/// Deserializes a field that can be:
-///  - absent          → None        (don't update)
-///  - present as null → Some(None)  (set to null)
-///  - present as value→ Some(Some(v))(set to value)
-fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: serde::Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    serde::Deserialize::deserialize(de).map(Some)
+#[derive(Deserialize)]
+pub struct UpdateDiscountRequest {
+    pub name:      Option<String>,
+    pub dtype:     Option<String>,
+    pub value:     Option<i32>,
+    pub is_active: Option<bool>,
 }
 
-pub async fn list_branches(
+pub async fn list_discounts(
     req:   HttpRequest,
     pool:  web::Data<PgPool>,
-    query: web::Query<ListBranchesQuery>,
+    query: web::Query<ListQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "branches", "read").await?;
-    require_same_org(&claims, Some(query.org_id))?;
+    require_org_access(&claims, query.org_id)?;
 
-    let branches = sqlx::query_as::<_, Branch>(
+    let rows = sqlx::query_as::<_, Discount>(
         r#"
-        SELECT id, org_id, name, address, phone, timezone,
-               printer_brand, printer_ip::text, printer_port,
-               is_active, created_at, updated_at
-        FROM branches
-        WHERE org_id = $1 AND deleted_at IS NULL
+        SELECT id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
+        FROM discounts
+        WHERE org_id = $1
         ORDER BY name
         "#,
     )
@@ -998,142 +98,87 @@ pub async fn list_branches(
     .fetch_all(pool.get_ref())
     .await?;
 
-    Ok(HttpResponse::Ok().json(branches))
+    Ok(HttpResponse::Ok().json(rows))
 }
 
-pub async fn get_branch(
+pub async fn create_discount(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
-    id:   web::Path<Uuid>,
+    body: web::Json<CreateDiscountRequest>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "branches", "read").await?;
+    require_org_access(&claims, body.org_id)?;
+    validate_dtype(&body.dtype)?;
+    validate_value(body.value, &body.dtype)?;
 
-    let branch = fetch_branch(pool.get_ref(), *id).await?;
-    require_same_org(&claims, Some(branch.org_id))?;
-
-    Ok(HttpResponse::Ok().json(branch))
-}
-
-pub async fn create_branch(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    body: web::Json<CreateBranchRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "branches", "create").await?;
-    require_same_org(&claims, Some(body.org_id))?;
-
-    let branch = sqlx::query_as::<_, Branch>(
+    let row = sqlx::query_as::<_, Discount>(
         r#"
-        INSERT INTO branches (org_id, name, address, phone, timezone, printer_brand, printer_ip, printer_port)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8)
-        RETURNING id, org_id, name, address, phone, timezone,
-                  printer_brand, printer_ip::text, printer_port,
-                  is_active, created_at, updated_at
+        INSERT INTO discounts (org_id, name, type, value, is_active)
+        VALUES ($1, $2, $3::discount_type, $4, $5)
+        RETURNING id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
         "#,
     )
     .bind(body.org_id)
     .bind(&body.name)
-    .bind(&body.address)
-    .bind(&body.phone)
-    .bind(body.timezone.as_deref().unwrap_or("Africa/Cairo"))
-    .bind(&body.printer_brand)
-    .bind(&body.printer_ip)
-    .bind(body.printer_port.unwrap_or(9100))
+    .bind(&body.dtype)
+    .bind(body.value)
+    .bind(body.is_active.unwrap_or(true))
     .fetch_one(pool.get_ref())
     .await?;
 
-    Ok(HttpResponse::Created().json(branch))
+    Ok(HttpResponse::Created().json(row))
 }
 
-pub async fn update_branch(
+pub async fn update_discount(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
     id:   web::Path<Uuid>,
-    body: web::Json<UpdateBranchRequest>,
+    body: web::Json<UpdateDiscountRequest>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "branches", "update").await?;
+    let existing = fetch_or_404(pool.get_ref(), *id).await?;
+    require_org_access(&claims, existing.org_id)?;
 
-    let existing = fetch_branch(pool.get_ref(), *id).await?;
-    require_same_org(&claims, Some(existing.org_id))?;
+    if let Some(ref dt) = body.dtype { validate_dtype(dt)?; }
+    if let (Some(v), Some(dt)) = (body.value, &body.dtype) { validate_value(v, dt)?; }
 
-    // Resolve each nullable field:
-    //   Some(Some(v)) → use v
-    //   Some(None)    → explicit null (clear the field)
-    //   None          → keep existing value
-    let new_printer_brand: Option<Option<PrinterBrand>> = body.printer_brand.clone();
-    let new_printer_ip:    Option<Option<String>>       = body.printer_ip.clone();
-    let new_printer_port:  Option<Option<i32>>          = body.printer_port;
-
-    // We build an explicit UPDATE rather than relying on COALESCE for
-    // nullable fields, so that an explicit null can clear the column.
-    let branch = sqlx::query_as::<_, Branch>(
+    let row = sqlx::query_as::<_, Discount>(
         r#"
-        UPDATE branches SET
-            name          = COALESCE($2, name),
-            address       = COALESCE($3, address),
-            phone         = COALESCE($4, phone),
-            timezone      = COALESCE($5, timezone),
-            is_active     = COALESCE($6, is_active),
-            printer_brand = CASE
-                              WHEN $7 THEN $8
-                              ELSE printer_brand
-                            END,
-            printer_ip    = CASE
-                              WHEN $9  THEN $10::inet
-                              ELSE printer_ip
-                            END,
-            printer_port  = CASE
-                              WHEN $11 THEN $12
-                              ELSE printer_port
-                            END
-        WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, org_id, name, address, phone, timezone,
-                  printer_brand, printer_ip::text, printer_port,
-                  is_active, created_at, updated_at
+        UPDATE discounts SET
+            name       = COALESCE($2, name),
+            type       = COALESCE($3::discount_type, type),
+            value      = COALESCE($4, value),
+            is_active  = COALESCE($5, is_active),
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
         "#,
     )
     .bind(*id)
     .bind(&body.name)
-    .bind(&body.address)
-    .bind(&body.phone)
-    .bind(&body.timezone)
+    .bind(&body.dtype)
+    .bind(body.value)
     .bind(body.is_active)
-    // printer_brand: $7 = should_update (bool), $8 = new value (nullable)
-    .bind(new_printer_brand.is_some())
-    .bind(new_printer_brand.as_ref().and_then(|o| o.clone()))
-    // printer_ip: $9 = should_update, $10 = new value
-    .bind(new_printer_ip.is_some())
-    .bind(new_printer_ip.as_ref().and_then(|o| o.clone()))
-    // printer_port: $11 = should_update, $12 = new value
-    .bind(new_printer_port.is_some())
-    .bind(new_printer_port.and_then(|o| o))
     .fetch_optional(pool.get_ref())
     .await?
-    .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+    .ok_or_else(|| AppError::NotFound("Discount not found".into()))?;
 
-    Ok(HttpResponse::Ok().json(branch))
+    Ok(HttpResponse::Ok().json(row))
 }
 
-pub async fn delete_branch(
+pub async fn delete_discount(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
     id:   web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "branches", "delete").await?;
+    let existing = fetch_or_404(pool.get_ref(), *id).await?;
+    require_org_access(&claims, existing.org_id)?;
 
-    let existing = fetch_branch(pool.get_ref(), *id).await?;
-    require_same_org(&claims, Some(existing.org_id))?;
-
-    sqlx::query(
-        "UPDATE branches SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-    )
-    .bind(*id)
-    .execute(pool.get_ref())
-    .await?;
+    sqlx::query("DELETE FROM discounts WHERE id = $1")
+        .bind(*id)
+        .execute(pool.get_ref())
+        .await?;
 
     Ok(HttpResponse::NoContent().finish())
 }
@@ -1145,196 +190,886 @@ fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
 
-async fn fetch_branch(pool: &PgPool, id: Uuid) -> Result<Branch, AppError> {
-    sqlx::query_as::<_, Branch>(
-        r#"
-        SELECT id, org_id, name, address, phone, timezone,
-               printer_brand, printer_ip::text, printer_port,
-               is_active, created_at, updated_at
-        FROM branches
-        WHERE id = $1 AND deleted_at IS NULL
-        "#,
+async fn fetch_or_404(pool: &PgPool, id: Uuid) -> Result<Discount, AppError> {
+    sqlx::query_as::<_, Discount>(
+        "SELECT id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
+         FROM discounts WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("Branch not found".into()))
+    .ok_or_else(|| AppError::NotFound("Discount not found".into()))
 }
-RUST
 
-ok "src/branches/handlers.rs"
+fn require_org_access(claims: &Claims, org_id: Uuid) -> Result<(), AppError> {
+    if claims.role == UserRole::SuperAdmin { return Ok(()); }
+    if claims.org_id() != Some(org_id) {
+        return Err(AppError::Forbidden("Not your org".into()));
+    }
+    Ok(())
+}
 
-# ===========================================================================
-#  3. src/shifts/handlers.rs  — add cash_movements_net to ShiftReportResponse
-#     (PaymentSummaryRow.order_count is already there via sqlx)
-# ===========================================================================
-log "Patching src/shifts/handlers.rs — adding cash_movements_net to report response ..."
+fn validate_dtype(dt: &str) -> Result<(), AppError> {
+    match dt {
+        "percentage" | "fixed" => Ok(()),
+        _ => Err(AppError::BadRequest("type must be 'percentage' or 'fixed'".into())),
+    }
+}
 
-# We do a targeted sed replace: add the cash_movements_net field to the struct
-# and compute it in the handler. We use Python for precision.
-python3 - << 'PY'
+fn validate_value(value: i32, dtype: &str) -> Result<(), AppError> {
+    if value < 0 {
+        return Err(AppError::BadRequest("value must be >= 0".into()));
+    }
+    if dtype == "percentage" && value > 100 {
+        return Err(AppError::BadRequest("percentage value must be 0-100".into()));
+    }
+    Ok(())
+}
+EOF
+
+echo "✓ src/discounts/"
+
+# ── 2. Rewrite orders/handlers.rs ────────────────────────────────────────────
+cat > src/orders/handlers.rs << 'EOF'
+use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::{
+    auth::jwt::Claims,
+    errors::AppError,
+    models::UserRole,
+    permissions::checker::check_permission,
+};
+
+// ── Models ────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Order {
+    pub id:              Uuid,
+    pub branch_id:       Uuid,
+    pub shift_id:        Uuid,
+    pub teller_id:       Uuid,
+    pub teller_name:     String,
+    pub order_number:    i32,
+    pub status:          String,
+    pub payment_method:  String,
+    pub subtotal:        i32,
+    pub discount_type:   Option<String>,
+    pub discount_value:  i32,
+    pub discount_amount: i32,
+    pub tax_amount:      i32,
+    pub total_amount:    i32,
+    pub amount_tendered: Option<i32>,
+    pub change_given:    Option<i32>,
+    pub tip_amount:      Option<i32>,
+    pub discount_id:     Option<Uuid>,
+    pub customer_name:   Option<String>,
+    pub notes:           Option<String>,
+    pub voided_at:       Option<chrono::DateTime<chrono::Utc>>,
+    pub void_reason:     Option<String>,
+    pub voided_by:       Option<Uuid>,
+    pub created_at:      chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OrderItem {
+    pub id:           Uuid,
+    pub order_id:     Uuid,
+    pub menu_item_id: Uuid,
+    pub item_name:    String,
+    pub size_label:   Option<String>,
+    pub unit_price:   i32,
+    pub quantity:     i32,
+    pub line_total:   i32,
+    pub notes:        Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OrderItemAddon {
+    pub id:            Uuid,
+    pub order_item_id: Uuid,
+    pub addon_item_id: Uuid,
+    pub addon_name:    String,
+    pub unit_price:    i32,
+    pub quantity:      i32,
+    pub line_total:    i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrderFull {
+    #[serde(flatten)]
+    pub order: Order,
+    pub items: Vec<OrderItemFull>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrderItemFull {
+    #[serde(flatten)]
+    pub item:   OrderItem,
+    pub addons: Vec<OrderItemAddon>,
+}
+
+#[derive(Deserialize)]
+pub struct PaymentSplitInput {
+    pub method:    String,
+    pub amount:    i32,
+    pub reference: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct AddonInput {
+    pub addon_item_id:        Uuid,
+    pub drink_option_item_id: Uuid,
+    #[serde(default = "default_addon_qty")]
+    pub quantity: i32,
+}
+
+fn default_addon_qty() -> i32 { 1 }
+
+#[derive(Deserialize)]
+pub struct OrderItemInput {
+    pub menu_item_id: Uuid,
+    pub size_label:   Option<String>,
+    pub quantity:     i32,
+    pub addons:       Vec<AddonInput>,
+    pub notes:        Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateOrderRequest {
+    pub branch_id:       Uuid,
+    pub shift_id:        Uuid,
+    pub payment_method:  String,
+    pub customer_name:   Option<String>,
+    pub notes:           Option<String>,
+    pub discount_type:   Option<String>,
+    pub discount_value:  Option<i32>,
+    pub discount_id:     Option<Uuid>,
+    pub amount_tendered: Option<i32>,
+    pub tip_amount:      Option<i32>,
+    pub payment_splits:  Option<Vec<PaymentSplitInput>>,
+    pub items:           Vec<OrderItemInput>,
+    pub created_at:      Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+pub struct VoidOrderRequest {
+    pub reason:            String,
+    pub restore_inventory: Option<bool>,
+    pub voided_at:         Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize)]
+pub struct ListOrdersQuery {
+    pub branch_id:     Option<Uuid>,
+    pub shift_id:      Option<Uuid>,
+    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// ── POST /orders ──────────────────────────────────────────────
+
+pub async fn create_order(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateOrderRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "create").await?;
+    require_branch_access(pool.get_ref(), &claims, body.branch_id).await?;
+
+    let idempotency_key = req
+        .headers()
+        .get("Idempotency-Key")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    if let Some(key) = idempotency_key {
+        if let Some(existing) = fetch_order_by_idempotency_key(pool.get_ref(), key).await? {
+            let items = fetch_order_items_full(pool.get_ref(), existing.id).await?;
+            return Ok(HttpResponse::Ok().json(OrderFull { order: existing, items }));
+        }
+    }
+
+    if body.items.is_empty() {
+        return Err(AppError::BadRequest("Order must have at least one item".into()));
+    }
+
+    let shift_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM shifts WHERE id = $1 AND branch_id = $2)"
+    )
+    .bind(body.shift_id)
+    .bind(body.branch_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if !shift_exists {
+        return Err(AppError::BadRequest(
+            "Shift not found or does not belong to this branch".into(),
+        ));
+    }
+
+    validate_payment_method(&body.payment_method)?;
+    if let Some(dt) = &body.discount_type { validate_discount_type(dt)?; }
+
+    // Resolve discount_id -> inline discount fields
+    let (resolved_discount_type, resolved_discount_value) =
+        if let Some(disc_id) = body.discount_id {
+            let row: Option<(String, i32)> = sqlx::query_as(
+                "SELECT type::text, value FROM discounts WHERE id = $1 AND is_active = true"
+            )
+            .bind(disc_id)
+            .fetch_optional(pool.get_ref())
+            .await?;
+
+            match row {
+                Some((dtype, dvalue)) => (Some(dtype), dvalue),
+                None => return Err(AppError::BadRequest("Discount not found or inactive".into())),
+            }
+        } else {
+            (body.discount_type.clone(), body.discount_value.unwrap_or(0))
+        };
+
+    let tax_rate: sqlx::types::BigDecimal = sqlx::query_scalar(
+        "SELECT o.tax_rate FROM organizations o JOIN branches b ON b.org_id = o.id WHERE b.id = $1"
+    )
+    .bind(body.branch_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    struct ResolvedItem {
+        menu_item_id: Uuid,
+        item_name:    String,
+        size_label:   Option<String>,
+        unit_price:   i32,
+        quantity:     i32,
+        notes:        Option<String>,
+        addons:       Vec<ResolvedAddon>,
+        deductions:   Vec<InventoryDeduction>,
+    }
+    struct ResolvedAddon {
+        addon_item_id: Uuid,
+        addon_name:    String,
+        unit_price:    i32,
+        quantity:      i32,
+    }
+    struct InventoryDeduction {
+        inventory_item_id: Uuid,
+        quantity:          f64,
+        source:            String,
+    }
+
+    let mut resolved_items: Vec<ResolvedItem> = Vec::new();
+    let mut subtotal: i32 = 0;
+
+    for item_input in &body.items {
+        if item_input.quantity <= 0 {
+            return Err(AppError::BadRequest("Item quantity must be greater than 0".into()));
+        }
+
+        let (item_name, base_price): (String, i32) = sqlx::query_as(
+            "SELECT m.name, m.base_price FROM menu_items m WHERE m.id = $1 AND m.deleted_at IS NULL",
+        )
+        .bind(item_input.menu_item_id)
+        .fetch_optional(pool.get_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Menu item {} not found", item_input.menu_item_id)))?;
+
+        let unit_price: i32 = match &item_input.size_label {
+            Some(size) => {
+                let size_price: Option<i32> = sqlx::query_scalar(
+                    "SELECT price_override FROM item_sizes WHERE menu_item_id = $1 AND label = $2::item_size AND is_active = true"
+                )
+                .bind(item_input.menu_item_id)
+                .bind(size)
+                .fetch_optional(pool.get_ref())
+                .await?
+                .flatten();
+                size_price.unwrap_or(base_price)
+            }
+            None => base_price,
+        };
+
+        let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
+
+        let size_for_recipe = item_input.size_label.as_deref().unwrap_or("one_size");
+        let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
+            "SELECT inventory_item_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
+        )
+        .bind(item_input.menu_item_id)
+        .bind(size_for_recipe)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+        for (inv_id, qty) in recipe_rows {
+            item_deductions.push(InventoryDeduction {
+                inventory_item_id: inv_id,
+                quantity:          qty * item_input.quantity as f64,
+                source:            "drink_recipe".into(),
+            });
+        }
+
+        let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
+
+        for addon_input in &item_input.addons {
+            let (addon_name, default_price): (String, i32) = sqlx::query_as(
+                "SELECT name, default_price FROM addon_items WHERE id = $1"
+            )
+            .bind(addon_input.addon_item_id)
+            .fetch_optional(pool.get_ref())
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("Addon {} not found", addon_input.addon_item_id)))?;
+
+            let price_override: Option<i32> = sqlx::query_scalar(
+                "SELECT price_override FROM drink_option_items WHERE id = $1"
+            )
+            .bind(addon_input.drink_option_item_id)
+            .fetch_optional(pool.get_ref())
+            .await?
+            .flatten();
+
+            let addon_price = price_override.unwrap_or(default_price);
+
+            resolved_addons.push(ResolvedAddon {
+                addon_item_id: addon_input.addon_item_id,
+                addon_name,
+                unit_price: addon_price,
+                quantity:   addon_input.quantity.max(1),
+            });
+
+            let size_label = item_input.size_label.as_deref();
+            let override_rows: Vec<(Uuid, f64)> = if let Some(size) = size_label {
+                sqlx::query_as(
+                    r#"
+                    SELECT inventory_item_id, quantity_used::float8
+                    FROM drink_option_ingredient_overrides
+                    WHERE drink_option_item_id = $1
+                      AND (size_label = $2::item_size OR size_label IS NULL)
+                    ORDER BY size_label DESC NULLS LAST
+                    "#,
+                )
+                .bind(addon_input.drink_option_item_id)
+                .bind(size)
+                .fetch_all(pool.get_ref())
+                .await?
+            } else {
+                sqlx::query_as(
+                    "SELECT inventory_item_id, quantity_used::float8 FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
+                )
+                .bind(addon_input.drink_option_item_id)
+                .fetch_all(pool.get_ref())
+                .await?
+            };
+
+            if !override_rows.is_empty() {
+                let mut seen = std::collections::HashSet::new();
+                for (inv_id, qty) in override_rows {
+                    if seen.insert(inv_id) {
+                        item_deductions.push(InventoryDeduction {
+                            inventory_item_id: inv_id,
+                            quantity: qty * item_input.quantity as f64,
+                            source: "addon_override".into(),
+                        });
+                    }
+                }
+            } else {
+                let base_rows: Vec<(Uuid, f64)> = sqlx::query_as(
+                    "SELECT inventory_item_id, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
+                )
+                .bind(addon_input.addon_item_id)
+                .fetch_all(pool.get_ref())
+                .await?;
+                for (inv_id, qty) in base_rows {
+                    item_deductions.push(InventoryDeduction {
+                        inventory_item_id: inv_id,
+                        quantity: qty * item_input.quantity as f64,
+                        source: "addon_base".into(),
+                    });
+                }
+            }
+        }
+
+        let item_line  = unit_price * item_input.quantity;
+        let addon_line: i32 = resolved_addons.iter().map(|a| a.unit_price * a.quantity).sum::<i32>() * item_input.quantity;
+        subtotal += item_line + addon_line;
+
+        resolved_items.push(ResolvedItem {
+            menu_item_id: item_input.menu_item_id,
+            item_name,
+            size_label: item_input.size_label.clone(),
+            unit_price,
+            quantity: item_input.quantity,
+            notes: item_input.notes.clone(),
+            addons: resolved_addons,
+            deductions: item_deductions,
+        });
+    }
+
+    let discount_amount = match resolved_discount_type.as_deref() {
+        Some("percentage") => (subtotal as f64 * resolved_discount_value as f64 / 100.0) as i32,
+        Some("fixed")      => resolved_discount_value.min(subtotal),
+        _                  => 0,
+    };
+    let taxable      = subtotal - discount_amount;
+    let tax_rate_f64: f64 = tax_rate.to_string().parse().unwrap_or(0.14);
+    let tax_amount   = (taxable as f64 * tax_rate_f64) as i32;
+    let total_amount = taxable + tax_amount;
+    let change_given = body.amount_tendered.map(|t| (t - total_amount).max(0));
+    let created_at   = body.created_at.unwrap_or_else(chrono::Utc::now);
+
+    let mut tx = pool.get_ref().begin().await?;
+
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+        body.shift_id.to_string()
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    let order_number: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE shift_id = $1"
+    )
+    .bind(body.shift_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let order = sqlx::query_as::<_, Order>(
+        r#"
+        INSERT INTO orders
+            (branch_id, shift_id, teller_id, order_number,
+             payment_method, subtotal, discount_type, discount_value,
+             discount_amount, tax_amount, total_amount,
+             amount_tendered, change_given, tip_amount,
+             discount_id, customer_name, notes, status,
+             idempotency_key, created_at)
+        VALUES ($1, $2, $3, $4, $5::payment_method, $6, $7::discount_type, $8,
+                $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', $18, $19)
+        RETURNING
+            id, branch_id, shift_id, teller_id,
+            (SELECT name FROM users WHERE id = $3) AS teller_name,
+            order_number, status::text, payment_method::text,
+            subtotal, discount_type::text, discount_value,
+            discount_amount, tax_amount, total_amount,
+            amount_tendered, change_given, tip_amount, discount_id,
+            customer_name, notes,
+            voided_at, void_reason::text, voided_by,
+            created_at
+        "#,
+    )
+    .bind(body.branch_id)
+    .bind(body.shift_id)
+    .bind(claims.user_id())
+    .bind(order_number)
+    .bind(&body.payment_method)
+    .bind(subtotal)
+    .bind(&resolved_discount_type)
+    .bind(resolved_discount_value)
+    .bind(discount_amount)
+    .bind(tax_amount)
+    .bind(total_amount)
+    .bind(body.amount_tendered)
+    .bind(change_given)
+    .bind(body.tip_amount.unwrap_or(0))
+    .bind(body.discount_id)
+    .bind(&body.customer_name)
+    .bind(&body.notes)
+    .bind(idempotency_key)
+    .bind(created_at)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Write order_payments — use explicit splits or derive from payment_method
+    if let Some(splits) = &body.payment_splits {
+        for split in splits {
+            validate_payment_method(&split.method)?;
+            sqlx::query(
+                "INSERT INTO order_payments (order_id, method, amount, reference) VALUES ($1, $2::payment_method, $3, $4)",
+            )
+            .bind(order.id)
+            .bind(&split.method)
+            .bind(split.amount)
+            .bind(&split.reference)
+            .execute(&mut *tx)
+            .await?;
+        }
+    } else {
+        sqlx::query(
+            "INSERT INTO order_payments (order_id, method, amount) VALUES ($1, $2::payment_method, $3)",
+        )
+        .bind(order.id)
+        .bind(&body.payment_method)
+        .bind(total_amount)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let mut order_items_full: Vec<OrderItemFull> = Vec::new();
+
+    for resolved in resolved_items {
+        let line_total = resolved.unit_price * resolved.quantity;
+
+        let order_item = sqlx::query_as::<_, OrderItem>(
+            r#"
+            INSERT INTO order_items
+                (order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes
+            "#,
+        )
+        .bind(order.id)
+        .bind(resolved.menu_item_id)
+        .bind(&resolved.item_name)
+        .bind(&resolved.size_label)
+        .bind(resolved.unit_price)
+        .bind(resolved.quantity)
+        .bind(line_total)
+        .bind(&resolved.notes)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let mut addon_rows: Vec<OrderItemAddon> = Vec::new();
+
+        for addon in &resolved.addons {
+            let addon_line = addon.unit_price * addon.quantity * resolved.quantity;
+            let row = sqlx::query_as::<_, OrderItemAddon>(
+                r#"
+                INSERT INTO order_item_addons
+                    (order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total
+                "#,
+            )
+            .bind(order_item.id)
+            .bind(addon.addon_item_id)
+            .bind(&addon.addon_name)
+            .bind(addon.unit_price)
+            .bind(addon.quantity)
+            .bind(addon_line)
+            .fetch_one(&mut *tx)
+            .await?;
+            addon_rows.push(row);
+        }
+
+        for deduction in &resolved.deductions {
+            sqlx::query(
+                "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
+            )
+            .bind(deduction.quantity)
+            .bind(deduction.inventory_item_id)
+            .bind(body.branch_id)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO inventory_deduction_logs
+                    (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(body.branch_id)
+            .bind(order.id)
+            .bind(order_item.id)
+            .bind(deduction.inventory_item_id)
+            .bind(deduction.quantity)
+            .bind(&deduction.source)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        order_items_full.push(OrderItemFull { item: order_item, addons: addon_rows });
+    }
+
+    tx.commit().await?;
+
+    Ok(HttpResponse::Created().json(OrderFull { order, items: order_items_full }))
+}
+
+// ── GET /orders ───────────────────────────────────────────────
+
+pub async fn list_orders(
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    query: web::Query<ListOrdersQuery>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
+
+    let orders = match (query.shift_id, query.branch_id) {
+        (Some(shift_id), _) => {
+            let branch_id: Option<Uuid> = sqlx::query_scalar("SELECT branch_id FROM shifts WHERE id = $1")
+                .bind(shift_id)
+                .fetch_optional(pool.get_ref())
+                .await?
+                .flatten();
+            if let Some(bid) = branch_id { require_branch_access(pool.get_ref(), &claims, bid).await?; }
+
+            match query.updated_after {
+                Some(after) => sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.shift_id = $1 AND o.updated_at > $2 ORDER BY o.created_at DESC"))
+                    .bind(shift_id).bind(after).fetch_all(pool.get_ref()).await?,
+                None => sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.shift_id = $1 ORDER BY o.created_at DESC"))
+                    .bind(shift_id).fetch_all(pool.get_ref()).await?,
+            }
+        }
+        (None, Some(branch_id)) => {
+            require_branch_access(pool.get_ref(), &claims, branch_id).await?;
+            sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.branch_id = $1 ORDER BY o.created_at DESC LIMIT 500"))
+                .bind(branch_id).fetch_all(pool.get_ref()).await?
+        }
+        _ => return Err(AppError::BadRequest("Provide either shift_id or branch_id".into())),
+    };
+
+    Ok(HttpResponse::Ok().json(orders))
+}
+
+// ── GET /orders/:id ───────────────────────────────────────────
+
+pub async fn get_order(
+    req: HttpRequest, pool: web::Data<PgPool>, order_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "read").await?;
+    let order = fetch_order_or_404(pool.get_ref(), *order_id).await?;
+    require_branch_access(pool.get_ref(), &claims, order.branch_id).await?;
+    let items = fetch_order_items_full(pool.get_ref(), order.id).await?;
+    Ok(HttpResponse::Ok().json(OrderFull { order, items }))
+}
+
+// ── POST /orders/:id/void ─────────────────────────────────────
+
+pub async fn void_order(
+    req: HttpRequest, pool: web::Data<PgPool>,
+    order_id: web::Path<Uuid>, body: web::Json<VoidOrderRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "update").await?;
+    let order = fetch_order_or_404(pool.get_ref(), *order_id).await?;
+    require_branch_access(pool.get_ref(), &claims, order.branch_id).await?;
+    if order.status == "voided" { return Ok(HttpResponse::Ok().json(order)); }
+    validate_void_reason(&body.reason)?;
+    let voided_at = body.voided_at.unwrap_or_else(chrono::Utc::now);
+
+    let updated = sqlx::query_as::<_, Order>(
+        r#"
+        UPDATE orders SET status = 'voided', voided_at = $3, void_reason = $2::void_reason, voided_by = $4
+        WHERE id = $1
+        RETURNING
+            id, branch_id, shift_id, teller_id,
+            (SELECT name FROM users WHERE id = teller_id) AS teller_name,
+            order_number, status::text, payment_method::text,
+            subtotal, discount_type::text, discount_value,
+            discount_amount, tax_amount, total_amount,
+            amount_tendered, change_given, tip_amount, discount_id,
+            customer_name, notes, voided_at, void_reason::text, voided_by, created_at
+        "#,
+    )
+    .bind(*order_id).bind(&body.reason).bind(voided_at).bind(claims.user_id())
+    .fetch_one(pool.get_ref()).await?;
+
+    Ok(HttpResponse::Ok().json(updated))
+}
+
+// ── Shared SELECT macro ───────────────────────────────────────
+
+macro_rules! ORDER_SELECT {
+    ($where:expr) => {
+        concat!(
+            "SELECT o.id, o.branch_id, o.shift_id, o.teller_id, u.name AS teller_name,
+             o.order_number, o.status::text, o.payment_method::text,
+             o.subtotal, o.discount_type::text, o.discount_value,
+             o.discount_amount, o.tax_amount, o.total_amount,
+             o.amount_tendered, o.change_given, o.tip_amount, o.discount_id,
+             o.customer_name, o.notes, o.voided_at, o.void_reason::text, o.voided_by, o.created_at
+             FROM orders o JOIN users u ON u.id = o.teller_id ",
+            $where
+        )
+    };
+}
+
+// ── Helpers ───────────────────────────────────────────────────
+
+fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
+    req.extensions().get::<Claims>().cloned()
+        .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
+}
+
+async fn fetch_order_or_404(pool: &PgPool, order_id: Uuid) -> Result<Order, AppError> {
+    sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.id = $1"))
+        .bind(order_id).fetch_optional(pool).await?
+        .ok_or_else(|| AppError::NotFound("Order not found".into()))
+}
+
+async fn fetch_order_by_idempotency_key(pool: &PgPool, key: Uuid) -> Result<Option<Order>, AppError> {
+    Ok(sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.idempotency_key = $1"))
+        .bind(key).fetch_optional(pool).await?)
+}
+
+async fn fetch_order_items_full(pool: &PgPool, order_id: Uuid) -> Result<Vec<OrderItemFull>, AppError> {
+    let items = sqlx::query_as::<_, OrderItem>(
+        "SELECT id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes FROM order_items WHERE order_id = $1 ORDER BY id",
+    ).bind(order_id).fetch_all(pool).await?;
+
+    let mut result = Vec::new();
+    for item in items {
+        let addons = sqlx::query_as::<_, OrderItemAddon>(
+            "SELECT id, order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total FROM order_item_addons WHERE order_item_id = $1 ORDER BY id",
+        ).bind(item.id).fetch_all(pool).await?;
+        result.push(OrderItemFull { item, addons });
+    }
+    Ok(result)
+}
+
+async fn require_branch_access(pool: &PgPool, claims: &Claims, branch_id: Uuid) -> Result<(), AppError> {
+    if claims.role == UserRole::SuperAdmin { return Ok(()); }
+    let branch_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
+    ).bind(branch_id).fetch_optional(pool).await?.flatten();
+    let branch_org = branch_org.ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+    if claims.org_id() != Some(branch_org) {
+        return Err(AppError::Forbidden("Branch belongs to a different org".into()));
+    }
+    if claims.role == UserRole::OrgAdmin { return Ok(()); }
+    let assigned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM user_branch_assignments WHERE user_id = $1 AND branch_id = $2)"
+    ).bind(claims.user_id()).bind(branch_id).fetch_one(pool).await?;
+    if !assigned { return Err(AppError::Forbidden("Not assigned to this branch".into())); }
+    Ok(())
+}
+
+fn validate_payment_method(method: &str) -> Result<(), AppError> {
+    match method {
+        "cash"|"card"|"digital_wallet"|"mixed"|"talabat_online"|"talabat_cash" => Ok(()),
+        _ => Err(AppError::BadRequest("Invalid payment_method".into())),
+    }
+}
+fn validate_discount_type(dt: &str) -> Result<(), AppError> {
+    match dt { "percentage"|"fixed" => Ok(()), _ => Err(AppError::BadRequest("discount_type must be 'percentage' or 'fixed'".into())) }
+}
+fn validate_void_reason(reason: &str) -> Result<(), AppError> {
+    match reason {
+        "customer_request"|"wrong_order"|"quality_issue"|"other" => Ok(()),
+        _ => Err(AppError::BadRequest("Invalid void_reason".into())),
+    }
+}
+EOF
+
+echo "✓ src/orders/handlers.rs"
+
+# ── 3. Patch reports/handlers.rs — payment breakdowns from order_payments ─────
+python3 - << 'PYEOF'
+import pathlib, re, sys
+
+path = pathlib.Path("src/reports/handlers.rs")
+if not path.exists():
+    print("ERROR: src/reports/handlers.rs not found", file=sys.stderr)
+    sys.exit(1)
+
+src = path.read_text()
+
+# Helper: build a per-method correlated subquery
+def op_subquery(method, alias, context_col, context_val):
+    """context_col/val is either 'shift_id = s.id' or 'branch_id = $1 AND date filters'"""
+    return (
+        f"COALESCE((SELECT SUM(op.amount) FROM order_payments op "
+        f"JOIN orders oo ON oo.id = op.order_id "
+        f"WHERE oo.{context_col} AND oo.status != 'voided' AND op.method = '{method}'), 0)::bigint AS {alias}"
+    )
+
+# ── Patch shift_summary ───────────────────────────────────────────────────────
+# Replace the 6 FILTER(payment_method=X) lines inside shift_summary
+SHIFT_PAT = re.compile(
+    r"COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'cash'\)[^\n]*\n"
+    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'card'\)[^\n]*\n"
+    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'digital_wallet'\)[^\n]*\n"
+    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'mixed'\)[^\n]*\n"
+    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'talabat_online'\)[^\n]*\n"
+    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'talabat_cash'\)[^\n]*",
+    re.MULTILINE,
+)
+
+SHIFT_REPL = (
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'cash'), 0)::bigint           AS cash_revenue,\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'card'), 0)::bigint           AS card_revenue,\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'mixed'), 0)::bigint          AS mixed_revenue,\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_online'), 0)::bigint  AS talabat_online_revenue,\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_cash'), 0)::bigint   AS talabat_cash_revenue"
+)
+
+new_src, n = SHIFT_PAT.subn(SHIFT_REPL, src)
+print(f"shift_summary replacements: {n}")
+
+# ── Patch branch_sales — the 6 per-method FILTER lines inside branch_sales ───
+BRANCH_PAT = re.compile(
+    r"COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'cash'\)[^\n]*,\n"
+    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'card'\)[^\n]*,\n"
+    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'digital_wallet'\)[^\n]*,\n"
+    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'mixed'\)[^\n]*,\n"
+    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'talabat_online'\)[^\n]*,\n"
+    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'talabat_cash'\)[^\n]*",
+    re.MULTILINE,
+)
+
+BRANCH_REPL = (
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'cash'), 0),\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'card'), 0),\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'digital_wallet'), 0),\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'mixed'), 0),\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_online'), 0),\n"
+    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_cash'), 0)"
+)
+
+new_src, n2 = BRANCH_PAT.subn(BRANCH_REPL, new_src)
+print(f"branch_sales replacements: {n2}")
+
+if n == 0 and n2 == 0:
+    print("WARNING: no replacements made — patterns may have changed")
+else:
+    path.write_text(new_src)
+    print("reports/handlers.rs patched OK")
+PYEOF
+
+echo "✓ src/reports/handlers.rs"
+
+# ── 4. Wire discounts into main.rs (pure Python, no sed) ─────────────────────
+python3 - << 'PYEOF'
 import pathlib
 
-path = pathlib.Path("src/shifts/handlers.rs")
+path = pathlib.Path("src/main.rs")
 src  = path.read_text()
 
-# ── 1. Add cash_movements_net to ShiftReportResponse struct ──────────────────
-old_struct = """#[derive(Debug, Serialize)]
-pub struct ShiftReportResponse {
-    pub shift:              Shift,
-    pub payment_summary:    Vec<PaymentSummaryRow>,
-    pub total_payments:     i64,
-    pub total_returns:      i64,
-    pub net_payments:       i64,
-    pub cash_movements:     Vec<CashMovementSummaryRow>,
-    pub cash_movements_in:  i64,
-    pub cash_movements_out: i64,
-    pub printed_at:         chrono::DateTime<chrono::Utc>,
-}"""
+if "mod discounts;" not in src:
+    src = src.replace("mod uploads;", "mod discounts;\nmod uploads;")
+    print("added mod discounts")
 
-new_struct = """#[derive(Debug, Serialize)]
-pub struct ShiftReportResponse {
-    pub shift:               Shift,
-    pub payment_summary:     Vec<PaymentSummaryRow>,
-    pub total_payments:      i64,
-    pub total_returns:       i64,
-    pub net_payments:        i64,
-    pub cash_movements:      Vec<CashMovementSummaryRow>,
-    pub cash_movements_in:   i64,
-    pub cash_movements_out:  i64,
-    /// Net of all cash movements (in - out) as a signed integer
-    pub cash_movements_net:  i64,
-    pub printed_at:          chrono::DateTime<chrono::Utc>,
-}"""
-
-if old_struct not in src:
-    print("  WARN: ShiftReportResponse struct not found verbatim — skipping struct patch")
-else:
-    src = src.replace(old_struct, new_struct)
-    print("  patched ShiftReportResponse struct")
-
-# ── 2. Add cash_movements_net computation in get_shift_report handler ─────────
-old_net = """    let cash_movements_net: i64 = cash_movements.iter()
-        .filter(|m| m.amount < 0)
-        .map(|m| m.amount.unsigned_abs() as i64)
-        .sum();
-
-    let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
-    let net_payments = total_payments - total_returns;
-
-    Ok(HttpResponse::Ok().json(ShiftReportResponse {
-        shift,
-        payment_summary,
-        total_payments,
-        total_returns,
-        net_payments,
-        cash_movements,
-        cash_movements_in,
-        cash_movements_out,
-        printed_at: chrono::Utc::now(),
-    }))"""
-
-new_net = """    let cash_movements_net: i64 = cash_movements.iter()
-        .filter(|m| m.amount < 0)
-        .map(|m| m.amount.unsigned_abs() as i64)
-        .sum();
-
-    let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
-    let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
-    let net_payments = total_payments - total_returns;
-
-    Ok(HttpResponse::Ok().json(ShiftReportResponse {
-        shift,
-        payment_summary,
-        total_payments,
-        total_returns,
-        net_payments,
-        cash_movements,
-        cash_movements_in,
-        cash_movements_out,
-        cash_movements_net: cash_movements_net_signed,
-        printed_at: chrono::Utc::now(),
-    }))"""
-
-if old_net not in src:
-    # Try a simpler pattern — just add cash_movements_net to the response literal
-    old_resp = """    Ok(HttpResponse::Ok().json(ShiftReportResponse {
-        shift,
-        payment_summary,
-        total_payments,
-        total_returns,
-        net_payments,
-        cash_movements,
-        cash_movements_in,
-        cash_movements_out,
-        printed_at: chrono::Utc::now(),
-    }))"""
-    new_resp = """    let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
-    Ok(HttpResponse::Ok().json(ShiftReportResponse {
-        shift,
-        payment_summary,
-        total_payments,
-        total_returns,
-        net_payments,
-        cash_movements,
-        cash_movements_in,
-        cash_movements_out,
-        cash_movements_net: cash_movements_net_signed,
-        printed_at: chrono::Utc::now(),
-    }))"""
-    if old_resp in src:
-        src = src.replace(old_resp, new_resp)
-        print("  patched get_shift_report response (fallback pattern)")
-    else:
-        print("  WARN: get_shift_report response literal not found — skipping net patch")
-else:
-    src = src.replace(old_net, new_net)
-    print("  patched get_shift_report computation + response")
+if "discounts::routes::configure" not in src:
+    src = src.replace(
+        ".configure(orders::routes::configure)",
+        ".configure(orders::routes::configure)\n            .configure(discounts::routes::configure)"
+    )
+    print("wired discounts routes")
 
 path.write_text(src)
-PY
+print("main.rs OK")
+PYEOF
 
-ok "src/shifts/handlers.rs"
+echo "✓ src/main.rs"
 
-# ===========================================================================
-#  4. Verify the project still compiles (offline mode if sqlx offline data exists)
-# ===========================================================================
-log "Attempting cargo check ..."
+# ── 5. Build ──────────────────────────────────────────────────────────────────
+echo ""
+echo "Building..."
+cargo sqlx prepare 2>&1 | tail -3
+cargo build --release 2>&1 | grep -E "^error|Compiling rue|Finished" | tail -15
 
-if SQLX_OFFLINE=true cargo check 2>&1; then
-    ok "cargo check passed"
-else
-    warn "cargo check failed — check errors above."
-    warn "This may be expected if SQLX offline data needs regenerating."
-    warn "On the VPS with DB running: cargo sqlx prepare && cargo build --release"
-fi
+echo ""
+echo "Restarting service..."
+sudo systemctl restart rue-rust
+sleep 2
+sudo systemctl status rue-rust --no-pager | head -12
 
-# ===========================================================================
-#  Summary
-# ===========================================================================
 echo ""
-echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}  Backend patch complete!${RESET}"
-echo -e "${BOLD}═══════════════════════════════════════════════════════${RESET}"
-echo ""
-echo "  Files modified:"
-echo "    src/reports/handlers.rs"
-echo "      ✓ BranchSalesReport: +talabat_online_revenue, +talabat_cash_revenue"
-echo "      ✓ ShiftSummary:      +talabat_online_revenue, +talabat_cash_revenue"
-echo "      ✓ TimeseriesPoint:   +per-payment-method breakdown (6 payment cols)"
-echo "      ✓ BranchComparison:  +talabat_online_revenue, +talabat_cash_revenue"
-echo "      ✓ branch_sales:      ?limit param (default 20, max 100)"
-echo "      ✓ org_branch_comparison: all payment methods included"
-echo ""
-echo "    src/branches/handlers.rs"
-echo "      ✓ UpdateBranchRequest: double-option for printer_brand/ip/port"
-echo "      ✓ update_branch:       CASE-based UPDATE (can now null printer config)"
-echo ""
-echo "    src/shifts/handlers.rs"
-echo "      ✓ ShiftReportResponse: +cash_movements_net (in - out signed)"
-echo ""
-echo "  To deploy on VPS:"
-echo "    cargo sqlx prepare   # if schema changed (it didn't here)"
-echo "    cargo build --release"
-echo "    systemctl restart rue-rust"
-echo ""
+echo "=== Rust patch complete ==="
+echo "New: GET/POST /discounts  PATCH/DELETE /discounts/:id"
+echo "Updated POST /orders: discount_id, amount_tendered, tip_amount, payment_splits"
+echo "Reports now aggregate from order_payments table"

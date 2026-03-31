@@ -600,7 +600,7 @@ pub async fn list_orders(
     check_permission(pool.get_ref(), &claims, "orders", "read").await?;
 
     let page     = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(30).clamp(1, 100);
+    let per_page = query.per_page.unwrap_or(30).clamp(1, 999999);
     let offset   = (page - 1) * per_page;
 
     // Validate optional enums

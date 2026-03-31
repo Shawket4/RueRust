@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'cart.dart';
 
 // ---------------------------------------------------------------------------
@@ -113,6 +112,7 @@ class PendingOrder extends PendingAction {
   final String? discountId; // Item 6
   final int? amountTendered; // Item 2
   final int? tipAmount; // Item 2
+  final String? tipPaymentMethod;
   final List<Map<String, dynamic>>? paymentSplits; // Item 7
   final List<CartItem> items;
   final DateTime orderedAt;
@@ -130,6 +130,7 @@ class PendingOrder extends PendingAction {
     this.discountId,
     this.amountTendered,
     this.tipAmount,
+    this.tipPaymentMethod,
     this.paymentSplits,
     required this.items,
     required this.orderedAt,
@@ -148,6 +149,7 @@ class PendingOrder extends PendingAction {
         discountId: discountId,
         amountTendered: amountTendered,
         tipAmount: tipAmount,
+        tipPaymentMethod: tipPaymentMethod,
         paymentSplits: paymentSplits,
         items: items,
         orderedAt: orderedAt,
@@ -167,6 +169,7 @@ class PendingOrder extends PendingAction {
         discountId: discountId,
         amountTendered: amountTendered,
         tipAmount: tipAmount,
+        tipPaymentMethod: tipPaymentMethod,
         paymentSplits: paymentSplits,
         items: items,
         orderedAt: orderedAt,
@@ -187,6 +190,7 @@ class PendingOrder extends PendingAction {
         'discount_id': discountId,
         'amount_tendered': amountTendered,
         'tip_amount': tipAmount,
+        'tip_payment_method': tipPaymentMethod,
         if (paymentSplits != null) 'payment_splits': paymentSplits,
         'ordered_at': orderedAt.toUtc().toIso8601String(),
         'items': items.map((i) => i.toStorageJson()).toList(),
@@ -205,6 +209,7 @@ class PendingOrder extends PendingAction {
         discountId: j['discount_id'] as String?,
         amountTendered: j['amount_tendered'] as int?,
         tipAmount: j['tip_amount'] as int?,
+        tipPaymentMethod: j['tip_payment_method'] as String?,
         paymentSplits:
             (j['payment_splits'] as List?)?.cast<Map<String, dynamic>>(),
         orderedAt: DateTime.parse(

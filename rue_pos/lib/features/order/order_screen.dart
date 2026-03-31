@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +26,23 @@ import '../../shared/widgets/label_value.dart';
 
 const _skeletonBase = Color(0xFFEEF0F4);
 const _skeletonHighlight = Color(0xFFE4E7ED);
+
+// Top-level helpers shared by CheckoutSheet and its sub-widgets.
+Color _methodColor(String m) => switch (m) {
+      'cash' => AppColors.success,
+      'card' => const Color(0xFF7C3AED),
+      'talabat_online' => const Color(0xFFFF6B00),
+      'talabat_cash' => const Color(0xFFFF6B00),
+      _ => AppColors.primary,
+    };
+
+String _methodLabel(String m) => switch (m) {
+      'cash' => 'Cash',
+      'card' => 'Card',
+      'talabat_online' => 'Talabat Online',
+      'talabat_cash' => 'Talabat Cash',
+      _ => m,
+    };
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
@@ -201,11 +217,11 @@ class _TopBar extends ConsumerWidget {
       return Column(mainAxisSize: MainAxisSize.min, children: [
         bar,
         if (!isOnline)
-          _StatusBanner(
-              color: const Color(0xFFFFF3CD),
+          const _StatusBanner(
+              color: Color(0xFFFFF3CD),
               icon: Icons.wifi_off_rounded,
               text: 'Offline — cached menu. Orders will sync when connected.',
-              textColor: const Color(0xFF856404)),
+              textColor: Color(0xFF856404)),
         if (isOnline && sync.orderCount > 0)
           _StatusBanner(
               color: const Color(0xFFCFE2FF),
@@ -283,9 +299,8 @@ class _SyncBtnState extends ConsumerState<_SyncBtn>
     _spinCtrl.repeat();
     try {
       final orgId = ref.read(authProvider).user?.orgId;
-      if (orgId != null) {
+      if (orgId != null)
         await ref.read(menuProvider.notifier).load(orgId, force: true);
-      }
     } finally {
       if (mounted) {
         _spinCtrl.stop();
@@ -663,13 +678,12 @@ class _ImageSkeletonState extends State<_ImageSkeleton>
 class _CatStyle {
   final IconData icon;
   final Color bgTop, bgBottom, iconColor, accent;
-  const _CatStyle({
-    required this.icon,
-    required this.bgTop,
-    required this.bgBottom,
-    required this.iconColor,
-    required this.accent,
-  });
+  const _CatStyle(
+      {required this.icon,
+      required this.bgTop,
+      required this.bgBottom,
+      required this.iconColor,
+      required this.accent});
 
   static _CatStyle of(String name) {
     final n = name.toLowerCase();
@@ -932,9 +946,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   @override
   void initState() {
     super.initState();
-    if (widget.item.sizes.isNotEmpty) {
+    if (widget.item.sizes.isNotEmpty)
       _selectedSize = widget.item.sizes.first.label;
-    }
   }
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
@@ -973,8 +986,9 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   void _toggleSingle(String gId, String oId, bool req) => setState(() {
         if (_single[gId] == oId) {
           if (!req) _single.remove(gId);
-        } else
+        } else {
           _single[gId] = oId;
+        }
       });
 
   void _toggleMulti(String gId, String oId) => setState(() {
@@ -1249,7 +1263,7 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
               if (g.isRequired) const _Pill('Required', AppColors.danger),
               if (g.isMultiSelect) ...[
                 const SizedBox(width: 4),
-                const _Pill('Multi', AppColors.primary),
+                const _Pill('Multi', AppColors.primary)
               ],
             ])),
             if (selCount > 0) _CountBadge(count: selCount),
@@ -1401,15 +1415,14 @@ class _CartPanel extends ConsumerWidget {
                     child: Text('Cancel',
                         style: cairo(color: AppColors.textSecondary))),
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    ref.read(cartProvider.notifier).clear();
-                  },
-                  child: Text('Clear',
-                      style: cairo(
-                          color: AppColors.danger,
-                          fontWeight: FontWeight.w700)),
-                ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      ref.read(cartProvider.notifier).clear();
+                    },
+                    child: Text('Clear',
+                        style: cairo(
+                            color: AppColors.danger,
+                            fontWeight: FontWeight.w700))),
               ],
             ));
   }
@@ -1579,47 +1592,41 @@ class _CartFooter extends ConsumerWidget {
 //  PAYMENT METHOD DATA
 // ─────────────────────────────────────────────────────────────────────────────
 class _PaymentMethod {
-  final String value;
-  final String label;
+  final String value, label;
   final IconData icon;
   final Color color;
-  const _PaymentMethod({
-    required this.value,
-    required this.label,
-    required this.icon,
-    required this.color,
-  });
+  const _PaymentMethod(
+      {required this.value,
+      required this.label,
+      required this.icon,
+      required this.color});
 }
 
 const _kPaymentMethods = [
   _PaymentMethod(
-    value: 'cash',
-    label: 'Cash',
-    icon: Icons.payments_outlined,
-    color: AppColors.primary,
-  ),
+      value: 'cash',
+      label: 'Cash',
+      icon: Icons.payments_outlined,
+      color: AppColors.primary),
   _PaymentMethod(
-    value: 'card',
-    label: 'Card',
-    icon: Icons.credit_card_rounded,
-    color: AppColors.primary,
-  ),
+      value: 'card',
+      label: 'Card',
+      icon: Icons.credit_card_rounded,
+      color: AppColors.primary),
   _PaymentMethod(
-    value: 'talabat_online',
-    label: 'Talabat Online',
-    icon: Icons.delivery_dining_rounded,
-    color: Color(0xFFFF6B00),
-  ),
+      value: 'talabat_online',
+      label: 'Talabat Online',
+      icon: Icons.delivery_dining_rounded,
+      color: Color(0xFFFF6B00)),
   _PaymentMethod(
-    value: 'talabat_cash',
-    label: 'Talabat Cash',
-    icon: Icons.delivery_dining_rounded,
-    color: Color(0xFFFF6B00),
-  ),
+      value: 'talabat_cash',
+      label: 'Talabat Cash',
+      icon: Icons.delivery_dining_rounded,
+      color: Color(0xFFFF6B00)),
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CHECKOUT SHEET  (Items 1, 2, 6, 7)
+//  CHECKOUT SHEET
 // ─────────────────────────────────────────────────────────────────────────────
 class CheckoutSheet extends ConsumerStatefulWidget {
   const CheckoutSheet({super.key});
@@ -1639,17 +1646,25 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   String? _error;
   final _customerCtrl = TextEditingController();
 
-  // Item 6 — discount
+  // Discount
   Discount? _selectedDiscount;
   List<Discount> _discounts = [];
   bool _discountsLoaded = false;
 
-  // Item 2 — cash tendered + tip
+  // Cash tendered — only for cash/talabat_cash single-payment mode
   final _tenderedCtrl = TextEditingController();
-  final _tipCtrl = TextEditingController();
   bool _showTendered = false;
 
-  // Item 7 — split payment
+  // Tip — only shown in single-payment mode.
+  // In split mode the teller folds the tip into one of the split amounts,
+  // so the tip card is hidden to avoid double-counting.
+  final _tipCtrl = TextEditingController();
+  String _tipPaymentMethod = 'cash';
+
+  // Split payment.
+  // FIX B1: controllers are owned here and created in _toggleSplitMethod
+  // BEFORE the next build. _SplitPaymentSection reads them by key and never
+  // calls putIfAbsent during its build phase.
   bool _isSplit = false;
   final Map<String, TextEditingController> _splitCtrs = {};
   final Set<String> _activeSplitMethods = {};
@@ -1667,7 +1682,9 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     _customerCtrl.dispose();
     _tenderedCtrl.dispose();
     _tipCtrl.dispose();
-    for (final c in _splitCtrs.values) c.dispose();
+    for (final c in _splitCtrs.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -1686,8 +1703,19 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     }
   }
 
-  TextEditingController _splitCtr(String method) =>
-      _splitCtrs.putIfAbsent(method, () => TextEditingController());
+  // FIX B1: controller created before the rebuild that will render the field.
+  void _toggleSplitMethod(String method) {
+    setState(() {
+      if (_activeSplitMethods.contains(method)) {
+        _activeSplitMethods.remove(method);
+        _splitCtrs[method]?.clear();
+        // Keep controller alive — reused if the method is toggled back on.
+      } else {
+        _activeSplitMethods.add(method);
+        _splitCtrs.putIfAbsent(method, () => TextEditingController());
+      }
+    });
+  }
 
   List<PaymentSplit> _buildSplits() {
     final splits = <PaymentSplit>[];
@@ -1700,12 +1728,13 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     return splits;
   }
 
-  static const _kSplitMethods = [
-    'cash',
-    'card',
-    'talabat_online',
-    'talabat_cash'
-  ];
+  // FIX B3: tip is null in split mode — excluded from all validation paths.
+  int? get _parsedTip {
+    if (_isSplit) return null;
+    final v = double.tryParse(_tipCtrl.text);
+    if (v == null || v <= 0) return null;
+    return (v * 100).round();
+  }
 
   Future<void> _place() async {
     final cart = ref.read(cartProvider);
@@ -1715,41 +1744,30 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     final customer =
         _customerCtrl.text.trim().isEmpty ? null : _customerCtrl.text.trim();
 
-    // Guard: prevent double-tap
     if (_loading) return;
-
-    // Guard: empty cart
     if (cart.isEmpty) {
       setState(() => _error = 'Cart is empty');
       return;
     }
-
     if (shift == null) {
       setState(() => _error = 'No open shift');
       return;
     }
-
-    // Guard: payment method required (non-split)
-    if (!_isSplit && (cart.payment.isEmpty)) {
+    if (!_isSplit && cart.payment.isEmpty) {
       setState(() => _error = 'Select a payment method');
       return;
     }
 
-    // Parse cash tendered & tip up-front so validation can use them
+    final int? tip = _parsedTip; // always null in split mode
+    final String? tipMethod = tip != null ? _tipPaymentMethod : null;
+
     final int? tendered = _showTendered && !_isSplit
         ? (double.tryParse(_tenderedCtrl.text) != null
             ? (double.parse(_tenderedCtrl.text) * 100).round()
             : null)
         : null;
 
-    final int? tip = _showTendered && !_isSplit
-        ? (double.tryParse(_tipCtrl.text) != null &&
-                double.parse(_tipCtrl.text) > 0
-            ? (double.parse(_tipCtrl.text) * 100).round()
-            : null)
-        : null;
-
-    // Cash-mode validations
+    // ── Cash-mode validations ──────────────────────────────────────────────
     if (_showTendered && !_isSplit) {
       if (tendered == null || tendered == 0) {
         setState(() => _error = 'Enter the cash amount tendered');
@@ -1760,15 +1778,21 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             'Tendered ${egp(tendered)} is less than total ${egp(cart.total)}');
         return;
       }
-      final tipAmt = tip ?? 0;
-      if (tipAmt > (tendered - cart.total)) {
-        setState(() => _error =
-            'Tip ${egp(tipAmt)} exceeds change ${egp(tendered - cart.total)}');
-        return;
+      // FIX B2: only block tip against change when the tip payment method is
+      // also cash. A card tip is independent of the cash float entirely.
+      if (tip != null && (tipMethod == 'cash' || tipMethod == 'talabat_cash')) {
+        final change = tendered - cart.total;
+        if (tip > change) {
+          setState(() =>
+              _error = 'Cash tip ${egp(tip)} exceeds change ${egp(change)}');
+          return;
+        }
       }
     }
 
-    // Validate split amounts sum to total + tip if split mode
+    // ── Split-mode validation ──────────────────────────────────────────────
+    // FIX B3 + B6: split total must equal cart.total exactly. Tip is not
+    // a separate field in split mode — it is folded into the split amounts.
     List<PaymentSplit>? splits;
     if (_isSplit) {
       if (_activeSplitMethods.isEmpty) {
@@ -1780,12 +1804,10 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         setState(() => _error = 'Enter amounts for selected payment methods');
         return;
       }
-      final splitTip = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
       final splitTotal = splits.fold(0, (s, p) => s + p.amount);
-      final expectedTotal = cart.total + splitTip;
-      if (splitTotal != expectedTotal) {
+      if (splitTotal != cart.total) {
         setState(() => _error =
-            'Split total ${egp(splitTotal)} must equal order total ${egp(expectedTotal)}');
+            'Split total ${egp(splitTotal)} must equal ${egp(cart.total)}');
         return;
       }
     }
@@ -1804,7 +1826,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         : cart.payment;
 
     if (!isOnline) {
-      final pending = PendingOrder(
+      await queue.enqueueOrder(PendingOrder(
         localId: const Uuid().v4(),
         branchId: shift.branchId,
         shiftId: shift.id,
@@ -1815,18 +1837,17 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         discountId: discountId,
         amountTendered: tendered,
         tipAmount: tip,
+        tipPaymentMethod: tipMethod,
         paymentSplits: splits?.map((s) => s.toApiJson()).toList(),
         items: cart.items,
         orderedAt: DateTime.now(),
         createdAt: DateTime.now(),
-      );
-      await queue.enqueueOrder(pending);
+      ));
       ref.read(cartProvider.notifier).clear();
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Order saved offline — will sync when connected'),
-        ));
+            content: Text('Order saved offline — will sync when connected')));
       }
       return;
     }
@@ -1843,6 +1864,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             discountId: discountId,
             amountTendered: tendered,
             tipAmount: tip,
+            tipPaymentMethod: tipMethod,
             paymentSplits: splits,
             idempotencyKey: const Uuid().v4(),
           );
@@ -1859,7 +1881,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       }
     } catch (e) {
       if (isNetworkError(e)) {
-        final pending = PendingOrder(
+        await queue.enqueueOrder(PendingOrder(
           localId: const Uuid().v4(),
           branchId: shift.branchId,
           shiftId: shift.id,
@@ -1870,12 +1892,12 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
           discountId: discountId,
           amountTendered: tendered,
           tipAmount: tip,
+          tipPaymentMethod: tipMethod,
           paymentSplits: splits?.map((s) => s.toApiJson()).toList(),
           items: cart.items,
           createdAt: DateTime.now(),
           orderedAt: DateTime.now(),
-        );
-        await queue.enqueueOrder(pending);
+        ));
         ref.read(cartProvider.notifier).clear();
         if (mounted) {
           Navigator.pop(context);
@@ -1895,659 +1917,772 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   Widget build(BuildContext context) {
     final cart = ref.watch(cartProvider);
     final mq = MediaQuery.of(context);
+    // FIX: cap at full screen height minus status bar/notch. Sheet never covers system UI.
+    final maxH = mq.size.height - mq.padding.top - 16;
 
     return Container(
+      constraints: BoxConstraints(maxHeight: maxH),
       decoration: BoxDecoration(
           color: Colors.white, borderRadius: AppRadius.sheetRadius),
-      padding: EdgeInsets.fromLTRB(24, 14, 24, mq.viewInsets.bottom + 28),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Handle
-            Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 4),
+            child: Center(
                 child: Container(
                     width: 36,
                     height: 4,
                     decoration: BoxDecoration(
                         color: AppColors.border,
                         borderRadius: BorderRadius.circular(2)))),
-            const SizedBox(height: 18),
+          ),
 
-            Text('Checkout',
-                style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
-            const SizedBox(height: 16),
-
-            // Summary
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: AppColors.bg,
-                  borderRadius: BorderRadius.circular(AppRadius.sm),
-                  border: Border.all(color: AppColors.border)),
-              child: Column(children: [
-                LabelValue('Subtotal', egp(cart.subtotal)),
-                if (cart.discountAmount > 0)
-                  LabelValue('Discount', '− ${egp(cart.discountAmount)}',
-                      valueColor: AppColors.success),
-                const Divider(height: 16, color: AppColors.border),
-                LabelValue('Total', egp(cart.total), bold: true),
-              ]),
-            ),
-            const SizedBox(height: 18),
-
-            // Customer name
-            Text('CUSTOMER NAME (OPTIONAL)',
-                style: cairo(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textMuted,
-                    letterSpacing: 1.2)),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _customerCtrl,
-              textCapitalization: TextCapitalization.words,
-              style: cairo(fontSize: 15),
-              decoration: InputDecoration(
-                hintText: 'e.g. Ahmed',
-                hintStyle: cairo(fontSize: 15, color: AppColors.textMuted),
-                prefixIcon: const Icon(Icons.person_outline_rounded,
-                    size: 18, color: AppColors.textMuted),
+          // Sticky header — total pill always visible while scrolling
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+            child: Row(children: [
+              Text('Checkout',
+                  style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
+              const Spacer(),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                transitionBuilder: (child, anim) => SlideTransition(
+                    position: Tween<Offset>(
+                            begin: const Offset(0.2, 0), end: Offset.zero)
+                        .animate(anim),
+                    child: FadeTransition(opacity: anim, child: child)),
+                child: Container(
+                  key: ValueKey(cart.total),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text(egp(cart.total),
+                      style: cairo(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primary)),
+                ),
               ),
-            ),
-            const SizedBox(height: 18),
+            ]),
+          ),
+          Container(height: 1, color: AppColors.border),
 
-            // ── Item 6: Discount picker ──────────────────────────────────────
-            if (_discountsLoaded && _discounts.isNotEmpty) ...[
-              Text('DISCOUNT (OPTIONAL)',
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted,
-                      letterSpacing: 1.2)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
+          // Scrollable body
+          Flexible(
+            child: SingleChildScrollView(
+              padding:
+                  EdgeInsets.fromLTRB(24, 20, 24, mq.viewInsets.bottom + 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // "None" chip
-                  GestureDetector(
-                    onTap: () {
-                      setState(() => _selectedDiscount = null);
-                      ref.read(cartProvider.notifier).setDiscount(null, null);
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: _selectedDiscount == null
-                            ? AppColors.primary
-                            : AppColors.bg,
-                        borderRadius: BorderRadius.circular(AppRadius.xs),
-                        border: Border.all(
-                          color: _selectedDiscount == null
-                              ? AppColors.primary
-                              : AppColors.border,
-                        ),
-                      ),
-                      child: Text('None',
-                          style: cairo(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: _selectedDiscount == null
-                                  ? Colors.white
-                                  : AppColors.textPrimary)),
+                  _SummaryCard(cart: cart),
+                  const SizedBox(height: 20),
+
+                  const _FieldLabel('CUSTOMER NAME (OPTIONAL)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _customerCtrl,
+                    textCapitalization: TextCapitalization.words,
+                    style: cairo(fontSize: 15),
+                    decoration: InputDecoration(
+                      hintText: 'e.g. Ahmed',
+                      hintStyle:
+                          cairo(fontSize: 15, color: AppColors.textMuted),
+                      prefixIcon: const Icon(Icons.person_outline_rounded,
+                          size: 18, color: AppColors.textMuted),
                     ),
                   ),
-                  ..._discounts.map((d) {
-                    final sel = _selectedDiscount?.id == d.id;
-                    return GestureDetector(
-                      onTap: () {
-                        final next = sel ? null : d;
-                        setState(() => _selectedDiscount = next);
-                        if (next == null) {
+                  const SizedBox(height: 20),
+
+                  if (_discountsLoaded && _discounts.isNotEmpty) ...[
+                    const _FieldLabel('DISCOUNT (OPTIONAL)'),
+                    const SizedBox(height: 8),
+                    _DiscountPicker(
+                      discounts: _discounts,
+                      selected: _selectedDiscount,
+                      onSelect: (d) {
+                        setState(() => _selectedDiscount = d);
+                        if (d == null) {
                           ref
                               .read(cartProvider.notifier)
                               .setDiscount(null, null);
                         } else {
                           ref.read(cartProvider.notifier).setDiscount(
-                                DiscountType.values.byName(next.dtype),
-                                next.value,
-                              );
+                              DiscountType.values.byName(d.dtype), d.value);
                         }
                       },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: sel ? AppColors.success : AppColors.bg,
-                          borderRadius: BorderRadius.circular(AppRadius.xs),
-                          border: Border.all(
-                              color: sel ? AppColors.success : AppColors.border,
-                              width: sel ? 1.5 : 1),
-                        ),
-                        child: Text(d.label,
-                            style: cairo(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: sel
-                                    ? Colors.white
-                                    : AppColors.textPrimary)),
-                      ),
-                    );
-                  }),
-                ],
-              ),
-              const SizedBox(height: 18),
-            ],
-
-            // ── Payment method ───────────────────────────────────────────────
-            Row(children: [
-              Text('PAYMENT',
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted,
-                      letterSpacing: 1.2)),
-              const Spacer(),
-              // Item 7: Split toggle
-              GestureDetector(
-                onTap: () => setState(() {
-                  _isSplit = !_isSplit;
-                  if (!_isSplit) {
-                    for (final c in _splitCtrs.values) c.clear();
-                    _activeSplitMethods.clear();
-                    _tipCtrl.clear();
-                  }
-                }),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _isSplit
-                        ? AppColors.primary.withOpacity(0.1)
-                        : AppColors.bg,
-                    borderRadius: BorderRadius.circular(AppRadius.xs),
-                    border: Border.all(
-                        color: _isSplit ? AppColors.primary : AppColors.border),
-                  ),
-                  child: Text('Split',
-                      style: cairo(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: _isSplit
-                              ? AppColors.primary
-                              : AppColors.textSecondary)),
-                ),
-              ),
-            ]),
-            const SizedBox(height: 10),
-
-            if (_isSplit)
-              // ── Split payment inputs ───────────────────────────────────────
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Step 1: toggle which methods are being used
-                  Text('SELECT METHODS USED',
-                      style: cairo(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textMuted,
-                          letterSpacing: 1.2)),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _kSplitMethods.map((method) {
-                      final color = _paymentColor(method);
-                      final active = _activeSplitMethods.contains(method);
-                      return GestureDetector(
-                        onTap: () => setState(() {
-                          if (active) {
-                            _activeSplitMethods.remove(method);
-                            _splitCtrs[method]?.clear();
-                          } else {
-                            _activeSplitMethods.add(method);
-                          }
-                        }),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 150),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 9),
-                          decoration: BoxDecoration(
-                            color: active ? color : AppColors.bg,
-                            borderRadius: BorderRadius.circular(AppRadius.sm),
-                            border: Border.all(
-                                color: active ? color : AppColors.border,
-                                width: active ? 1.5 : 1),
-                          ),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Icon(
-                              active
-                                  ? Icons.check_circle_rounded
-                                  : Icons.radio_button_unchecked_rounded,
-                              size: 14,
-                              color: active ? Colors.white : color,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(_paymentLabel(method),
-                                style: cairo(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: active
-                                        ? Colors.white
-                                        : AppColors.textPrimary)),
-                          ]),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-
-                  // Step 2: input fields only for active methods
-                  if (_activeSplitMethods.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text('ENTER AMOUNTS',
-                        style: cairo(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textMuted,
-                            letterSpacing: 1.2)),
-                    const SizedBox(height: 10),
-                    ..._activeSplitMethods.map((method) {
-                      final color = _paymentColor(method);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                      color: color, shape: BoxShape.circle),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(_paymentLabel(method),
-                                    style: cairo(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: color)),
-                              ]),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: _splitCtr(method),
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                        decimal: true),
-                                onChanged: (_) => setState(() {}),
-                                style: cairo(
-                                    fontSize: 20, fontWeight: FontWeight.w700),
-                                decoration: InputDecoration(
-                                  hintText: '0',
-                                  prefixText: 'EGP  ',
-                                  prefixStyle: cairo(
-                                      fontSize: 15,
-                                      color: AppColors.textSecondary,
-                                      fontWeight: FontWeight.w500),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 12),
-                                  border: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide: BorderSide(
-                                        color: color.withOpacity(0.3)),
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide: BorderSide(
-                                        color: color.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide:
-                                        BorderSide(color: color, width: 2),
-                                  ),
-                                  filled: true,
-                                  fillColor: color.withOpacity(0.03),
-                                ),
-                              ),
-                            ]),
-                      );
-                    }),
-
-                    // Tip field for split
-                    Text('TIP (OPTIONAL)',
-                        style: cairo(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textMuted,
-                            letterSpacing: 1.2)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _tipCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      onChanged: (_) => setState(() {}),
-                      style: cairo(fontSize: 20, fontWeight: FontWeight.w700),
-                      decoration: InputDecoration(
-                        hintText: '0',
-                        prefixText: 'EGP  ',
-                        prefixStyle: cairo(
-                            fontSize: 15,
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.w500),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                          borderSide: BorderSide(color: AppColors.border),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                          borderSide: BorderSide(color: AppColors.border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                          borderSide:
-                              BorderSide(color: AppColors.primary, width: 2),
-                        ),
-                        filled: false,
-                      ),
                     ),
-                    const SizedBox(height: 12),
-
-                    // Balance indicator
-                    Builder(builder: (context) {
-                      final splits = _buildSplits();
-                      final entered = splits.fold(0, (s, p) => s + p.amount);
-                      final tipP =
-                          ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
-                      final diff = (cart.total + tipP) - entered;
-                      final ok = diff == 0;
-                      return Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: ok
-                              ? AppColors.success.withOpacity(0.07)
-                              : AppColors.warning.withOpacity(0.07),
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                          border: Border.all(
-                              color: ok
-                                  ? AppColors.success.withOpacity(0.3)
-                                  : AppColors.warning.withOpacity(0.3)),
-                        ),
-                        child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(children: [
-                                Icon(
-                                  ok
-                                      ? Icons.check_circle_outline_rounded
-                                      : Icons.pending_outlined,
-                                  size: 16,
-                                  color: ok
-                                      ? AppColors.success
-                                      : AppColors.warning,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(ok ? 'Balanced ✓' : 'Remaining',
-                                    style: cairo(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: ok
-                                            ? AppColors.success
-                                            : AppColors.warning)),
-                              ]),
-                              if (!ok)
-                                Text(egp(diff.abs()),
-                                    style: cairo(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.warning)),
-                            ]),
-                      );
-                    }),
+                    const SizedBox(height: 20),
                   ],
-                ],
-              )
-            else
-              // ── Single payment method ──────────────────────────────────────
-              LayoutBuilder(builder: (ctx, constraints) {
-                final btnW = (constraints.maxWidth - 8) / 2;
-                return Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _kPaymentMethods.map((m) {
-                    final sel = cart.payment == m.value;
-                    return GestureDetector(
-                      onTap: () {
-                        ref.read(cartProvider.notifier).setPayment(m.value);
-                        setState(() => _showTendered =
-                            m.value == 'cash' || m.value == 'talabat_cash');
+
+                  Row(children: [
+                    const _FieldLabel('PAYMENT'),
+                    const Spacer(),
+                    _SplitToggle(
+                      active: _isSplit,
+                      onToggle: () => setState(() {
+                        _isSplit = !_isSplit;
+                        if (!_isSplit) {
+                          for (final c in _splitCtrs.values) c.clear();
+                          _activeSplitMethods.clear();
+                          final pay = ref.read(cartProvider).payment;
+                          _showTendered =
+                              pay == 'cash' || pay == 'talabat_cash';
+                        } else {
+                          _showTendered = false;
+                        }
+                      }),
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+
+                  // FIX B1: _SplitPaymentSection receives the map by reference and
+                  // reads existing keys only — never calls putIfAbsent in build.
+                  if (_isSplit)
+                    _SplitPaymentSection(
+                      activeMethods: _activeSplitMethods,
+                      splitCtrs: _splitCtrs,
+                      cartTotal: cart.total,
+                      onToggleMethod: _toggleSplitMethod,
+                      onAmountChanged: () => setState(() {}),
+                    )
+                  else ...[
+                    _SinglePaymentGrid(
+                      selected: cart.payment,
+                      onSelect: (v) {
+                        ref.read(cartProvider.notifier).setPayment(v);
+                        setState(() =>
+                            _showTendered = v == 'cash' || v == 'talabat_cash');
                       },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: btnW,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 11),
-                        decoration: BoxDecoration(
-                            color: sel ? m.color : AppColors.bg,
-                            borderRadius: BorderRadius.circular(AppRadius.sm),
-                            border: Border.all(
-                                color: sel ? m.color : AppColors.border,
-                                width: sel ? 1.5 : 1)),
-                        child: Row(children: [
-                          Icon(m.icon,
-                              size: 20, color: sel ? Colors.white : m.color),
-                          const SizedBox(width: 10),
-                          Expanded(
-                              child: Text(m.label,
-                                  style: cairo(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: sel
-                                          ? Colors.white
-                                          : AppColors.textPrimary),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis)),
-                          if (sel) ...[
-                            const SizedBox(width: 4),
-                            const Icon(Icons.check_circle_rounded,
-                                size: 15, color: Colors.white),
-                          ],
-                        ]),
+                    ),
+
+                    // Cash tendered
+                    if (_showTendered) ...[
+                      const SizedBox(height: 20),
+                      // FIX B2: tipAmount param removed — tip may be on a different
+                      // method and must not reduce the change displayed.
+                      _CashTenderedSection(
+                        tenderedCtrl: _tenderedCtrl,
+                        cartTotal: cart.total,
+                        onChanged: () => setState(() {}),
                       ),
-                    );
-                  }).toList(),
-                );
-              }),
+                    ],
 
-            // ── Item 2: Cash tendered ────────────────────────────────────────
-            if (_showTendered && !_isSplit) ...[
-              const SizedBox(height: 16),
-              Text('CASH TENDERED (OPTIONAL)',
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted,
-                      letterSpacing: 1.2)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _tenderedCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) => setState(() {}),
-                style: cairo(fontSize: 22, fontWeight: FontWeight.w700),
-                decoration: InputDecoration(
-                  prefixText: 'EGP  ',
-                  prefixStyle: cairo(
-                      fontSize: 16,
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w500),
-                  hintText: '0',
-                  hintStyle: cairo(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.border),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                ),
-              ),
-              // Change due
-              Builder(builder: (_) {
-                final tendered = double.tryParse(_tenderedCtrl.text);
-                if (tendered == null || tendered == 0) {
-                  return const SizedBox.shrink();
-                }
-                final tenderedP = (tendered * 100).round();
-                final tipP =
-                    ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
-                final change = tenderedP - (cart.total + tipP);
-                return AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.only(top: 8),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: change >= 0
-                        ? AppColors.success.withOpacity(0.07)
-                        : AppColors.danger.withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(AppRadius.xs),
-                    border: Border.all(
-                        color: change >= 0
-                            ? AppColors.success.withOpacity(0.25)
-                            : AppColors.danger.withOpacity(0.25)),
+                    // FIX B3: Tip only in single-payment mode.
+                    const SizedBox(height: 20),
+                    _TipSection(
+                      tipCtrl: _tipCtrl,
+                      tipPaymentMethod: _tipPaymentMethod,
+                      parsedTip: _parsedTip,
+                      onMethodChanged: (m) =>
+                          setState(() => _tipPaymentMethod = m),
+                      onAmountChanged: () => setState(() {}),
+                    ),
+                  ],
+
+                  // Error banner
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    child: _error != null
+                        ? Padding(
+                            padding: const EdgeInsets.only(top: 16),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 11),
+                              decoration: BoxDecoration(
+                                  color: AppColors.danger.withOpacity(0.07),
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.xs)),
+                              child: Row(children: [
+                                const Icon(Icons.error_outline_rounded,
+                                    size: 14, color: AppColors.danger),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                    child: Text(_error!,
+                                        style: cairo(
+                                            fontSize: 13,
+                                            color: AppColors.danger))),
+                              ]),
+                            ))
+                        : const SizedBox.shrink(),
                   ),
-                  child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(change >= 0 ? 'Change due:' : 'Insufficient:',
-                            style: cairo(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: change >= 0
-                                    ? AppColors.success
-                                    : AppColors.danger)),
-                        Text(egp(change.abs()),
-                            style: cairo(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                                color: change >= 0
-                                    ? AppColors.success
-                                    : AppColors.danger)),
-                      ]),
-                );
-              }),
-              // Tip
-              const SizedBox(height: 14),
-              Text('TIP (OPTIONAL)',
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted,
-                      letterSpacing: 1.2)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _tipCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) => setState(() {}),
-                style: cairo(fontSize: 22, fontWeight: FontWeight.w700),
-                decoration: InputDecoration(
-                  prefixText: 'EGP  ',
-                  prefixStyle: cairo(
-                      fontSize: 16,
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w500),
-                  hintText: '0',
-                  hintStyle: cairo(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.border),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                ),
+
+                  const SizedBox(height: 20),
+                ],
               ),
-            ],
-
-            // Error
-            AnimatedSize(
-              duration: const Duration(milliseconds: 200),
-              child: _error != null
-                  ? Padding(
-                      padding: const EdgeInsets.only(top: 14),
-                      child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 11),
-                          decoration: BoxDecoration(
-                              color: AppColors.danger.withOpacity(0.07),
-                              borderRadius:
-                                  BorderRadius.circular(AppRadius.xs)),
-                          child: Row(children: [
-                            const Icon(Icons.error_outline_rounded,
-                                size: 14, color: AppColors.danger),
-                            const SizedBox(width: 8),
-                            Text(_error!,
-                                style: cairo(
-                                    fontSize: 13, color: AppColors.danger)),
-                          ])))
-                  : const SizedBox.shrink(),
             ),
+          ),
 
-            const SizedBox(height: 20),
-            AppButton(
-                label: 'Place Order',
-                loading: _loading,
-                width: double.infinity,
-                height: 52,
-                icon: Icons.check_rounded,
-                onTap: _place),
-          ],
-        ),
+          // Place Order — pinned outside scroll, always visible
+          Container(
+            padding: EdgeInsets.fromLTRB(24, 12, 24, mq.padding.bottom + 16),
+            decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border(top: BorderSide(color: AppColors.border))),
+            child: AppButton(
+              label: 'Place Order',
+              loading: _loading,
+              width: double.infinity,
+              height: 52,
+              icon: Icons.check_rounded,
+              onTap: _place,
+            ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  Color _paymentColor(String method) {
-    switch (method) {
-      case 'cash':
-        return AppColors.success;
-      case 'card':
-        return const Color(0xFF7C3AED);
-      case 'talabat_online':
-        return const Color(0xFFFF6B00);
-      case 'talabat_cash':
-        return const Color(0xFFFF6B00);
-      default:
-        return AppColors.primary;
+// ─────────────────────────────────────────────────────────────────────────────
+//  CHECKOUT SUB-WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FieldLabel extends StatelessWidget {
+  final String text;
+  const _FieldLabel(this.text);
+  @override
+  Widget build(BuildContext context) => Text(text,
+      style: cairo(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textMuted,
+          letterSpacing: 1.2));
+}
+
+class _SummaryCard extends StatelessWidget {
+  final CartState cart;
+  const _SummaryCard({required this.cart});
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+            color: AppColors.bg,
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+            border: Border.all(color: AppColors.border)),
+        child: Column(children: [
+          LabelValue('Subtotal', egp(cart.subtotal)),
+          if (cart.discountAmount > 0)
+            LabelValue('Discount', '− ${egp(cart.discountAmount)}',
+                valueColor: AppColors.success),
+          const Divider(height: 16, color: AppColors.border),
+          LabelValue('Total', egp(cart.total), bold: true),
+        ]),
+      );
+}
+
+class _SplitToggle extends StatelessWidget {
+  final bool active;
+  final VoidCallback onToggle;
+  const _SplitToggle({required this.active, required this.onToggle});
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onToggle,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: active ? AppColors.primary.withOpacity(0.1) : AppColors.bg,
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+            border: Border.all(
+                color: active ? AppColors.primary : AppColors.border),
+          ),
+          child: Text('Split',
+              style: cairo(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: active ? AppColors.primary : AppColors.textSecondary)),
+        ),
+      );
+}
+
+class _DiscountPicker extends StatelessWidget {
+  final List<Discount> discounts;
+  final Discount? selected;
+  final void Function(Discount?) onSelect;
+  const _DiscountPicker(
+      {required this.discounts,
+      required this.selected,
+      required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _chip('None', null, selected == null, AppColors.primary),
+          ...discounts.map((d) =>
+              _chip(d.label, d, selected?.id == d.id, AppColors.success)),
+        ],
+      );
+
+  Widget _chip(String label, Discount? d, bool sel, Color color) =>
+      GestureDetector(
+        onTap: () => onSelect(sel ? null : d),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: sel ? color : AppColors.bg,
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+            border: Border.all(
+                color: sel ? color : AppColors.border, width: sel ? 1.5 : 1),
+          ),
+          child: Text(label,
+              style: cairo(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: sel ? Colors.white : AppColors.textPrimary)),
+        ),
+      );
+}
+
+class _SinglePaymentGrid extends StatelessWidget {
+  final String selected;
+  final void Function(String) onSelect;
+  const _SinglePaymentGrid({required this.selected, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) =>
+      LayoutBuilder(builder: (ctx, constraints) {
+        final btnW = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _kPaymentMethods.map((m) {
+            final sel = selected == m.value;
+            return GestureDetector(
+              onTap: () => onSelect(m.value),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: btnW,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                    color: sel ? m.color : AppColors.bg,
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(
+                        color: sel ? m.color : AppColors.border,
+                        width: sel ? 1.5 : 1)),
+                child: Row(children: [
+                  Icon(m.icon, size: 20, color: sel ? Colors.white : m.color),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: Text(m.label,
+                          style: cairo(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  sel ? Colors.white : AppColors.textPrimary),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis)),
+                  if (sel) ...[
+                    const SizedBox(width: 4),
+                    const Icon(Icons.check_circle_rounded,
+                        size: 15, color: Colors.white)
+                  ],
+                ]),
+              ),
+            );
+          }).toList(),
+        );
+      });
+}
+
+// FIX B2: tipAmount removed — change = tendered - cartTotal only.
+class _CashTenderedSection extends StatelessWidget {
+  final TextEditingController tenderedCtrl;
+  final int cartTotal;
+  final VoidCallback onChanged;
+  const _CashTenderedSection(
+      {required this.tenderedCtrl,
+      required this.cartTotal,
+      required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _FieldLabel('CASH TENDERED'),
+          const SizedBox(height: 8),
+          TextField(
+            controller: tenderedCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => onChanged(),
+            style: cairo(fontSize: 22, fontWeight: FontWeight.w700),
+            decoration: InputDecoration(
+              prefixText: 'EGP  ',
+              prefixStyle: cairo(
+                  fontSize: 16,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500),
+              hintText: '0',
+              hintStyle: cairo(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.border),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              isDense: true,
+            ),
+          ),
+          Builder(builder: (_) {
+            final tendered = double.tryParse(tenderedCtrl.text);
+            if (tendered == null || tendered == 0)
+              return const SizedBox.shrink();
+            final tenderedP = (tendered * 100).round();
+            final change = tenderedP - cartTotal;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: change >= 0
+                    ? AppColors.success.withOpacity(0.07)
+                    : AppColors.danger.withOpacity(0.07),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
+                border: Border.all(
+                    color: change >= 0
+                        ? AppColors.success.withOpacity(0.25)
+                        : AppColors.danger.withOpacity(0.25)),
+              ),
+              child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(change >= 0 ? 'Change due:' : 'Insufficient:',
+                        style: cairo(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: change >= 0
+                                ? AppColors.success
+                                : AppColors.danger)),
+                    Text(egp(change.abs()),
+                        style: cairo(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: change >= 0
+                                ? AppColors.success
+                                : AppColors.danger)),
+                  ]),
+            );
+          }),
+        ],
+      );
+}
+
+// FIX B3: Extracted as a separate widget so it can be conditionally shown/hidden
+// from the parent. Hidden entirely in split mode.
+class _TipSection extends StatelessWidget {
+  final TextEditingController tipCtrl;
+  final String tipPaymentMethod;
+  final int? parsedTip;
+  final void Function(String) onMethodChanged;
+  final VoidCallback onAmountChanged;
+
+  static const _methods = ['cash', 'card', 'talabat_online', 'talabat_cash'];
+
+  const _TipSection({
+    required this.tipCtrl,
+    required this.tipPaymentMethod,
+    required this.parsedTip,
+    required this.onMethodChanged,
+    required this.onAmountChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.bg,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(
+              color: parsedTip != null
+                  ? AppColors.primary.withOpacity(0.3)
+                  : AppColors.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.volunteer_activism_rounded,
+                size: 14, color: AppColors.textMuted),
+            const SizedBox(width: 6),
+            const _FieldLabel('TIP (OPTIONAL)'),
+            const Spacer(),
+            if (parsedTip != null)
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Container(
+                  key: ValueKey(parsedTip),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: AppColors.success.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Text(egp(parsedTip!),
+                      style: cairo(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.success)),
+                ),
+              ),
+          ]),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: _methods.map((method) {
+              final sel = tipPaymentMethod == method;
+              final color = _methodColor(method);
+              return GestureDetector(
+                onTap: () => onMethodChanged(method),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: sel ? color : Colors.white,
+                    borderRadius: BorderRadius.circular(AppRadius.xs),
+                    border: Border.all(
+                        color: sel ? color : AppColors.border,
+                        width: sel ? 1.5 : 1),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (sel) ...[
+                      const Icon(Icons.check_rounded,
+                          size: 11, color: Colors.white),
+                      const SizedBox(width: 4)
+                    ],
+                    Text(_methodLabel(method),
+                        style: cairo(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color:
+                                sel ? Colors.white : AppColors.textSecondary)),
+                  ]),
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: tipCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => onAmountChanged(),
+            style: cairo(fontSize: 22, fontWeight: FontWeight.w700),
+            decoration: InputDecoration(
+              prefixText: 'EGP  ',
+              prefixStyle: cairo(
+                  fontSize: 16,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500),
+              hintText: '0',
+              hintStyle: cairo(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.border),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              isDense: true,
+            ),
+          ),
+        ]),
+      );
+}
+
+// FIX B1: Never calls putIfAbsent during build.
+// All controllers are guaranteed present in splitCtrs for every key in
+// activeMethods — created by _toggleSplitMethod in the parent before rebuild.
+// FIX B6: balance indicator validates against cartTotal only (no tip offset).
+class _SplitPaymentSection extends StatelessWidget {
+  final Set<String> activeMethods;
+  final Map<String, TextEditingController> splitCtrs;
+  final int cartTotal;
+  final void Function(String) onToggleMethod;
+  final VoidCallback onAmountChanged;
+
+  static const _methods = ['cash', 'card', 'talabat_online', 'talabat_cash'];
+
+  const _SplitPaymentSection({
+    required this.activeMethods,
+    required this.splitCtrs,
+    required this.cartTotal,
+    required this.onToggleMethod,
+    required this.onAmountChanged,
+  });
+
+  List<PaymentSplit> _buildSplits() {
+    final splits = <PaymentSplit>[];
+    for (final method in activeMethods) {
+      final raw = double.tryParse(splitCtrs[method]?.text ?? '');
+      if (raw != null && raw > 0)
+        splits.add(PaymentSplit(method: method, amount: (raw * 100).round()));
     }
+    return splits;
   }
 
-  String _paymentLabel(String method) {
-    switch (method) {
-      case 'cash':
-        return 'Cash';
-      case 'card':
-        return 'Card';
-      case 'talabat_online':
-        return 'Talabat Online';
-      case 'talabat_cash':
-        return 'Talabat Cash';
-      default:
-        return method;
-    }
-  }
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _FieldLabel('SELECT METHODS USED'),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _methods.map((method) {
+              final color = _methodColor(method);
+              final active = activeMethods.contains(method);
+              return GestureDetector(
+                onTap: () => onToggleMethod(method),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: active ? color : AppColors.bg,
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(
+                        color: active ? color : AppColors.border,
+                        width: active ? 1.5 : 1),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                        active
+                            ? Icons.check_circle_rounded
+                            : Icons.radio_button_unchecked_rounded,
+                        size: 14,
+                        color: active ? Colors.white : color),
+                    const SizedBox(width: 6),
+                    Text(_methodLabel(method),
+                        style: cairo(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color:
+                                active ? Colors.white : AppColors.textPrimary)),
+                  ]),
+                ),
+              );
+            }).toList(),
+          ),
+          if (activeMethods.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const _FieldLabel('ENTER AMOUNTS'),
+            const SizedBox(height: 10),
+            ...activeMethods.map((method) {
+              final color = _methodColor(method);
+              // Controller is guaranteed present — created in _toggleSplitMethod.
+              final ctrl = splitCtrs[method];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                                color: color, shape: BoxShape.circle)),
+                        const SizedBox(width: 6),
+                        Text(_methodLabel(method),
+                            style: cairo(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: color)),
+                      ]),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: ctrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (_) => onAmountChanged(),
+                        style: cairo(fontSize: 20, fontWeight: FontWeight.w700),
+                        decoration: InputDecoration(
+                          hintText: '0',
+                          prefixText: 'EGP  ',
+                          prefixStyle: cairo(
+                              fontSize: 15,
+                              color: AppColors.textSecondary,
+                              fontWeight: FontWeight.w500),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AppRadius.sm),
+                              borderSide:
+                                  BorderSide(color: color.withOpacity(0.3))),
+                          enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AppRadius.sm),
+                              borderSide:
+                                  BorderSide(color: color.withOpacity(0.3))),
+                          focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(AppRadius.sm),
+                              borderSide: BorderSide(color: color, width: 2)),
+                          filled: true,
+                          fillColor: color.withOpacity(0.03),
+                        ),
+                      ),
+                    ]),
+              );
+            }),
+
+            // FIX B6: diff = cartTotal - entered (no tip offset)
+            Builder(builder: (context) {
+              final splits = _buildSplits();
+              final entered = splits.fold(0, (s, p) => s + p.amount);
+              final diff = cartTotal - entered;
+              final ok = diff == 0;
+              return Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: ok
+                      ? AppColors.success.withOpacity(0.07)
+                      : AppColors.warning.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                  border: Border.all(
+                      color: ok
+                          ? AppColors.success.withOpacity(0.3)
+                          : AppColors.warning.withOpacity(0.3)),
+                ),
+                child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(children: [
+                        Icon(
+                            ok
+                                ? Icons.check_circle_outline_rounded
+                                : Icons.pending_outlined,
+                            size: 16,
+                            color: ok ? AppColors.success : AppColors.warning),
+                        const SizedBox(width: 8),
+                        Text(ok ? 'Balanced ✓' : 'Remaining',
+                            style: cairo(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: ok
+                                    ? AppColors.success
+                                    : AppColors.warning)),
+                      ]),
+                      if (!ok)
+                        Text(egp(diff.abs()),
+                            style: cairo(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.warning)),
+                    ]),
+              );
+            }),
+          ],
+        ],
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2642,6 +2777,11 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
               border: Border.all(color: AppColors.border)),
           child: Column(children: [
             LabelValue('Payment', _paymentLabel(o.paymentMethod)),
+            // Show tip + its method on the receipt
+            if (o.tipAmount != null && o.tipAmount! > 0)
+              LabelValue('Tip',
+                  '${egp(o.tipAmount!)}${o.tipPaymentMethod != null ? " · ${_paymentLabel(o.tipPaymentMethod!)}" : ""}',
+                  valueColor: AppColors.success),
             if (o.customerName != null && o.customerName!.isNotEmpty)
               LabelValue('Customer', o.customerName!),
             LabelValue('Total', egp(o.totalAmount), bold: true),
@@ -2769,13 +2909,12 @@ class _Chip extends StatelessWidget {
   final bool selected;
   final bool checkbox;
   final VoidCallback onTap;
-  const _Chip({
-    required this.label,
-    this.sublabel,
-    required this.selected,
-    required this.checkbox,
-    required this.onTap,
-  });
+  const _Chip(
+      {required this.label,
+      this.sublabel,
+      required this.selected,
+      required this.checkbox,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) => GestureDetector(

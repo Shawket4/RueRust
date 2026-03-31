@@ -16,7 +16,7 @@ const ORDER_SELECT: &str =
      o.order_number, o.status::text, o.payment_method::text,
      o.subtotal, o.discount_type::text, o.discount_value,
      o.discount_amount, o.tax_amount, o.total_amount,
-     o.amount_tendered, o.change_given, o.tip_amount, o.discount_id,
+     o.amount_tendered, o.change_given, o.tip_amount, o.tip_payment_method, o.discount_id,
      o.customer_name, o.notes, o.voided_at, o.void_reason::text, o.voided_by, o.created_at
      FROM orders o JOIN users u ON u.id = o.teller_id ";
 
@@ -24,30 +24,31 @@ const ORDER_SELECT: &str =
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Order {
-    pub id:              Uuid,
-    pub branch_id:       Uuid,
-    pub shift_id:        Uuid,
-    pub teller_id:       Uuid,
-    pub teller_name:     String,
-    pub order_number:    i32,
-    pub status:          String,
-    pub payment_method:  String,
-    pub subtotal:        i32,
-    pub discount_type:   Option<String>,
-    pub discount_value:  i32,
-    pub discount_amount: i32,
-    pub tax_amount:      i32,
-    pub total_amount:    i32,
-    pub amount_tendered: Option<i32>,
-    pub change_given:    Option<i32>,
-    pub tip_amount:      Option<i32>,
-    pub discount_id:     Option<Uuid>,
-    pub customer_name:   Option<String>,
-    pub notes:           Option<String>,
-    pub voided_at:       Option<chrono::DateTime<chrono::Utc>>,
-    pub void_reason:     Option<String>,
-    pub voided_by:       Option<Uuid>,
-    pub created_at:      chrono::DateTime<chrono::Utc>,
+    pub id:                 Uuid,
+    pub branch_id:          Uuid,
+    pub shift_id:           Uuid,
+    pub teller_id:          Uuid,
+    pub teller_name:        String,
+    pub order_number:       i32,
+    pub status:             String,
+    pub payment_method:     String,
+    pub subtotal:           i32,
+    pub discount_type:      Option<String>,
+    pub discount_value:     i32,
+    pub discount_amount:    i32,
+    pub tax_amount:         i32,
+    pub total_amount:       i32,
+    pub amount_tendered:    Option<i32>,
+    pub change_given:       Option<i32>,
+    pub tip_amount:         Option<i32>,
+    pub tip_payment_method: Option<String>,
+    pub discount_id:        Option<Uuid>,
+    pub customer_name:      Option<String>,
+    pub notes:              Option<String>,
+    pub voided_at:          Option<chrono::DateTime<chrono::Utc>>,
+    pub void_reason:        Option<String>,
+    pub voided_by:          Option<Uuid>,
+    pub created_at:         chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -116,19 +117,20 @@ pub struct OrderItemInput {
 
 #[derive(Deserialize)]
 pub struct CreateOrderRequest {
-    pub branch_id:       Uuid,
-    pub shift_id:        Uuid,
-    pub payment_method:  String,
-    pub customer_name:   Option<String>,
-    pub notes:           Option<String>,
-    pub discount_type:   Option<String>,
-    pub discount_value:  Option<i32>,
-    pub discount_id:     Option<Uuid>,
-    pub amount_tendered: Option<i32>,
-    pub tip_amount:      Option<i32>,
-    pub payment_splits:  Option<Vec<PaymentSplitInput>>,
-    pub items:           Vec<OrderItemInput>,
-    pub created_at:      Option<chrono::DateTime<chrono::Utc>>,
+    pub branch_id:          Uuid,
+    pub shift_id:           Uuid,
+    pub payment_method:     String,
+    pub customer_name:      Option<String>,
+    pub notes:              Option<String>,
+    pub discount_type:      Option<String>,
+    pub discount_value:     Option<i32>,
+    pub discount_id:        Option<Uuid>,
+    pub amount_tendered:    Option<i32>,
+    pub tip_amount:         Option<i32>,
+    pub tip_payment_method: Option<String>,
+    pub payment_splits:     Option<Vec<PaymentSplitInput>>,
+    pub items:              Vec<OrderItemInput>,
+    pub created_at:         Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -140,9 +142,27 @@ pub struct VoidOrderRequest {
 
 #[derive(Deserialize)]
 pub struct ListOrdersQuery {
-    pub branch_id:     Option<Uuid>,
-    pub shift_id:      Option<Uuid>,
-    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub branch_id:      Option<Uuid>,
+    pub shift_id:       Option<Uuid>,
+    pub updated_after:  Option<chrono::DateTime<chrono::Utc>>,
+    // pagination
+    pub page:           Option<i64>,
+    pub per_page:       Option<i64>,
+    // filters
+    pub teller_name:    Option<String>,
+    pub payment_method: Option<String>,
+    pub status:         Option<String>,
+    pub from:           Option<chrono::DateTime<chrono::Utc>>,
+    pub to:             Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedOrders {
+    pub data:       Vec<Order>,
+    pub total:      i64,
+    pub page:       i64,
+    pub per_page:   i64,
+    pub total_pages: i64,
 }
 
 // ── POST /orders ──────────────────────────────────────────────
@@ -189,6 +209,7 @@ pub async fn create_order(
 
     validate_payment_method(&body.payment_method)?;
     if let Some(dt) = &body.discount_type { validate_discount_type(dt)?; }
+    if let Some(tpm) = &body.tip_payment_method { validate_payment_method(tpm)?; }
 
     // Resolve discount_id -> inline discount fields
     let (resolved_discount_type, resolved_discount_value) =
@@ -408,52 +429,67 @@ pub async fn create_order(
     .fetch_one(&mut *tx)
     .await?;
 
+    // ── Insert order ──────────────────────────────────────────
+    // Parameters:
+    //  $1  branch_id          $11 total_amount
+    //  $2  shift_id           $12 amount_tendered
+    //  $3  teller_id          $13 change_given
+    //  $4  order_number       $14 tip_amount
+    //  $5  payment_method     $15 tip_payment_method   ← new
+    //  $6  subtotal           $16 discount_id
+    //  $7  discount_type      $17 customer_name
+    //  $8  discount_value     $18 notes
+    //  $9  discount_amount    $19 idempotency_key
+    //  $10 tax_amount         $20 created_at
     let order = sqlx::query_as::<_, Order>(
         r#"
         INSERT INTO orders
             (branch_id, shift_id, teller_id, order_number,
              payment_method, subtotal, discount_type, discount_value,
              discount_amount, tax_amount, total_amount,
-             amount_tendered, change_given, tip_amount,
+             amount_tendered, change_given, tip_amount, tip_payment_method,
              discount_id, customer_name, notes, status,
              idempotency_key, created_at)
         VALUES ($1, $2, $3, $4, $5::payment_method, $6, $7::discount_type, $8,
-                $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', $18, $19)
+                $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'completed', $19, $20)
         RETURNING
             id, branch_id, shift_id, teller_id,
             (SELECT name FROM users WHERE id = $3) AS teller_name,
             order_number, status::text, payment_method::text,
             subtotal, discount_type::text, discount_value,
             discount_amount, tax_amount, total_amount,
-            amount_tendered, change_given, tip_amount, discount_id,
+            amount_tendered, change_given, tip_amount, tip_payment_method, discount_id,
             customer_name, notes,
             voided_at, void_reason::text, voided_by,
             created_at
         "#,
     )
-    .bind(body.branch_id)
-    .bind(body.shift_id)
-    .bind(claims.user_id())
-    .bind(order_number)
-    .bind(&body.payment_method)
-    .bind(subtotal)
-    .bind(&resolved_discount_type)
-    .bind(resolved_discount_value)
-    .bind(discount_amount)
-    .bind(tax_amount)
-    .bind(total_amount)
-    .bind(body.amount_tendered)
-    .bind(change_given)
-    .bind(body.tip_amount.unwrap_or(0))
-    .bind(body.discount_id)
-    .bind(&body.customer_name)
-    .bind(&body.notes)
-    .bind(idempotency_key)
-    .bind(created_at)
+    .bind(body.branch_id)           // $1
+    .bind(body.shift_id)            // $2
+    .bind(claims.user_id())         // $3
+    .bind(order_number)             // $4
+    .bind(&body.payment_method)     // $5
+    .bind(subtotal)                 // $6
+    .bind(&resolved_discount_type)  // $7
+    .bind(resolved_discount_value)  // $8
+    .bind(discount_amount)          // $9
+    .bind(tax_amount)               // $10
+    .bind(total_amount)             // $11
+    .bind(body.amount_tendered)     // $12
+    .bind(change_given)             // $13
+    .bind(body.tip_amount.unwrap_or(0))             // $14
+    .bind(body.tip_payment_method.as_deref())       // $15  ← new
+    .bind(body.discount_id)         // $16
+    .bind(&body.customer_name)      // $17
+    .bind(&body.notes)              // $18
+    .bind(idempotency_key)          // $19
+    .bind(created_at)               // $20
     .fetch_one(&mut *tx)
     .await?;
 
-    // Write order_payments
+    // ── Write order_payments ──────────────────────────────────
+    // If caller provided explicit splits, use them.
+    // Otherwise derive from payment_method + total_amount.
     if let Some(splits) = &body.payment_splits {
         for split in splits {
             validate_payment_method(&split.method)?;
@@ -563,32 +599,117 @@ pub async fn list_orders(
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "read").await?;
 
-    let orders = match (query.shift_id, query.branch_id) {
-        (Some(shift_id), _) => {
-            let branch_id: Option<Uuid> = sqlx::query_scalar("SELECT branch_id FROM shifts WHERE id = $1")
-                .bind(shift_id).fetch_optional(pool.get_ref()).await?.flatten();
-            if let Some(bid) = branch_id { require_branch_access(pool.get_ref(), &claims, bid).await?; }
+    let page     = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(30).clamp(1, 100);
+    let offset   = (page - 1) * per_page;
 
-            match query.updated_after {
-                Some(after) => {
-                    let sql = format!("{} WHERE o.shift_id = $1 AND o.updated_at > $2 ORDER BY o.created_at DESC", ORDER_SELECT);
-                    sqlx::query_as::<_, Order>(&sql).bind(shift_id).bind(after).fetch_all(pool.get_ref()).await?
-                }
-                None => {
-                    let sql = format!("{} WHERE o.shift_id = $1 ORDER BY o.created_at DESC", ORDER_SELECT);
-                    sqlx::query_as::<_, Order>(&sql).bind(shift_id).fetch_all(pool.get_ref()).await?
-                }
-            }
+    // Validate optional enums
+    if let Some(pm) = &query.payment_method { validate_payment_method(pm)?; }
+
+    // Resolve branch_id (either direct or via shift)
+    let branch_id = match (query.shift_id, query.branch_id) {
+        (Some(shift_id), _) => {
+            let bid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT branch_id FROM shifts WHERE id = $1"
+            )
+            .bind(shift_id)
+            .fetch_optional(pool.get_ref())
+            .await?
+            .flatten();
+            bid.ok_or_else(|| AppError::NotFound("Shift not found".into()))?
         }
-        (None, Some(branch_id)) => {
-            require_branch_access(pool.get_ref(), &claims, branch_id).await?;
-            let sql = format!("{} WHERE o.branch_id = $1 ORDER BY o.created_at DESC LIMIT 500", ORDER_SELECT);
-            sqlx::query_as::<_, Order>(&sql).bind(branch_id).fetch_all(pool.get_ref()).await?
-        }
+        (None, Some(bid)) => bid,
         _ => return Err(AppError::BadRequest("Provide either shift_id or branch_id".into())),
     };
 
-    Ok(HttpResponse::Ok().json(orders))
+    require_branch_access(pool.get_ref(), &claims, branch_id).await?;
+
+    // Build WHERE clause dynamically
+    // $1 = branch_id or shift_id, $2 = per_page, $3 = offset
+    // optional filters start at $4
+    let scope_condition = if query.shift_id.is_some() {
+        "o.shift_id = $1"
+    } else {
+        "o.branch_id = $1"
+    };
+    let scope_id = query.shift_id.unwrap_or(branch_id);
+
+    // We build the filter string and collect extra binds
+    let mut filter_sql = String::new();
+    let mut param_idx  = 4i32; // $1=scope, $2=per_page, $3=offset
+
+    if query.teller_name.is_some() {
+        filter_sql.push_str(&format!(" AND u.name ILIKE ${param_idx}"));
+        param_idx += 1;
+    }
+    if query.payment_method.is_some() {
+        filter_sql.push_str(&format!(" AND o.payment_method::text = ${param_idx}"));
+        param_idx += 1;
+    }
+    if query.status.is_some() {
+        filter_sql.push_str(&format!(" AND o.status::text = ${param_idx}"));
+        param_idx += 1;
+    }
+    if query.from.is_some() {
+        filter_sql.push_str(&format!(" AND o.created_at >= ${param_idx}"));
+        param_idx += 1;
+    }
+    if query.to.is_some() {
+        filter_sql.push_str(&format!(" AND o.created_at <= ${param_idx}"));
+        param_idx += 1;
+    }
+    if query.updated_after.is_some() {
+        filter_sql.push_str(&format!(" AND o.updated_at > ${param_idx}"));
+    }
+
+    let data_sql = format!(
+        "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT $2 OFFSET $3",
+        ORDER_SELECT, scope_condition, filter_sql
+    );
+
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id WHERE {} {}",
+        scope_condition, filter_sql
+    );
+
+    // Build queries with dynamic binds
+    macro_rules! bind_filters {
+        ($q:expr) => {{
+            let mut q = $q;
+            if let Some(ref v) = query.teller_name    { q = q.bind(format!("%{}%", v)); }
+            if let Some(ref v) = query.payment_method { q = q.bind(v.clone()); }
+            if let Some(ref v) = query.status         { q = q.bind(v.clone()); }
+            if let Some(v)     = query.from            { q = q.bind(v); }
+            if let Some(v)     = query.to              { q = q.bind(v); }
+            if let Some(v)     = query.updated_after   { q = q.bind(v); }
+            q
+        }};
+    }
+
+    let total: i64 = bind_filters!(
+        sqlx::query_scalar(&count_sql).bind(scope_id)
+    )
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    let data: Vec<Order> = bind_filters!(
+        sqlx::query_as::<_, Order>(&data_sql)
+            .bind(scope_id)
+            .bind(per_page)
+            .bind(offset)
+    )
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let total_pages = (total as f64 / per_page as f64).ceil() as i64;
+
+    Ok(HttpResponse::Ok().json(PaginatedOrders {
+        data,
+        total,
+        page,
+        per_page,
+        total_pages,
+    }))
 }
 
 // ── GET /orders/:id ───────────────────────────────────────────
@@ -627,7 +748,7 @@ pub async fn void_order(
             order_number, status::text, payment_method::text,
             subtotal, discount_type::text, discount_value,
             discount_amount, tax_amount, total_amount,
-            amount_tendered, change_given, tip_amount, discount_id,
+            amount_tendered, change_given, tip_amount, tip_payment_method, discount_id,
             customer_name, notes, voided_at, void_reason::text, voided_by, created_at"#,
     )
     .bind(*order_id).bind(&body.reason).bind(voided_at).bind(claims.user_id())

@@ -182,10 +182,12 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
               discountId: action.discountId,
               amountTendered: action.amountTendered,
               tipAmount: action.tipAmount,
-              paymentSplits: action.paymentSplits != null
-                  ? action.paymentSplits!.map((s) =>
-                      PaymentSplit(method: s['method'] as String, amount: s['amount'] as int)).toList()
-                  : null,
+              tipPaymentMethod: action.tipPaymentMethod,
+              paymentSplits: action.paymentSplits
+                  ?.map((s) => PaymentSplit(
+                      method: s['method'] as String,
+                      amount: s['amount'] as int))
+                  .toList(),
               idempotencyKey: action.localId,
               createdAt: action.orderedAt,
             );

@@ -252,9 +252,9 @@ pub async fn create_order(
         quantity:      i32,
     }
     struct InventoryDeduction {
-        inventory_item_id: Uuid,
-        quantity:          f64,
-        source:            String,
+        ingredient_name: String,
+        quantity:        f64,
+        source:          String,
     }
 
     let mut resolved_items: Vec<ResolvedItem> = Vec::new();
@@ -291,19 +291,19 @@ pub async fn create_order(
         let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
 
         let size_for_recipe = item_input.size_label.as_deref().unwrap_or("one_size");
-        let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-            "SELECT inventory_item_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
+        let recipe_rows: Vec<(String, f64)> = sqlx::query_as(
+            "SELECT ingredient_name, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
         )
         .bind(item_input.menu_item_id)
         .bind(size_for_recipe)
         .fetch_all(pool.get_ref())
         .await?;
-
-        for (inv_id, qty) in recipe_rows {
+        
+        for (name, qty) in recipe_rows {
             item_deductions.push(InventoryDeduction {
-                inventory_item_id: inv_id,
-                quantity:          qty * item_input.quantity as f64,
-                source:            "drink_recipe".into(),
+                ingredient_name: name,
+                quantity:        qty * item_input.quantity as f64,
+                source:          "drink_recipe".into(),
             });
         }
 
@@ -357,29 +357,50 @@ pub async fn create_order(
                 .await?
             };
 
+            let override_rows: Vec<(String, f64)> = if let Some(size) = size_label {
+                sqlx::query_as(
+                    r#"SELECT ingredient_name, quantity_used::float8
+                    FROM drink_option_ingredient_overrides
+                    WHERE drink_option_item_id = $1
+                      AND (size_label = $2::item_size OR size_label IS NULL)
+                    ORDER BY size_label DESC NULLS LAST"#,
+                )
+                .bind(addon_input.drink_option_item_id)
+                .bind(size)
+                .fetch_all(pool.get_ref())
+                .await?
+            } else {
+                sqlx::query_as(
+                    "SELECT ingredient_name, quantity_used::float8 FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
+                )
+                .bind(addon_input.drink_option_item_id)
+                .fetch_all(pool.get_ref())
+                .await?
+            };
+            
             if !override_rows.is_empty() {
                 let mut seen = std::collections::HashSet::new();
-                for (inv_id, qty) in override_rows {
-                    if seen.insert(inv_id) {
+                for (name, qty) in override_rows {
+                    if seen.insert(name.clone()) {
                         item_deductions.push(InventoryDeduction {
-                            inventory_item_id: inv_id,
+                            ingredient_name: name,
                             quantity: qty * item_input.quantity as f64,
                             source: "addon_override".into(),
                         });
                     }
                 }
             } else {
-                let base_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                    "SELECT inventory_item_id, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
+                let base_rows: Vec<(String, f64)> = sqlx::query_as(
+                    "SELECT ingredient_name, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
                 )
                 .bind(addon_input.addon_item_id)
                 .fetch_all(pool.get_ref())
                 .await?;
-                for (inv_id, qty) in base_rows {
+                for (name, qty) in base_rows {
                     item_deductions.push(InventoryDeduction {
-                        inventory_item_id: inv_id,
-                        quantity: qty * item_input.quantity as f64,
-                        source: "addon_base".into(),
+                        ingredient_name: name,
+                        quantity:        qty * item_input.quantity as f64,
+                        source:          "addon_base".into(),
                     });
                 }
             }
@@ -558,15 +579,35 @@ pub async fn create_order(
         }
 
         for deduction in &resolved.deductions {
+            // Find the inventory item for this branch by name — silent skip if not found
+            let inv_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM inventory_items WHERE branch_id = $1 AND name = $2 AND deleted_at IS NULL LIMIT 1"
+            )
+            .bind(body.branch_id)
+            .bind(&deduction.ingredient_name)
+            .fetch_optional(&mut *tx)
+            .await?
+            .flatten();
+        
+            let Some(inv_id) = inv_id else {
+                // Ingredient not found for this branch — log and skip rather than hard fail
+                tracing::warn!(
+                    branch_id = %body.branch_id,
+                    ingredient = %deduction.ingredient_name,
+                    source = %deduction.source,
+                    "No inventory item found for ingredient — skipping deduction"
+                );
+                continue;
+            };
+        
             sqlx::query(
-                "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
+                "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2"
             )
             .bind(deduction.quantity)
-            .bind(deduction.inventory_item_id)
-            .bind(body.branch_id)
+            .bind(inv_id)
             .execute(&mut *tx)
             .await?;
-
+        
             sqlx::query(
                 r#"INSERT INTO inventory_deduction_logs
                     (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
@@ -575,7 +616,7 @@ pub async fn create_order(
             .bind(body.branch_id)
             .bind(order.id)
             .bind(order_item.id)
-            .bind(deduction.inventory_item_id)
+            .bind(inv_id)
             .bind(deduction.quantity)
             .bind(&deduction.source)
             .execute(&mut *tx)

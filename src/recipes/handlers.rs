@@ -13,23 +13,21 @@ use crate::{
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DrinkRecipe {
-    pub id:                Uuid,
-    pub menu_item_id:      Uuid,
-    pub size_label:        String,
-    pub inventory_item_id: Uuid,
-    pub inventory_item_name: String,
-    pub unit:              String,
-    pub quantity_used:     sqlx::types::BigDecimal,
+    pub id:              Uuid,
+    pub menu_item_id:    Uuid,
+    pub size_label:      String,
+    pub ingredient_name: String,
+    pub unit:            String,
+    pub quantity_used:   sqlx::types::BigDecimal,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AddonIngredient {
-    pub id:                Uuid,
-    pub addon_item_id:     Uuid,
-    pub inventory_item_id: Uuid,
-    pub inventory_item_name: String,
-    pub unit:              String,
-    pub quantity_used:     sqlx::types::BigDecimal,
+    pub id:              Uuid,
+    pub addon_item_id:   Uuid,
+    pub ingredient_name: String,
+    pub unit:            String,
+    pub quantity_used:   sqlx::types::BigDecimal,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -37,8 +35,7 @@ pub struct DrinkOptionOverride {
     pub id:                   Uuid,
     pub drink_option_item_id: Uuid,
     pub size_label:           Option<String>,
-    pub inventory_item_id:    Uuid,
-    pub inventory_item_name:  String,
+    pub ingredient_name:      String,
     pub unit:                 String,
     pub quantity_used:        sqlx::types::BigDecimal,
 }
@@ -47,27 +44,36 @@ pub struct DrinkOptionOverride {
 
 #[derive(Deserialize)]
 pub struct UpsertDrinkRecipeRequest {
-    pub size_label:        String,   // small | medium | large | extra_large | one_size
-    pub inventory_item_id: Uuid,
-    pub quantity_used:     f64,
+    pub size_label:      String,
+    pub ingredient_name: String,
+    pub ingredient_unit: String,
+    pub quantity_used:   f64,
 }
 
 #[derive(Deserialize)]
 pub struct UpsertAddonIngredientRequest {
-    pub inventory_item_id: Uuid,
-    pub quantity_used:     f64,
+    pub ingredient_name: String,
+    pub ingredient_unit: String,
+    pub quantity_used:   f64,
 }
 
 #[derive(Deserialize)]
 pub struct UpsertOverrideRequest {
-    pub size_label:        Option<String>, // None = applies to all sizes
-    pub inventory_item_id: Uuid,
-    pub quantity_used:     f64,
+    pub size_label:      Option<String>,
+    pub ingredient_name: String,
+    pub ingredient_unit: String,
+    pub quantity_used:   f64,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteRecipeQuery {
+    pub ingredient_name: String,
 }
 
 #[derive(Deserialize)]
 pub struct DeleteOverrideQuery {
-    pub size: Option<String>, // None = delete the all-sizes override
+    pub ingredient_name: String,
+    pub size:            Option<String>,
 }
 
 // ── GET /recipes/drinks/:menu_item_id ─────────────────────────
@@ -79,21 +85,17 @@ pub async fn list_drink_recipes(
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "recipes", "read").await?;
-
-    // Verify menu item belongs to caller's org
     require_menu_item_org(pool.get_ref(), &claims, *menu_item_id).await?;
 
     let rows = sqlx::query_as::<_, DrinkRecipe>(
         r#"
-        SELECT r.id, r.menu_item_id, r.size_label::text,
-               r.inventory_item_id,
-               i.name AS inventory_item_name,
-               i.unit::text AS unit,
-               r.quantity_used
-        FROM menu_item_recipes r
-        JOIN inventory_items i ON i.id = r.inventory_item_id
-        WHERE r.menu_item_id = $1
-        ORDER BY r.size_label, i.name
+        SELECT id, menu_item_id, size_label::text,
+               ingredient_name,
+               ingredient_unit AS unit,
+               quantity_used
+        FROM menu_item_recipes
+        WHERE menu_item_id = $1
+        ORDER BY size_label, ingredient_name
         "#,
     )
     .bind(*menu_item_id)
@@ -122,20 +124,22 @@ pub async fn upsert_drink_recipe(
     let row = sqlx::query_as::<_, DrinkRecipe>(
         r#"
         INSERT INTO menu_item_recipes
-            (menu_item_id, size_label, inventory_item_id, quantity_used)
-        VALUES ($1, $2::item_size, $3, $4)
-        ON CONFLICT (menu_item_id, size_label, inventory_item_id)
-        DO UPDATE SET quantity_used = EXCLUDED.quantity_used
+            (menu_item_id, size_label, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2::item_size, $3, $4, $5)
+        ON CONFLICT (menu_item_id, size_label, ingredient_name)
+        DO UPDATE SET
+            ingredient_unit = EXCLUDED.ingredient_unit,
+            quantity_used   = EXCLUDED.quantity_used
         RETURNING id, menu_item_id, size_label::text,
-                  inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
+                  ingredient_name,
+                  ingredient_unit AS unit,
                   quantity_used
         "#,
     )
     .bind(*menu_item_id)
     .bind(&body.size_label)
-    .bind(body.inventory_item_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
     .fetch_one(pool.get_ref())
     .await?;
@@ -143,30 +147,31 @@ pub async fn upsert_drink_recipe(
     Ok(HttpResponse::Ok().json(row))
 }
 
-// ── DELETE /recipes/drinks/:menu_item_id/:size/:inventory_item_id
+// ── DELETE /recipes/drinks/:menu_item_id/:size ────────────────
 
 pub async fn delete_drink_recipe(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, String, Uuid)>,
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    path:  web::Path<(Uuid, String)>,
+    query: web::Query<DeleteRecipeQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
 
-    let (menu_item_id, size_label, inventory_item_id) = path.into_inner();
+    let (menu_item_id, size_label) = path.into_inner();
     require_menu_item_org(pool.get_ref(), &claims, menu_item_id).await?;
 
     sqlx::query(
         r#"
         DELETE FROM menu_item_recipes
-        WHERE menu_item_id = $1
-          AND size_label   = $2::item_size
-          AND inventory_item_id = $3
+        WHERE menu_item_id   = $1
+          AND size_label     = $2::item_size
+          AND ingredient_name = $3
         "#,
     )
     .bind(menu_item_id)
     .bind(&size_label)
-    .bind(inventory_item_id)
+    .bind(&query.ingredient_name)
     .execute(pool.get_ref())
     .await?;
 
@@ -176,8 +181,8 @@ pub async fn delete_drink_recipe(
 // ── GET /recipes/addons/:addon_item_id ────────────────────────
 
 pub async fn list_addon_ingredients(
-    req:          HttpRequest,
-    pool:         web::Data<PgPool>,
+    req:           HttpRequest,
+    pool:          web::Data<PgPool>,
     addon_item_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
@@ -186,15 +191,13 @@ pub async fn list_addon_ingredients(
 
     let rows = sqlx::query_as::<_, AddonIngredient>(
         r#"
-        SELECT a.id, a.addon_item_id,
-               a.inventory_item_id,
-               i.name AS inventory_item_name,
-               i.unit::text AS unit,
-               a.quantity_used
-        FROM addon_item_ingredients a
-        JOIN inventory_items i ON i.id = a.inventory_item_id
-        WHERE a.addon_item_id = $1
-        ORDER BY i.name
+        SELECT id, addon_item_id,
+               ingredient_name,
+               ingredient_unit AS unit,
+               quantity_used
+        FROM addon_item_ingredients
+        WHERE addon_item_id = $1
+        ORDER BY ingredient_name
         "#,
     )
     .bind(*addon_item_id)
@@ -223,19 +226,21 @@ pub async fn upsert_addon_ingredient(
     let row = sqlx::query_as::<_, AddonIngredient>(
         r#"
         INSERT INTO addon_item_ingredients
-            (addon_item_id, inventory_item_id, quantity_used)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (addon_item_id, inventory_item_id)
-        DO UPDATE SET quantity_used = EXCLUDED.quantity_used
+            (addon_item_id, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (addon_item_id, ingredient_name)
+        DO UPDATE SET
+            ingredient_unit = EXCLUDED.ingredient_unit,
+            quantity_used   = EXCLUDED.quantity_used
         RETURNING id, addon_item_id,
-                  inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
+                  ingredient_name,
+                  ingredient_unit AS unit,
                   quantity_used
         "#,
     )
     .bind(*addon_item_id)
-    .bind(body.inventory_item_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
     .fetch_one(pool.get_ref())
     .await?;
@@ -243,24 +248,25 @@ pub async fn upsert_addon_ingredient(
     Ok(HttpResponse::Ok().json(row))
 }
 
-// ── DELETE /recipes/addons/:addon_item_id/:inventory_item_id ──
+// ── DELETE /recipes/addons/:addon_item_id ─────────────────────
 
 pub async fn delete_addon_ingredient(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid)>,
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    path:  web::Path<Uuid>,
+    query: web::Query<DeleteRecipeQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
 
-    let (addon_item_id, inventory_item_id) = path.into_inner();
+    let addon_item_id = path.into_inner();
     require_addon_org(pool.get_ref(), &claims, addon_item_id).await?;
 
     sqlx::query(
-        "DELETE FROM addon_item_ingredients WHERE addon_item_id = $1 AND inventory_item_id = $2"
+        "DELETE FROM addon_item_ingredients WHERE addon_item_id = $1 AND ingredient_name = $2"
     )
     .bind(addon_item_id)
-    .bind(inventory_item_id)
+    .bind(&query.ingredient_name)
     .execute(pool.get_ref())
     .await?;
 
@@ -270,8 +276,8 @@ pub async fn delete_addon_ingredient(
 // ── GET /recipes/overrides/:drink_option_item_id ──────────────
 
 pub async fn list_overrides(
-    req:                 HttpRequest,
-    pool:                web::Data<PgPool>,
+    req:                  HttpRequest,
+    pool:                 web::Data<PgPool>,
     drink_option_item_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
@@ -280,16 +286,14 @@ pub async fn list_overrides(
 
     let rows = sqlx::query_as::<_, DrinkOptionOverride>(
         r#"
-        SELECT o.id, o.drink_option_item_id,
-               o.size_label::text,
-               o.inventory_item_id,
-               i.name AS inventory_item_name,
-               i.unit::text AS unit,
-               o.quantity_used
-        FROM drink_option_ingredient_overrides o
-        JOIN inventory_items i ON i.id = o.inventory_item_id
-        WHERE o.drink_option_item_id = $1
-        ORDER BY o.size_label, i.name
+        SELECT id, drink_option_item_id,
+               size_label::text,
+               ingredient_name,
+               ingredient_unit AS unit,
+               quantity_used
+        FROM drink_option_ingredient_overrides
+        WHERE drink_option_item_id = $1
+        ORDER BY size_label, ingredient_name
         "#,
     )
     .bind(*drink_option_item_id)
@@ -318,21 +322,23 @@ pub async fn upsert_override(
     let row = sqlx::query_as::<_, DrinkOptionOverride>(
         r#"
         INSERT INTO drink_option_ingredient_overrides
-            (drink_option_item_id, size_label, inventory_item_id, quantity_used)
-        VALUES ($1, $2::item_size, $3, $4)
-        ON CONFLICT (drink_option_item_id, size_label, inventory_item_id)
-        DO UPDATE SET quantity_used = EXCLUDED.quantity_used
+            (drink_option_item_id, size_label, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2::item_size, $3, $4, $5)
+        ON CONFLICT (drink_option_item_id, size_label, ingredient_name)
+        DO UPDATE SET
+            ingredient_unit = EXCLUDED.ingredient_unit,
+            quantity_used   = EXCLUDED.quantity_used
         RETURNING id, drink_option_item_id,
                   size_label::text,
-                  inventory_item_id,
-                  (SELECT name FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS inventory_item_name,
-                  (SELECT unit::text FROM inventory_items WHERE id = menu_item_recipes.inventory_item_id) AS unit,
+                  ingredient_name,
+                  ingredient_unit AS unit,
                   quantity_used
         "#,
     )
     .bind(*drink_option_item_id)
     .bind(&body.size_label)
-    .bind(body.inventory_item_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
     .fetch_one(pool.get_ref())
     .await?;
@@ -340,34 +346,32 @@ pub async fn upsert_override(
     Ok(HttpResponse::Ok().json(row))
 }
 
-// ── DELETE /recipes/overrides/:drink_option_item_id/:inventory_item_id
+// ── DELETE /recipes/overrides/:drink_option_item_id ──────────
 
 pub async fn delete_override(
     req:   HttpRequest,
     pool:  web::Data<PgPool>,
-    path:  web::Path<(Uuid, Uuid)>,
+    path:  web::Path<Uuid>,
     query: web::Query<DeleteOverrideQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
 
-    let (drink_option_item_id, inventory_item_id) = path.into_inner();
+    let drink_option_item_id = path.into_inner();
     require_drink_option_org(pool.get_ref(), &claims, drink_option_item_id).await?;
 
-    // If ?size= provided, delete that specific size override.
-    // If not provided, delete the NULL (all-sizes) override.
     match &query.size {
         Some(size) => {
             sqlx::query(
                 r#"
                 DELETE FROM drink_option_ingredient_overrides
                 WHERE drink_option_item_id = $1
-                  AND inventory_item_id    = $2
+                  AND ingredient_name      = $2
                   AND size_label           = $3::item_size
                 "#,
             )
             .bind(drink_option_item_id)
-            .bind(inventory_item_id)
+            .bind(&query.ingredient_name)
             .bind(size)
             .execute(pool.get_ref())
             .await?;
@@ -377,12 +381,12 @@ pub async fn delete_override(
                 r#"
                 DELETE FROM drink_option_ingredient_overrides
                 WHERE drink_option_item_id = $1
-                  AND inventory_item_id    = $2
+                  AND ingredient_name      = $2
                   AND size_label IS NULL
                 "#,
             )
             .bind(drink_option_item_id)
-            .bind(inventory_item_id)
+            .bind(&query.ingredient_name)
             .execute(pool.get_ref())
             .await?;
         }
@@ -400,7 +404,6 @@ fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
 
-/// Verify menu item belongs to caller's org
 async fn require_menu_item_org(
     pool:         &PgPool,
     claims:       &Claims,
@@ -418,14 +421,12 @@ async fn require_menu_item_org(
     .flatten();
 
     let item_org = item_org.ok_or_else(|| AppError::NotFound("Menu item not found".into()))?;
-
     if claims.org_id() != Some(item_org) {
         return Err(AppError::Forbidden("Menu item belongs to a different org".into()));
     }
     Ok(())
 }
 
-/// Verify addon item belongs to caller's org
 async fn require_addon_org(
     pool:          &PgPool,
     claims:        &Claims,
@@ -443,14 +444,12 @@ async fn require_addon_org(
     .flatten();
 
     let addon_org = addon_org.ok_or_else(|| AppError::NotFound("Addon item not found".into()))?;
-
     if claims.org_id() != Some(addon_org) {
         return Err(AppError::Forbidden("Addon item belongs to a different org".into()));
     }
     Ok(())
 }
 
-/// Verify drink_option_item belongs to caller's org (via group → menu_item → org)
 async fn require_drink_option_org(
     pool:                 &PgPool,
     claims:               &Claims,
@@ -475,7 +474,6 @@ async fn require_drink_option_org(
 
     let item_org = item_org
         .ok_or_else(|| AppError::NotFound("Drink option item not found".into()))?;
-
     if claims.org_id() != Some(item_org) {
         return Err(AppError::Forbidden("Drink option belongs to a different org".into()));
     }

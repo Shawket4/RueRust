@@ -44,6 +44,8 @@ String _methodLabel(String m) => switch (m) {
       _ => m,
     };
 
+bool _isCashMethod(String m) => m == 'cash' || m == 'talabat_cash';
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1655,16 +1657,11 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   final _tenderedCtrl = TextEditingController();
   bool _showTendered = false;
 
-  // Tip — only shown in single-payment mode.
-  // In split mode the teller folds the tip into one of the split amounts,
-  // so the tip card is hidden to avoid double-counting.
+  // Tip — shown in both single and split payment modes.
   final _tipCtrl = TextEditingController();
   String _tipPaymentMethod = 'cash';
 
   // Split payment.
-  // FIX B1: controllers are owned here and created in _toggleSplitMethod
-  // BEFORE the next build. _SplitPaymentSection reads them by key and never
-  // calls putIfAbsent during its build phase.
   bool _isSplit = false;
   final Map<String, TextEditingController> _splitCtrs = {};
   final Set<String> _activeSplitMethods = {};
@@ -1703,13 +1700,11 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     }
   }
 
-  // FIX B1: controller created before the rebuild that will render the field.
   void _toggleSplitMethod(String method) {
     setState(() {
       if (_activeSplitMethods.contains(method)) {
         _activeSplitMethods.remove(method);
         _splitCtrs[method]?.clear();
-        // Keep controller alive — reused if the method is toggled back on.
       } else {
         _activeSplitMethods.add(method);
         _splitCtrs.putIfAbsent(method, () => TextEditingController());
@@ -1728,13 +1723,16 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     return splits;
   }
 
-  // FIX B3: tip is null in split mode — excluded from all validation paths.
+  // Tip is now available in both single and split modes.
   int? get _parsedTip {
-    if (_isSplit) return null;
     final v = double.tryParse(_tipCtrl.text);
     if (v == null || v <= 0) return null;
     return (v * 100).round();
   }
+
+  // Whether the current tip method is a cash-based method.
+  // Used to reduce change due (single mode) and reduce split balance target.
+  bool get _tipIsCash => _isCashMethod(_tipPaymentMethod);
 
   Future<void> _place() async {
     final cart = ref.read(cartProvider);
@@ -1758,7 +1756,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       return;
     }
 
-    final int? tip = _parsedTip; // always null in split mode
+    final int? tip = _parsedTip;
     final String? tipMethod = tip != null ? _tipPaymentMethod : null;
 
     final int? tendered = _showTendered && !_isSplit
@@ -1767,7 +1765,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             : null)
         : null;
 
-    // ── Cash-mode validations ──────────────────────────────────────────────
+    // ── Single cash-mode validations ──────────────────────────────────────
     if (_showTendered && !_isSplit) {
       if (tendered == null || tendered == 0) {
         setState(() => _error = 'Enter the cash amount tendered');
@@ -1778,9 +1776,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             'Tendered ${egp(tendered)} is less than total ${egp(cart.total)}');
         return;
       }
-      // FIX B2: only block tip against change when the tip payment method is
-      // also cash. A card tip is independent of the cash float entirely.
-      if (tip != null && (tipMethod == 'cash' || tipMethod == 'talabat_cash')) {
+      // Only validate tip against change when the tip method is also cash.
+      if (tip != null && _tipIsCash) {
         final change = tendered - cart.total;
         if (tip > change) {
           setState(() =>
@@ -1791,8 +1788,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     }
 
     // ── Split-mode validation ──────────────────────────────────────────────
-    // FIX B3 + B6: split total must equal cart.total exactly. Tip is not
-    // a separate field in split mode — it is folded into the split amounts.
+    // Split amounts must cover cartTotal. A cash tip comes out of the change
+    // float of the cash split leg, so it reduces the required split total.
     List<PaymentSplit>? splits;
     if (_isSplit) {
       if (_activeSplitMethods.isEmpty) {
@@ -1805,9 +1802,10 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         return;
       }
       final splitTotal = splits.fold(0, (s, p) => s + p.amount);
-      if (splitTotal != cart.total) {
+      final expectedSplitTotal = cart.total - (_tipIsCash ? (tip ?? 0) : 0);
+      if (splitTotal != expectedSplitTotal) {
         setState(() => _error =
-            'Split total ${egp(splitTotal)} must equal ${egp(cart.total)}');
+            'Split total ${egp(splitTotal)} must equal ${egp(expectedSplitTotal)}');
         return;
       }
     }
@@ -1917,7 +1915,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   Widget build(BuildContext context) {
     final cart = ref.watch(cartProvider);
     final mq = MediaQuery.of(context);
-    // FIX: cap at full screen height minus status bar/notch. Sheet never covers system UI.
     final maxH = mq.size.height - mq.padding.top - 16;
 
     return Container(
@@ -1939,7 +1936,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                         borderRadius: BorderRadius.circular(2)))),
           ),
 
-          // Sticky header — total pill always visible while scrolling
+          // Sticky header
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
             child: Row(children: [
@@ -2041,8 +2038,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                   ]),
                   const SizedBox(height: 10),
 
-                  // FIX B1: _SplitPaymentSection receives the map by reference and
-                  // reads existing keys only — never calls putIfAbsent in build.
                   if (_isSplit)
                     _SplitPaymentSection(
                       activeMethods: _activeSplitMethods,
@@ -2050,6 +2045,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                       cartTotal: cart.total,
                       onToggleMethod: _toggleSplitMethod,
                       onAmountChanged: () => setState(() {}),
+                      parsedTip: _parsedTip,
+                      tipPaymentMethod: _tipPaymentMethod,
                     )
                   else ...[
                     _SinglePaymentGrid(
@@ -2061,29 +2058,29 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                       },
                     ),
 
-                    // Cash tendered
+                    // Cash tendered — single mode only
                     if (_showTendered) ...[
                       const SizedBox(height: 20),
-                      // FIX B2: tipAmount param removed — tip may be on a different
-                      // method and must not reduce the change displayed.
                       _CashTenderedSection(
                         tenderedCtrl: _tenderedCtrl,
                         cartTotal: cart.total,
                         onChanged: () => setState(() {}),
+                        // Pass cash tip so change display is reduced accordingly
+                        cashTip: _tipIsCash ? _parsedTip : null,
                       ),
                     ],
-
-                    // FIX B3: Tip only in single-payment mode.
-                    const SizedBox(height: 20),
-                    _TipSection(
-                      tipCtrl: _tipCtrl,
-                      tipPaymentMethod: _tipPaymentMethod,
-                      parsedTip: _parsedTip,
-                      onMethodChanged: (m) =>
-                          setState(() => _tipPaymentMethod = m),
-                      onAmountChanged: () => setState(() {}),
-                    ),
                   ],
+
+                  // Tip section — always shown in both single and split modes
+                  const SizedBox(height: 20),
+                  _TipSection(
+                    tipCtrl: _tipCtrl,
+                    tipPaymentMethod: _tipPaymentMethod,
+                    parsedTip: _parsedTip,
+                    onMethodChanged: (m) =>
+                        setState(() => _tipPaymentMethod = m),
+                    onAmountChanged: () => setState(() {}),
+                  ),
 
                   // Error banner
                   AnimatedSize(
@@ -2118,7 +2115,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             ),
           ),
 
-          // Place Order — pinned outside scroll, always visible
+          // Place Order — pinned
           Container(
             padding: EdgeInsets.fromLTRB(24, 12, 24, mq.padding.bottom + 16),
             decoration: const BoxDecoration(
@@ -2294,15 +2291,17 @@ class _SinglePaymentGrid extends StatelessWidget {
       });
 }
 
-// FIX B2: tipAmount removed — change = tendered - cartTotal only.
 class _CashTenderedSection extends StatelessWidget {
   final TextEditingController tenderedCtrl;
   final int cartTotal;
   final VoidCallback onChanged;
-  const _CashTenderedSection(
-      {required this.tenderedCtrl,
-      required this.cartTotal,
-      required this.onChanged});
+  final int? cashTip; // When set, reduces the displayed change due
+  const _CashTenderedSection({
+    required this.tenderedCtrl,
+    required this.cartTotal,
+    required this.onChanged,
+    this.cashTip,
+  });
 
   @override
   Widget build(BuildContext context) => Column(
@@ -2337,7 +2336,8 @@ class _CashTenderedSection extends StatelessWidget {
             if (tendered == null || tendered == 0)
               return const SizedBox.shrink();
             final tenderedP = (tendered * 100).round();
-            final change = tenderedP - cartTotal;
+            // Cash tip comes out of the change float, so subtract it
+            final change = tenderedP - cartTotal - (cashTip ?? 0);
             return AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               margin: const EdgeInsets.only(top: 8),
@@ -2376,8 +2376,6 @@ class _CashTenderedSection extends StatelessWidget {
       );
 }
 
-// FIX B3: Extracted as a separate widget so it can be conditionally shown/hidden
-// from the parent. Hidden entirely in split mode.
 class _TipSection extends StatelessWidget {
   final TextEditingController tipCtrl;
   final String tipPaymentMethod;
@@ -2496,16 +2494,17 @@ class _TipSection extends StatelessWidget {
       );
 }
 
-// FIX B1: Never calls putIfAbsent during build.
-// All controllers are guaranteed present in splitCtrs for every key in
-// activeMethods — created by _toggleSplitMethod in the parent before rebuild.
-// FIX B6: balance indicator validates against cartTotal only (no tip offset).
+// Never calls putIfAbsent during build.
+// All controllers are guaranteed present for every key in activeMethods.
+// Balance indicator: cartTotal - entered - cashTipOffset.
 class _SplitPaymentSection extends StatelessWidget {
   final Set<String> activeMethods;
   final Map<String, TextEditingController> splitCtrs;
   final int cartTotal;
   final void Function(String) onToggleMethod;
   final VoidCallback onAmountChanged;
+  final int? parsedTip;
+  final String tipPaymentMethod;
 
   static const _methods = ['cash', 'card', 'talabat_online', 'talabat_cash'];
 
@@ -2515,6 +2514,8 @@ class _SplitPaymentSection extends StatelessWidget {
     required this.cartTotal,
     required this.onToggleMethod,
     required this.onAmountChanged,
+    required this.parsedTip,
+    required this.tipPaymentMethod,
   });
 
   List<PaymentSplit> _buildSplits() {
@@ -2577,7 +2578,6 @@ class _SplitPaymentSection extends StatelessWidget {
             const SizedBox(height: 10),
             ...activeMethods.map((method) {
               final color = _methodColor(method);
-              // Controller is guaranteed present — created in _toggleSplitMethod.
               final ctrl = splitCtrs[method];
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -2632,11 +2632,16 @@ class _SplitPaymentSection extends StatelessWidget {
               );
             }),
 
-            // FIX B6: diff = cartTotal - entered (no tip offset)
+            // Balance indicator — accounts for cash tip reducing required split total
             Builder(builder: (context) {
               final splits = _buildSplits();
               final entered = splits.fold(0, (s, p) => s + p.amount);
-              final diff = cartTotal - entered;
+              // Cash tip comes out of the change float of the cash split leg,
+              // so it reduces the amount the split amounts need to cover.
+              final isCashTip = _isCashMethod(tipPaymentMethod);
+              final tipOffset =
+                  (isCashTip && parsedTip != null) ? parsedTip! : 0;
+              final diff = cartTotal - entered - tipOffset;
               final ok = diff == 0;
               return Container(
                 width: double.infinity,
@@ -2777,7 +2782,6 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
               border: Border.all(color: AppColors.border)),
           child: Column(children: [
             LabelValue('Payment', _paymentLabel(o.paymentMethod)),
-            // Show tip + its method on the receipt
             if (o.tipAmount != null && o.tipAmount! > 0)
               LabelValue('Tip',
                   '${egp(o.tipAmount!)}${o.tipPaymentMethod != null ? " · ${_paymentLabel(o.tipPaymentMethod!)}" : ""}',

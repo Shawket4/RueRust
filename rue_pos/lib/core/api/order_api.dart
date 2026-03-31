@@ -53,7 +53,7 @@ class OrderApi {
     if (shiftId != null) params['shift_id'] = shiftId;
     if (branchId != null) params['branch_id'] = branchId;
     final res = await _c.dio.get('/orders', queryParameters: params);
-    return (res.data as List).map((o) => Order.fromJson(o)).toList();
+    return (res.data['data'] as List).map((o) => Order.fromJson(o)).toList();
   }
 
   Future<Order> get(String id) async {

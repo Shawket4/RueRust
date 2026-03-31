@@ -112,10 +112,9 @@ class _ShiftReportPreviewSheetState
     final closeTs = r.closedAt != null ? _fmtDt(r.closedAt!) : null;
 
     // Cash discrepancy: system − declared (positive = short)
-    final int? discrepancy =
-        (r.closingCashDeclared != null && r.closingCashSystem != null)
-            ? r.closingCashSystem! - r.closingCashDeclared!
-            : null;
+    final int? discrepancy = r.closingCashDeclared != null
+        ? r.expectedCash - r.closingCashDeclared!
+        : null;
 
     final branch = ref.watch(authProvider).branch;
     final hasPrinter = branch?.hasPrinter ?? false;
@@ -203,14 +202,14 @@ class _ShiftReportPreviewSheetState
                 _Row('Opened', openTs),
                 if (closeTs != null) _Row('Closed', closeTs),
                 _Row('Opening Cash', egp(r.openingCash)),
-                if (r.closingCashSystem != null)
-                  _Row('Expected Cash', egp(r.closingCashSystem!)),
-                if (r.closingCashDeclared != null)
+                _Row('Expected Cash', egp(r.expectedCash)),
+                if (r.closingCashDeclared != null) ...[
                   _Row('Declared Cash', egp(r.closingCashDeclared!),
                       bold: true),
-                if (discrepancy != null && discrepancy != 0) ...[
-                  const Divider(color: AppColors.borderLight, height: 16),
-                  _DiscrepancyRow(discrepancy),
+                  if (discrepancy != null && discrepancy != 0) ...[
+                    const Divider(color: AppColors.borderLight, height: 16),
+                    _DiscrepancyRow(discrepancy),
+                  ],
                 ],
               ])),
               const SizedBox(height: 12),

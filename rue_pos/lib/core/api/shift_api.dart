@@ -67,7 +67,9 @@ class ShiftApi {
   Future<int> systemCash(String shiftId, int openingCash) async {
     final ordersRes =
         await _c.dio.get('/orders', queryParameters: {'shift_id': shiftId});
-    final orders = (ordersRes.data as List).cast<Map<String, dynamic>>();
+    print(ordersRes);
+    final orders =
+        (ordersRes.data['data'] as List).cast<Map<String, dynamic>>();
     final cashFromOrders = orders
         .where((o) =>
             o['payment_method'] == 'cash' &&

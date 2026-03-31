@@ -19,6 +19,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/branches/{branch_id}/transfers",       web::get().to(adj::list_transfers))
             .route("/transfers/{transfer_id}",              web::get().to(adj::get_transfer))
             .route("/transfers/{transfer_id}/confirm",      web::patch().to(adj::confirm_transfer))
-            .route("/transfers/{transfer_id}/reject",       web::patch().to(adj::reject_transfer)),
+            .route("/transfers/{transfer_id}/reject",       web::patch().to(adj::reject_transfer))
+            .route("/orgs/{org_id}/items", web::get().to(handlers::list_items_by_org))
     );
 }

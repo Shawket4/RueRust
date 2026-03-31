@@ -174,6 +174,43 @@ pub async fn update_item(
     Ok(HttpResponse::Ok().json(item))
 }
 
+// ── GET /inventory/orgs/:org_id/items ────────────────────────
+
+pub async fn list_items_by_org(
+    req:    HttpRequest,
+    pool:   web::Data<PgPool>,
+    org_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
+
+    // Ensure caller belongs to this org (or is super_admin)
+    if claims.role != crate::models::UserRole::SuperAdmin {
+        if claims.org_id() != Some(*org_id) {
+            return Err(AppError::Forbidden("Access denied to this org".into()));
+        }
+    }
+
+    let items = sqlx::query_as::<_, InventoryItem>(
+        r#"
+        SELECT i.id, i.branch_id, i.name, i.unit::text, i.current_stock,
+               i.reorder_threshold, i.cost_per_unit, i.is_active,
+               i.created_at, i.updated_at
+        FROM inventory_items i
+        JOIN branches b ON b.id = i.branch_id
+        WHERE b.org_id = $1
+          AND b.deleted_at IS NULL
+          AND i.deleted_at IS NULL
+        ORDER BY i.name
+        "#,
+    )
+    .bind(*org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(items))
+}
+
 // ── DELETE /inventory/items/:item_id (soft delete) ────────────
 
 pub async fn delete_item(

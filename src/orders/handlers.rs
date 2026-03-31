@@ -624,9 +624,6 @@ pub async fn list_orders(
 
     require_branch_access(pool.get_ref(), &claims, branch_id).await?;
 
-    // Build WHERE clause dynamically
-    // $1 = branch_id or shift_id, $2 = per_page, $3 = offset
-    // optional filters start at $4
     let scope_condition = if query.shift_id.is_some() {
         "o.shift_id = $1"
     } else {
@@ -634,45 +631,43 @@ pub async fn list_orders(
     };
     let scope_id = query.shift_id.unwrap_or(branch_id);
 
-    // We build the filter string and collect extra binds
-    let mut filter_sql = String::new();
-    let mut param_idx  = 4i32; // $1=scope, $2=per_page, $3=offset
+    // Build separate filter clauses with correct $N indices for each query:
+    // data query:  $1=scope, $2=per_page, $3=offset, filters from $4
+    // count query: $1=scope,                          filters from $2
+    let mut data_filter_sql  = String::new();
+    let mut count_filter_sql = String::new();
+    let mut data_idx  = 4i32;
+    let mut count_idx = 2i32;
 
-    if query.teller_name.is_some() {
-        filter_sql.push_str(&format!(" AND u.name ILIKE ${param_idx}"));
-        param_idx += 1;
+    macro_rules! push_filter {
+        ($col:expr, $opt:expr) => {
+            if $opt.is_some() {
+                data_filter_sql.push_str( &format!(" AND {} ${}", $col, data_idx));
+                count_filter_sql.push_str(&format!(" AND {} ${}", $col, count_idx));
+                data_idx  += 1;
+                count_idx += 1;
+            }
+        };
     }
-    if query.payment_method.is_some() {
-        filter_sql.push_str(&format!(" AND o.payment_method::text = ${param_idx}"));
-        param_idx += 1;
-    }
-    if query.status.is_some() {
-        filter_sql.push_str(&format!(" AND o.status::text = ${param_idx}"));
-        param_idx += 1;
-    }
-    if query.from.is_some() {
-        filter_sql.push_str(&format!(" AND o.created_at >= ${param_idx}"));
-        param_idx += 1;
-    }
-    if query.to.is_some() {
-        filter_sql.push_str(&format!(" AND o.created_at <= ${param_idx}"));
-        param_idx += 1;
-    }
-    if query.updated_after.is_some() {
-        filter_sql.push_str(&format!(" AND o.updated_at > ${param_idx}"));
-    }
+
+    push_filter!("u.name ILIKE",             query.teller_name);
+    push_filter!("o.payment_method::text =", query.payment_method);
+    push_filter!("o.status::text =",         query.status);
+    push_filter!("o.created_at >=",          query.from);
+    push_filter!("o.created_at <=",          query.to);
+    push_filter!("o.updated_at >",           query.updated_after);
 
     let data_sql = format!(
         "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT $2 OFFSET $3",
-        ORDER_SELECT, scope_condition, filter_sql
+        ORDER_SELECT, scope_condition, data_filter_sql
     );
 
     let count_sql = format!(
         "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id WHERE {} {}",
-        scope_condition, filter_sql
+        scope_condition, count_filter_sql
     );
 
-    // Build queries with dynamic binds
+    // Bind order is identical for both queries — only the $N placeholders differ
     macro_rules! bind_filters {
         ($q:expr) => {{
             let mut q = $q;

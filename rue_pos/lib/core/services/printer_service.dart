@@ -404,14 +404,11 @@ class PrinterService {
         pw.SizedBox(height: 2),
         thinDiv(),
 
-        row('Total Payments', egp(report.totalPayments),
+        row('Total Collected', egp(report.totalPayments),
             bold: true, boldVal: true, sz: 8),
-        if (report.totalReturns > 0)
-          row('Total Returns', '- ${egp(report.totalReturns)}',
-              sz: 8, color: PdfColors.red700),
+
         pw.SizedBox(height: 1),
-        row('Net Payments', egp(report.netPayments),
-            bold: true, boldVal: true, sz: 9),
+
         pw.SizedBox(height: 2),
         div(),
 

@@ -1,862 +1,185 @@
 #!/usr/bin/env bash
-# =============================================================================
-#  Rue POS Flutter — Shift Report Preview patch
+# patch_order_screen.sh
+# Usage: ./patch_order_screen.sh path/to/order_screen.dart
 #
-#  Adds a digital shift report preview sheet (ShiftReportPreviewSheet) that
-#  shows full report details and has a "Print" button to trigger the actual
-#  printer. Both close_shift_screen.dart and shift_history_screen.dart are
-#  updated to show this preview instead of printing directly.
-#
-#  Run from the Flutter project root.
-# =============================================================================
-set -e
+# Edge-case fixes applied to CheckoutSheet._place() and build():
+#   1. Cash tendered < order total → block with error
+#   2. Cash mode with no tendered → block with error
+#   3. Tip > (tendered - total) → block with error
+#   4. Split total validation now accounts for tip
+#   5. No payment method selected → block with error
+#   6. Empty cart → block with error
+#   7. Double-tap guard: early return if _loading already true
+#   8. discountType forwarded as raw string (already correct for API layer)
 
-echo "=== Rue POS — Shift Report Preview patch ==="
+set -euo pipefail
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Create lib/features/shift/shift_report_preview_sheet.dart
-# ─────────────────────────────────────────────────────────────────────────────
-cat > lib/features/shift/shift_report_preview_sheet.dart << 'DART'
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/models/branch.dart';
-import '../../core/models/shift_report.dart';
-import '../../core/providers/auth_notifier.dart';
-import '../../core/services/printer_service.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/utils/formatting.dart';
+TARGET="${1:-}"
+if [[ -z "$TARGET" ]]; then
+  echo "Usage: $0 path/to/order_screen.dart" >&2
+  exit 1
+fi
+if [[ ! -f "$TARGET" ]]; then
+  echo "Error: file not found: $TARGET" >&2
+  exit 1
+fi
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Public entry point
-// ─────────────────────────────────────────────────────────────────────────────
+python3 - "$TARGET" <<'PYEOF'
+import sys, shutil, pathlib, datetime
 
-class ShiftReportPreviewSheet extends ConsumerStatefulWidget {
-  final ShiftReport report;
-
-  const ShiftReportPreviewSheet({super.key, required this.report});
-
-  /// Show the sheet.  Returns after the user closes it.
-  static Future<void> show(BuildContext context, ShiftReport report) =>
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => ShiftReportPreviewSheet(report: report),
-      );
-
-  @override
-  ConsumerState<ShiftReportPreviewSheet> createState() =>
-      _ShiftReportPreviewSheetState();
-}
-
-class _ShiftReportPreviewSheetState
-    extends ConsumerState<ShiftReportPreviewSheet> {
-  bool    _printing   = false;
-  String? _printError;
-
-  ShiftReport get report => widget.report;
-
-  // ── Print ────────────────────────────────────────────────────────────────
-  Future<void> _print() async {
-    final branch = ref.read(authProvider).branch;
-    if (branch == null || !branch.hasPrinter) {
-      _showSnack('No printer configured for this branch',
-          color: AppColors.warning);
-      return;
-    }
-    setState(() {
-      _printing   = true;
-      _printError = null;
-    });
-    final err = await PrinterService.printShiftReport(
-      ip:         branch.printerIp!,
-      port:       branch.printerPort,
-      brand:      branch.printerBrand!,
-      report:     report,
-      branchName: branch.name,
-    );
-    if (mounted) {
-      setState(() {
-        _printing   = false;
-        _printError = err;
-      });
-      if (err == null) {
-        _showSnack('Report printed', color: AppColors.success);
-      }
-    }
-  }
-
-  void _showSnack(String msg, {required Color color}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: color),
-    );
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────────────────
-  String _fmtDt(DateTime dt) {
-    final l = dt.toLocal();
-    final d  = l.day.toString().padLeft(2, '0');
-    final mo = l.month.toString().padLeft(2, '0');
-    final h  = l.hour.toString().padLeft(2, '0');
-    final mi = l.minute.toString().padLeft(2, '0');
-    return '$d/$mo/${l.year}  $h:$mi';
-  }
-
-  String _methodLabel(String m) => switch (m) {
-    'cash'           => 'Cash',
-    'card'           => 'Card',
-    'digital_wallet' => 'Digital Wallet',
-    'mixed'          => 'Mixed',
-    'talabat_online' => 'Talabat Online',
-    'talabat_cash'   => 'Talabat Cash',
-    _                => m[0].toUpperCase() +
-                        m.substring(1).replaceAll('_', ' '),
-  };
-
-  Color _methodColor(String m) => switch (m) {
-    'cash'           => const Color(0xFF059669),
-    'card'           => const Color(0xFF7C3AED),
-    'digital_wallet' => const Color(0xFF0EA5E9),
-    'mixed'          => AppColors.primary,
-    'talabat_online' => const Color(0xFFFF6B00),
-    'talabat_cash'   => const Color(0xFFFF6B00),
-    _                => AppColors.primary,
-  };
-
-  // ── Build ─────────────────────────────────────────────────────────────────
-  @override
-  Widget build(BuildContext context) {
-    final mq          = MediaQuery.of(context);
-    final r           = report;
-    final isOpen      = r.isOpen;
-    final openTs      = _fmtDt(r.openedAt);
-    final closeTs     = r.closedAt != null ? _fmtDt(r.closedAt!) : null;
-
-    // Cash discrepancy: system − declared (positive = short)
-    final int? discrepancy = (r.closingCashDeclared != null &&
-            r.closingCashSystem != null)
-        ? r.closingCashSystem! - r.closingCashDeclared!
-        : null;
-
-    final branch = ref.watch(authProvider).branch;
-    final hasPrinter = branch?.hasPrinter ?? false;
-
-    return Container(
-      constraints: BoxConstraints(
-          maxHeight: mq.size.height * 0.92),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        borderRadius: AppRadius.sheetRadius,
-      ),
-      child: Column(children: [
-        // ── Handle + header ────────────────────────────────────────────────
-        Container(
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: AppRadius.sheetRadius,
-            border: const Border(
-                bottom: BorderSide(color: AppColors.border)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 12, 16, 14),
-          child: Column(children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.border,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(children: [
-              Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text('Shift Report',
-                      style: cairo(
-                          fontSize: 18, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text(r.tellerName,
-                      style: cairo(
-                          fontSize: 13,
-                          color: AppColors.textSecondary)),
-                ]),
-              ),
-              // Status pill
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: isOpen
-                      ? AppColors.success.withOpacity(0.1)
-                      : AppColors.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isOpen
-                        ? AppColors.success.withOpacity(0.3)
-                        : AppColors.primary.withOpacity(0.2),
-                  ),
-                ),
-                child: Text(
-                  isOpen ? 'Open Shift' : 'Closed',
-                  style: cairo(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: isOpen
-                        ? AppColors.success
-                        : AppColors.primary,
-                  ),
-                ),
-              ),
-            ]),
-          ]),
-        ),
-
-        // ── Scrollable body ────────────────────────────────────────────────
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-
-              // ── Shift info card ──────────────────────────────────────────
-              _Card(child: Column(children: [
-                _SectionTitle('SHIFT DETAILS'),
-                const SizedBox(height: 8),
-                _Row('Opened',   openTs),
-                if (closeTs != null) _Row('Closed', closeTs),
-                _Row('Opening Cash', egp(r.openingCash)),
-                if (r.closingCashSystem != null)
-                  _Row('Expected Cash', egp(r.closingCashSystem!)),
-                if (r.closingCashDeclared != null)
-                  _Row('Declared Cash', egp(r.closingCashDeclared!),
-                      bold: true),
-                if (discrepancy != null && discrepancy != 0) ...[
-                  const Divider(color: AppColors.borderLight, height: 16),
-                  _DiscrepancyRow(discrepancy),
-                ],
-              ])),
-              const SizedBox(height: 12),
-
-              // ── Payments card ────────────────────────────────────────────
-              _Card(child: Column(children: [
-                _SectionTitle('PAYMENT BREAKDOWN'),
-                const SizedBox(height: 8),
-                if (r.paymentSummary.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Center(
-                      child: Text('No payments recorded',
-                          style: cairo(
-                              fontSize: 13,
-                              color: AppColors.textMuted)),
-                    ),
-                  )
-                else ...[
-                  ...r.paymentSummary.map((p) {
-                    final pct = r.totalPayments > 0
-                        ? p.total / r.totalPayments
-                        : 0.0;
-                    final color = _methodColor(p.paymentMethod);
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Column(children: [
-                        Row(children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: color,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                              Text(_methodLabel(p.paymentMethod),
-                                  style: cairo(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600)),
-                              Text(
-                                  '${p.orderCount} order${p.orderCount == 1 ? "" : "s"}',
-                                  style: cairo(
-                                      fontSize: 11,
-                                      color: AppColors.textMuted)),
-                            ]),
-                          ),
-                          Text(egp(p.total),
-                              style: cairo(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700)),
-                        ]),
-                        const SizedBox(height: 6),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: pct.toDouble(),
-                            minHeight: 5,
-                            backgroundColor:
-                                AppColors.border,
-                            valueColor:
-                                AlwaysStoppedAnimation(color),
-                          ),
-                        ),
-                      ]),
-                    );
-                  }),
-                  const Divider(
-                      color: AppColors.borderLight, height: 20),
-                  _Row('Total Payments',
-                      egp(r.totalPayments),
-                      bold: true, large: true),
-                  if (r.totalReturns > 0)
-                    _Row('Voided Orders',
-                        '− ${egp(r.totalReturns)}',
-                        valueColor: AppColors.danger),
-                  if (r.totalReturns > 0)
-                    _Row('Net Payments', egp(r.netPayments),
-                        bold: true, large: true,
-                        valueColor: AppColors.success),
-                ],
-              ])),
-              const SizedBox(height: 12),
-
-              // ── Cash movements card ──────────────────────────────────────
-              _Card(child: Column(children: [
-                _SectionTitle('CASH MOVEMENTS'),
-                const SizedBox(height: 8),
-                if (r.cashMovements.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Center(
-                      child: Text('No cash movements',
-                          style: cairo(
-                              fontSize: 13,
-                              color: AppColors.textMuted)),
-                    ),
-                  )
-                else ...[
-                  ...r.cashMovements.map((m) {
-                    final isIn  = m.isIn;
-                    final color = isIn
-                        ? AppColors.success
-                        : AppColors.danger;
-                    final sign  = isIn ? '+' : '−';
-                    final ts    = _fmtDt(m.createdAt);
-                    return Padding(
-                      padding:
-                          const EdgeInsets.only(bottom: 10),
-                      child: Row(children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            color: color.withOpacity(0.08),
-                            borderRadius:
-                                BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            isIn
-                                ? Icons.add_rounded
-                                : Icons.remove_rounded,
-                            size: 16,
-                            color: color,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-                              children: [
-                            Text(m.note,
-                                style: cairo(
-                                    fontSize: 13,
-                                    fontWeight:
-                                        FontWeight.w500)),
-                            Text(
-                                '${m.movedByName} · $ts',
-                                style: cairo(
-                                    fontSize: 11,
-                                    color:
-                                        AppColors.textMuted)),
-                          ]),
-                        ),
-                        Text(
-                          '$sign ${egp(m.amount.abs())}',
-                          style: cairo(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: color),
-                        ),
-                      ]),
-                    );
-                  }),
-                  const Divider(
-                      color: AppColors.borderLight, height: 20),
-                  _Row('Pay In',  egp(r.cashMovementsIn),
-                      valueColor: AppColors.success),
-                  _Row('Pay Out', egp(r.cashMovementsOut),
-                      valueColor: AppColors.danger),
-                ],
-              ])),
-              const SizedBox(height: 12),
-
-              // ── Printed at ───────────────────────────────────────────────
-              Center(
-                child: Text(
-                  'Report generated ${_fmtDt(r.printedAt)}',
-                  style: cairo(
-                      fontSize: 11,
-                      color: AppColors.textMuted),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ]),
-          ),
-        ),
-
-        // ── Print button ───────────────────────────────────────────────────
-        Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surface,
-            border: Border(top: BorderSide(color: AppColors.border)),
-          ),
-          padding: EdgeInsets.fromLTRB(
-              16, 12, 16, mq.padding.bottom + 12),
-          child: _printing
-              ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 14),
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: AppColors.primary),
-                  ),
-                )
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_printError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          decoration: BoxDecoration(
-                            color: AppColors.danger.withOpacity(0.07),
-                            borderRadius: BorderRadius.circular(
-                                AppRadius.xs),
-                            border: Border.all(
-                                color: AppColors.danger
-                                    .withOpacity(0.2)),
-                          ),
-                          child: Row(children: [
-                            const Icon(
-                                Icons.error_outline_rounded,
-                                size: 14,
-                                color: AppColors.danger),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(_printError!,
-                                  style: cairo(
-                                      fontSize: 12,
-                                      color: AppColors.danger)),
-                            ),
-                          ]),
-                        ),
-                      ),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: hasPrinter ? _print : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: hasPrinter
-                              ? AppColors.primary
-                              : AppColors.border,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(
-                                AppRadius.sm),
-                          ),
-                          elevation: 0,
-                        ),
-                        child: Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.center,
-                            children: [
-                          Icon(
-                            _printError != null
-                                ? Icons.refresh_rounded
-                                : Icons.print_rounded,
-                            size: 18,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            hasPrinter
-                                ? (_printError != null
-                                    ? 'Retry Print'
-                                    : 'Print Report')
-                                : 'No Printer Configured',
-                            style: cairo(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white),
-                          ),
-                        ]),
-                      ),
-                    ),
-                  ],
-                ),
-        ),
-      ]),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Small layout helpers (private to this file)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _Card extends StatelessWidget {
-  final Widget child;
-  const _Card({required this.child});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          border: Border.all(color: AppColors.border),
-          boxShadow: AppShadows.card,
-        ),
-        child: child,
-      );
-}
-
-class _SectionTitle extends StatelessWidget {
-  final String text;
-  const _SectionTitle(this.text);
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: cairo(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: AppColors.textMuted,
-          letterSpacing: 1.2,
-        ),
-      );
-}
-
-class _Row extends StatelessWidget {
-  final String  label;
-  final String  value;
-  final bool    bold;
-  final bool    large;
-  final Color?  valueColor;
-
-  const _Row(this.label, this.value,
-      {this.bold = false, this.large = false, this.valueColor});
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(children: [
-          Expanded(
-            child: Text(label,
-                style: cairo(
-                    fontSize: large ? 14 : 13,
-                    color: AppColors.textSecondary)),
-          ),
-          Text(value,
-              style: cairo(
-                  fontSize: large ? 15 : 13,
-                  fontWeight:
-                      bold ? FontWeight.w800 : FontWeight.w600,
-                  color: valueColor ?? AppColors.textPrimary)),
-        ]),
-      );
-}
-
-class _DiscrepancyRow extends StatelessWidget {
-  final int discrepancy; // system − declared: positive = short
-
-  const _DiscrepancyRow(this.discrepancy);
-
-  @override
-  Widget build(BuildContext context) {
-    final isExact = discrepancy == 0;
-    final isShort = discrepancy > 0;
-    final color   = isExact
-        ? AppColors.success
-        : isShort
-            ? AppColors.danger
-            : AppColors.warning;
-    final icon    = isExact
-        ? Icons.check_circle_outline_rounded
-        : isShort
-            ? Icons.arrow_downward_rounded
-            : Icons.arrow_upward_rounded;
-    final label   = isExact
-        ? 'Exact match'
-        : isShort
-            ? 'Short by ${egp(discrepancy.abs())}'
-            : 'Over by ${egp(discrepancy.abs())}';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-        border: Border.all(color: color.withOpacity(0.2)),
-      ),
-      child: Row(children: [
-        Icon(icon, size: 15, color: color),
-        const SizedBox(width: 8),
-        Text(label,
-            style: cairo(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: color)),
-      ]),
-    );
-  }
-}
-DART
-
-echo "✓ lib/features/shift/shift_report_preview_sheet.dart"
+path = pathlib.Path(sys.argv[1])
+src  = path.read_text(encoding="utf-8")
+original = src
+patches_applied = []
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. Patch close_shift_screen.dart
-#    Replace _printReport() so it shows the preview sheet instead of printing
+# PATCH 1 — Replace the entire _place() validation block (up to setState loading)
+# Inserts: double-tap guard, empty cart, no payment, cash coverage, tip sanity,
+#          and fixes split+tip validation.
 # ─────────────────────────────────────────────────────────────────────────────
-python3 - << 'PYEOF'
-import pathlib, re
+OLD1 = (
+    "    if (shift == null) {\n"
+    "      setState(() => _error = 'No open shift');\n"
+    "      return;\n"
+    "    }\n"
+    "\n"
+    "    // Validate split amounts sum to total if split mode\n"
+    "    List<PaymentSplit>? splits;\n"
+    "    if (_isSplit) {\n"
+    "      splits = _buildSplits();\n"
+    "      if (splits.isEmpty) {\n"
+    "        setState(() => _error = 'Add at least one payment');\n"
+    "        return;\n"
+    "      }\n"
+    "      final splitTotal = splits.fold(0, (s, p) => s + p.amount);\n"
+    "      if (splitTotal != cart.total) {\n"
+    "        setState(() => _error =\n"
+    "            'Split total ${egp(splitTotal)} must equal order total ${egp(cart.total)}');\n"
+    "        return;\n"
+    "      }\n"
+    "    }\n"
+    "\n"
+    "    final int? tendered = _showTendered && !_isSplit\n"
+    "        ? (double.tryParse(_tenderedCtrl.text) != null\n"
+    "            ? (double.parse(_tenderedCtrl.text) * 100).round()\n"
+    "            : null)\n"
+    "        : null;\n"
+    "\n"
+    "    final int? tip = _showTendered && !_isSplit\n"
+    "        ? (double.tryParse(_tipCtrl.text) != null &&\n"
+    "                double.parse(_tipCtrl.text) > 0\n"
+    "            ? (double.parse(_tipCtrl.text) * 100).round()\n"
+    "            : null)\n"
+    "        : null;\n"
+    "\n"
+    "    setState(() {\n"
+    "      _loading = true;\n"
+    "      _error = null;\n"
+    "    });\n"
+)
 
-path = pathlib.Path("lib/features/shift/close_shift_screen.dart")
-src  = path.read_text()
+NEW1 = (
+    "    // Guard: prevent double-tap\n"
+    "    if (_loading) return;\n"
+    "\n"
+    "    // Guard: empty cart\n"
+    "    if (cart.isEmpty) {\n"
+    "      setState(() => _error = 'Cart is empty');\n"
+    "      return;\n"
+    "    }\n"
+    "\n"
+    "    if (shift == null) {\n"
+    "      setState(() => _error = 'No open shift');\n"
+    "      return;\n"
+    "    }\n"
+    "\n"
+    "    // Guard: payment method required (non-split)\n"
+    "    if (!_isSplit && (cart.payment.isEmpty)) {\n"
+    "      setState(() => _error = 'Select a payment method');\n"
+    "      return;\n"
+    "    }\n"
+    "\n"
+    "    // Parse cash tendered & tip up-front so validation can use them\n"
+    "    final int? tendered = _showTendered && !_isSplit\n"
+    "        ? (double.tryParse(_tenderedCtrl.text) != null\n"
+    "            ? (double.parse(_tenderedCtrl.text) * 100).round()\n"
+    "            : null)\n"
+    "        : null;\n"
+    "\n"
+    "    final int? tip = _showTendered && !_isSplit\n"
+    "        ? (double.tryParse(_tipCtrl.text) != null &&\n"
+    "                double.parse(_tipCtrl.text) > 0\n"
+    "            ? (double.parse(_tipCtrl.text) * 100).round()\n"
+    "            : null)\n"
+    "        : null;\n"
+    "\n"
+    "    // Cash-mode validations\n"
+    "    if (_showTendered && !_isSplit) {\n"
+    "      if (tendered == null || tendered == 0) {\n"
+    "        setState(() => _error = 'Enter the cash amount tendered');\n"
+    "        return;\n"
+    "      }\n"
+    "      if (tendered < cart.total) {\n"
+    "        setState(() => _error =\n"
+    "            'Tendered ${egp(tendered)} is less than total ${egp(cart.total)}');\n"
+    "        return;\n"
+    "      }\n"
+    "      final tipAmt = tip ?? 0;\n"
+    "      if (tipAmt > (tendered - cart.total)) {\n"
+    "        setState(() => _error =\n"
+    "            'Tip ${egp(tipAmt)} exceeds change ${egp(tendered - cart.total)}');\n"
+    "        return;\n"
+    "      }\n"
+    "    }\n"
+    "\n"
+    "    // Validate split amounts sum to total + tip if split mode\n"
+    "    List<PaymentSplit>? splits;\n"
+    "    if (_isSplit) {\n"
+    "      if (_activeSplitMethods.isEmpty) {\n"
+    "        setState(() => _error = 'Select at least one payment method');\n"
+    "        return;\n"
+    "      }\n"
+    "      splits = _buildSplits();\n"
+    "      if (splits.isEmpty) {\n"
+    "        setState(() => _error = 'Enter amounts for selected payment methods');\n"
+    "        return;\n"
+    "      }\n"
+    "      final splitTip = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();\n"
+    "      final splitTotal = splits.fold(0, (s, p) => s + p.amount);\n"
+    "      final expectedTotal = cart.total + splitTip;\n"
+    "      if (splitTotal != expectedTotal) {\n"
+    "        setState(() => _error =\n"
+    "            'Split total ${egp(splitTotal)} must equal order total ${egp(expectedTotal)}');\n"
+    "        return;\n"
+    "      }\n"
+    "    }\n"
+    "\n"
+    "    setState(() {\n"
+    "      _loading = true;\n"
+    "      _error = null;\n"
+    "    });\n"
+)
 
-# Add the import for the preview sheet if not already present
-if "shift_report_preview_sheet" not in src:
-    src = src.replace(
-        "import '../../core/api/shift_api.dart';",
-        "import '../../core/api/shift_api.dart';\n"
-        "import 'shift_report_preview_sheet.dart';"
-    )
-
-# Replace _printReport() — the entire method
-old_method = '''  Future<void> _printReport() async {
-    final shift  = ref.read(shiftProvider).shift;
-    final branch = ref.read(authProvider).branch;
-    if (shift == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No open shift'), backgroundColor: AppColors.warning));
-      return;
-    }
-    if (branch == null || !branch.hasPrinter) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No printer configured for this branch'),
-          backgroundColor: AppColors.warning));
-      return;
-    }
-    setState(() => _printing = true);
-    try {
-      final report = await ref.read(shiftApiProvider).getReport(shift.id);
-      final err    = await PrinterService.printShiftReport(
-        ip:         branch.printerIp!,
-        port:       branch.printerPort,
-        brand:      branch.printerBrand!,
-        report:     report,
-        branchName: branch.name,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text(err ?? 'Report printed'),
-            backgroundColor: err != null ? AppColors.danger : AppColors.success));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text('Failed: $e'),
-            backgroundColor: AppColors.danger));
-      }
-    } finally {
-      if (mounted) setState(() => _printing = false);
-    }
-  }'''
-
-new_method = '''  Future<void> _printReport() async {
-    final shift = ref.read(shiftProvider).shift;
-    if (shift == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No open shift'),
-          backgroundColor: AppColors.warning));
-      return;
-    }
-    setState(() => _printing = true);
-    try {
-      final report = await ref.read(shiftApiProvider).getReport(shift.id);
-      if (mounted) {
-        setState(() => _printing = false);
-        await ShiftReportPreviewSheet.show(context, report);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _printing = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Failed to load report: $e'),
-            backgroundColor: AppColors.danger));
-      }
-    }
-  }'''
-
-if old_method in src:
-    src = src.replace(old_method, new_method)
-    print("close_shift_screen.dart: _printReport replaced")
+if OLD1 in src:
+    src = src.replace(OLD1, NEW1, 1)
+    patches_applied.append("1 - added double-tap guard, empty cart, no payment, cash coverage, tip sanity, split+tip validation")
 else:
-    # Fallback: try a flexible replacement if whitespace differs
-    import re as _re
-    pattern = r'Future<void> _printReport\(\) async \{.*?\n  \}'
-    match = _re.search(pattern, src, _re.DOTALL)
-    if match:
-        src = src[:match.start()] + new_method.lstrip() + src[match.end():]
-        print("close_shift_screen.dart: _printReport replaced (flexible)")
-    else:
-        print("WARNING: Could not find _printReport in close_shift_screen.dart — manual edit required")
+    print("  WARN patch 1: validation block not found - skipping")
 
-# Remove PrinterService import since it's no longer called directly here
-# (leave it if it's used elsewhere in the file — only remove if only usage was _printReport)
-if "PrinterService.print(" not in src and "PrinterService.printShiftReport" not in src:
-    src = src.replace(
-        "import '../../core/services/printer_service.dart';\n", ""
-    )
-    print("close_shift_screen.dart: unused PrinterService import removed")
+# ─────────────────────────────────────────────────────────────────────────────
+# Write output
+# ─────────────────────────────────────────────────────────────────────────────
+if src == original:
+    print("No changes made - all patch targets were missing.")
+    sys.exit(0)
 
-path.write_text(src)
+backup = path.with_suffix(f".dart.bak_{datetime.datetime.now():%Y%m%d_%H%M%S}")
+shutil.copy2(path, backup)
+path.write_text(src, encoding="utf-8")
+
+print(f"Backup : {backup}")
+print(f"Patched: {path}")
+print(f"Applied {len(patches_applied)} patch(es):")
+for p in patches_applied:
+    print(f"  + {p}")
 PYEOF
-
-echo "✓ lib/features/shift/close_shift_screen.dart"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Patch shift_history_screen.dart
-#    Replace _printReport() in _ShiftTileState to show preview sheet
-# ─────────────────────────────────────────────────────────────────────────────
-python3 - << 'PYEOF'
-import pathlib, re
-
-path = pathlib.Path("lib/features/shift/shift_history_screen.dart")
-src  = path.read_text()
-
-# Add import
-if "shift_report_preview_sheet" not in src:
-    src = src.replace(
-        "import '../../core/api/shift_api.dart';",
-        "import '../../core/api/shift_api.dart';\n"
-        "import 'shift_report_preview_sheet.dart';"
-    )
-
-# Replace the _printReport in _ShiftTileState
-old_method = '''  Future<void> _printReport() async {
-    final branch = ref.read(authProvider).branch;
-    if (branch == null || !branch.hasPrinter) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No printer configured'),
-          backgroundColor: AppColors.warning));
-      return;
-    }
-    setState(() => _printing = true);
-    try {
-      final report = await ref.read(shiftApiProvider).getReport(widget.shift.id);
-      final err    = await PrinterService.printShiftReport(
-        ip:         branch.printerIp!,
-        port:       branch.printerPort,
-        brand:      branch.printerBrand!,
-        report:     report,
-        branchName: branch.name,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text(err ?? 'Report printed'),
-            backgroundColor: err != null ? AppColors.danger : AppColors.success));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text('Failed: $e'),
-            backgroundColor: AppColors.danger));
-      }
-    } finally {
-      if (mounted) setState(() => _printing = false);
-    }
-  }'''
-
-new_method = '''  Future<void> _printReport() async {
-    setState(() => _printing = true);
-    try {
-      final report = await ref.read(shiftApiProvider).getReport(widget.shift.id);
-      if (mounted) {
-        setState(() => _printing = false);
-        await ShiftReportPreviewSheet.show(context, report);
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _printing = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Failed to load report: $e'),
-            backgroundColor: AppColors.danger));
-      }
-    }
-  }'''
-
-if old_method in src:
-    src = src.replace(old_method, new_method)
-    print("shift_history_screen.dart: _printReport in _ShiftTileState replaced")
-else:
-    # Flexible fallback
-    pattern = r'Future<void> _printReport\(\) async \{.*?\n  \}'
-    match = re.search(pattern, src, re.DOTALL)
-    if match:
-        src = src[:match.start()] + new_method.lstrip() + src[match.end():]
-        print("shift_history_screen.dart: _printReport replaced (flexible)")
-    else:
-        print("WARNING: Could not find _printReport in shift_history_screen.dart — manual edit required")
-
-# Also patch _PastOrderRowState._print — that one stays as-is (prints order receipt, not shift report)
-# Only remove PrinterService import from ShiftTileState scope if it's truly unused
-# The _PastOrderRowState still uses PrinterService so keep the import
-
-path.write_text(src)
-PYEOF
-
-echo "✓ lib/features/shift/shift_history_screen.dart"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Done
-# ─────────────────────────────────────────────────────────────────────────────
-echo ""
-echo "=== Shift Report Preview patch complete ==="
-echo ""
-echo "New file:"
-echo "  lib/features/shift/shift_report_preview_sheet.dart"
-echo "    — Full digital report: shift info, payment breakdown with progress bars,"
-echo "      cash movements, discrepancy indicator, print button"
-echo ""
-echo "Updated:"
-echo "  lib/features/shift/close_shift_screen.dart"
-echo "    — Print icon now opens preview sheet instead of printing directly"
-echo "  lib/features/shift/shift_history_screen.dart"
-echo "    — Print icon on each past shift now opens preview sheet"
-echo ""
-echo "Run: flutter pub get && flutter run"

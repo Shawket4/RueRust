@@ -1715,27 +1715,27 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     final customer =
         _customerCtrl.text.trim().isEmpty ? null : _customerCtrl.text.trim();
 
-    // Guard: prevent double-tap
-    if (_loading) return;
-
-    // Guard: empty cart
-    if (cart.isEmpty) {
-      setState(() => _error = 'Cart is empty');
-      return;
-    }
-
     if (shift == null) {
       setState(() => _error = 'No open shift');
       return;
     }
 
-    // Guard: payment method required (non-split)
-    if (!_isSplit && (cart.payment.isEmpty)) {
-      setState(() => _error = 'Select a payment method');
-      return;
+    // Validate split amounts sum to total if split mode
+    List<PaymentSplit>? splits;
+    if (_isSplit) {
+      splits = _buildSplits();
+      if (splits.isEmpty) {
+        setState(() => _error = 'Add at least one payment');
+        return;
+      }
+      final splitTotal = splits.fold(0, (s, p) => s + p.amount);
+      if (splitTotal != cart.total) {
+        setState(() => _error =
+            'Split total ${egp(splitTotal)} must equal order total ${egp(cart.total)}');
+        return;
+      }
     }
 
-    // Parse cash tendered & tip up-front so validation can use them
     final int? tendered = _showTendered && !_isSplit
         ? (double.tryParse(_tenderedCtrl.text) != null
             ? (double.parse(_tenderedCtrl.text) * 100).round()
@@ -1748,47 +1748,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             ? (double.parse(_tipCtrl.text) * 100).round()
             : null)
         : null;
-
-    // Cash-mode validations
-    if (_showTendered && !_isSplit) {
-      if (tendered == null || tendered == 0) {
-        setState(() => _error = 'Enter the cash amount tendered');
-        return;
-      }
-      if (tendered < cart.total) {
-        setState(() => _error =
-            'Tendered ${egp(tendered)} is less than total ${egp(cart.total)}');
-        return;
-      }
-      final tipAmt = tip ?? 0;
-      if (tipAmt > (tendered - cart.total)) {
-        setState(() => _error =
-            'Tip ${egp(tipAmt)} exceeds change ${egp(tendered - cart.total)}');
-        return;
-      }
-    }
-
-    // Validate split amounts sum to total + tip if split mode
-    List<PaymentSplit>? splits;
-    if (_isSplit) {
-      if (_activeSplitMethods.isEmpty) {
-        setState(() => _error = 'Select at least one payment method');
-        return;
-      }
-      splits = _buildSplits();
-      if (splits.isEmpty) {
-        setState(() => _error = 'Enter amounts for selected payment methods');
-        return;
-      }
-      final splitTip = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
-      final splitTotal = splits.fold(0, (s, p) => s + p.amount);
-      final expectedTotal = cart.total + splitTip;
-      if (splitTotal != expectedTotal) {
-        setState(() => _error =
-            'Split total ${egp(splitTotal)} must equal order total ${egp(expectedTotal)}');
-        return;
-      }
-    }
 
     setState(() {
       _loading = true;
@@ -2008,14 +1967,12 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                         final next = sel ? null : d;
                         setState(() => _selectedDiscount = next);
                         if (next == null) {
-                          ref
-                              .read(cartProvider.notifier)
-                              .setDiscount(null, null);
+                          ref.read(cartProvider.notifier).setDiscount(null, null);
                         } else {
                           ref.read(cartProvider.notifier).setDiscount(
-                                DiscountType.values.byName(next.dtype),
-                                next.value,
-                              );
+                            next.dtype,
+                            next.value,
+                          );
                         }
                       },
                       child: AnimatedContainer(
@@ -2164,61 +2121,59 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                      color: color, shape: BoxShape.circle),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(_paymentLabel(method),
-                                    style: cairo(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: color)),
-                              ]),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: _splitCtr(method),
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                        decimal: true),
-                                onChanged: (_) => setState(() {}),
+                          Row(children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                  color: color, shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(_paymentLabel(method),
                                 style: cairo(
-                                    fontSize: 20, fontWeight: FontWeight.w700),
-                                decoration: InputDecoration(
-                                  hintText: '0',
-                                  prefixText: 'EGP  ',
-                                  prefixStyle: cairo(
-                                      fontSize: 15,
-                                      color: AppColors.textSecondary,
-                                      fontWeight: FontWeight.w500),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 12),
-                                  border: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide: BorderSide(
-                                        color: color.withOpacity(0.3)),
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide: BorderSide(
-                                        color: color.withOpacity(0.3)),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                    borderSide:
-                                        BorderSide(color: color, width: 2),
-                                  ),
-                                  filled: true,
-                                  fillColor: color.withOpacity(0.03),
-                                ),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: color)),
+                          ]),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _splitCtr(method),
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            onChanged: (_) => setState(() {}),
+                            style: cairo(
+                                fontSize: 20, fontWeight: FontWeight.w700),
+                            decoration: InputDecoration(
+                              hintText: '0',
+                              prefixText: 'EGP  ',
+                              prefixStyle: cairo(
+                                  fontSize: 15,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 12),
+                              border: OutlineInputBorder(
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.sm),
+                                borderSide:
+                                    BorderSide(color: color.withOpacity(0.3)),
                               ),
-                            ]),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.sm),
+                                borderSide:
+                                    BorderSide(color: color.withOpacity(0.3)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.sm),
+                                borderSide: BorderSide(color: color, width: 2),
+                              ),
+                              filled: true,
+                              fillColor: color.withOpacity(0.03),
+                            ),
+                          ),
+                        ]),
                       );
                     }),
 
@@ -2235,7 +2190,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
                       onChanged: (_) => setState(() {}),
-                      style: cairo(fontSize: 20, fontWeight: FontWeight.w700),
+                      style:
+                          cairo(fontSize: 20, fontWeight: FontWeight.w700),
                       decoration: InputDecoration(
                         hintText: '0',
                         prefixText: 'EGP  ',
@@ -2247,7 +2203,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                             horizontal: 14, vertical: 12),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppRadius.sm),
-                          borderSide: BorderSide(color: AppColors.border),
+                          borderSide: BorderSide(
+                              color: AppColors.border),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppRadius.sm),
@@ -2255,8 +2212,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppRadius.sm),
-                          borderSide:
-                              BorderSide(color: AppColors.primary, width: 2),
+                          borderSide: BorderSide(
+                              color: AppColors.primary, width: 2),
                         ),
                         filled: false,
                       ),
@@ -2267,8 +2224,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                     Builder(builder: (context) {
                       final splits = _buildSplits();
                       final entered = splits.fold(0, (s, p) => s + p.amount);
-                      final tipP =
-                          ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
+                      final tipP = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
                       final diff = (cart.total + tipP) - entered;
                       final ok = diff == 0;
                       return Container(
@@ -2299,7 +2255,8 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                                       : AppColors.warning,
                                 ),
                                 const SizedBox(width: 8),
-                                Text(ok ? 'Balanced ✓' : 'Remaining',
+                                Text(
+                                    ok ? 'Balanced ✓' : 'Remaining',
                                     style: cairo(
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
@@ -2410,8 +2367,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                   return const SizedBox.shrink();
                 }
                 final tenderedP = (tendered * 100).round();
-                final tipP =
-                    ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
+                final tipP = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();
                 final change = tenderedP - (cart.total + tipP);
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 200),

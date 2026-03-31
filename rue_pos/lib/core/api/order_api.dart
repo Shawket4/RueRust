@@ -16,6 +16,10 @@ class OrderApi {
     String?                 customerName,
     String?                 discountType,
     int?                    discountValue,
+    String?                 discountId,
+    int?                    amountTendered,
+    int?                    tipAmount,
+    List<PaymentSplit>?     paymentSplits,
     required String         idempotencyKey,
     DateTime?               createdAt,
   }) async {
@@ -28,6 +32,11 @@ class OrderApi {
         'customer_name':  customerName,
         'discount_type':  discountType,
         'discount_value': discountValue,
+        if (discountId      != null) 'discount_id':      discountId,
+        if (amountTendered  != null) 'amount_tendered':  amountTendered,
+        if (tipAmount       != null) 'tip_amount':       tipAmount,
+        if (paymentSplits   != null && paymentSplits.isNotEmpty)
+          'payment_splits': paymentSplits.map((s) => s.toApiJson()).toList(),
         'items':          items.map((i) => i.toApiJson()).toList(),
         if (createdAt != null) 'created_at': createdAt.toUtc().toIso8601String(),
       },

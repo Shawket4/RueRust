@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/order_api.dart';
+import '../models/cart.dart';
 import '../api/shift_api.dart';
 import '../models/order.dart';
 import '../models/pending_action.dart';
@@ -178,6 +179,13 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
               customerName: action.customerName,
               discountType: action.discountType,
               discountValue: action.discountValue,
+              discountId: action.discountId,
+              amountTendered: action.amountTendered,
+              tipAmount: action.tipAmount,
+              paymentSplits: action.paymentSplits != null
+                  ? action.paymentSplits!.map((s) =>
+                      PaymentSplit(method: s['method'] as String, amount: s['amount'] as int)).toList()
+                  : null,
               idempotencyKey: action.localId,
               createdAt: action.orderedAt,
             );

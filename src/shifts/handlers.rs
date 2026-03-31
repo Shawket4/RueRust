@@ -73,7 +73,7 @@ pub struct ShiftReportResponse {
     pub shift:               Shift,
     pub payment_summary:     Vec<PaymentSummaryRow>,
     pub total_payments:      i64,
-    pub total_returns:       i64,
+    pub voided_amount:       i64,   // informational only — not subtracted from payments
     pub net_payments:        i64,
     pub cash_movements:      Vec<CashMovementSummaryRow>,
     pub cash_movements_in:   i64,
@@ -420,14 +420,16 @@ pub async fn get_shift_report(
         .sum();
 
     let total_payments: i64 = payment_summary.iter().map(|r| r.total).sum();
-    let net_payments = total_payments - total_returns;
+    // voided orders were never collected — they are informational only,
+    // not subtracted. total_payments already excludes voided orders.
+    let net_payments = total_payments;
 
     let cash_movements_net_signed: i64 = cash_movements_in as i64 - cash_movements_out as i64;
     Ok(HttpResponse::Ok().json(ShiftReportResponse {
         shift,
         payment_summary,
         total_payments,
-        total_returns,
+        voided_amount: total_returns,
         net_payments,
         cash_movements,
         cash_movements_in,

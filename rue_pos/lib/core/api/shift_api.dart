@@ -29,17 +29,17 @@ class ShiftApi {
   /// Offline-aware open — client supplies its own UUID and timestamp.
   /// Idempotent: safe to call multiple times with the same shiftId.
   Future<Shift> openWithId({
-    required String   branchId,
-    required String   shiftId,
-    required int      openingCash,
+    required String branchId,
+    required String shiftId,
+    required int openingCash,
     required DateTime openedAt,
   }) async {
     final res = await _c.dio.post(
       '/shifts/branches/$branchId/open',
       data: {
-        'id':           shiftId,
+        'id': shiftId,
         'opening_cash': openingCash,
-        'opened_at':    openedAt.toUtc().toIso8601String(),
+        'opened_at': openedAt.toUtc().toIso8601String(),
       },
     );
     return Shift.fromJson(res.data as Map<String, dynamic>);
@@ -49,15 +49,15 @@ class ShiftApi {
   /// Idempotent: returns existing close data if already closed.
   Future<Shift> close(
     String shiftId, {
-    required int                       closingCash,
-    String?                            note,
+    required int closingCash,
+    String? note,
     required List<Map<String, dynamic>> inventoryCounts,
-    DateTime?                          closedAt,
+    DateTime? closedAt,
   }) async {
     final res = await _c.dio.post('/shifts/$shiftId/close', data: {
       'closing_cash_declared': closingCash,
-      'cash_note':             note,
-      'inventory_counts':      inventoryCounts,
+      'cash_note': note,
+      'inventory_counts': inventoryCounts,
       if (closedAt != null) 'closed_at': closedAt.toUtc().toIso8601String(),
     });
     final body = res.data as Map<String, dynamic>;
@@ -65,12 +65,14 @@ class ShiftApi {
   }
 
   Future<int> systemCash(String shiftId, int openingCash) async {
-    final ordersRes = await _c.dio.get('/orders',
-        queryParameters: {'shift_id': shiftId});
+    final ordersRes =
+        await _c.dio.get('/orders', queryParameters: {'shift_id': shiftId});
     final orders = (ordersRes.data as List).cast<Map<String, dynamic>>();
     final cashFromOrders = orders
-        .where((o) => o['payment_method'] == 'cash' &&
-            o['status'] != 'voided' && o['status'] != 'refunded')
+        .where((o) =>
+            o['payment_method'] == 'cash' &&
+            o['status'] != 'voided' &&
+            o['status'] != 'refunded')
         .fold<int>(0, (s, o) => s + (o['total_amount'] as int));
 
     int movements = 0;
@@ -87,7 +89,12 @@ class ShiftApi {
     final res = await _c.dio.get('/shifts/$shiftId/report');
     return ShiftReport.fromJson(res.data as Map<String, dynamic>);
   }
+
+  Future<void> addCashMovement(String shiftId, int amount, String note) async {
+    await _c.dio.post('/shifts/$shiftId/cash-movements',
+        data: {'amount': amount, 'note': note});
+  }
 }
 
-final shiftApiProvider = Provider<ShiftApi>(
-    (ref) => ShiftApi(ref.watch(dioClientProvider)));
+final shiftApiProvider =
+    Provider<ShiftApi>((ref) => ShiftApi(ref.watch(dioClientProvider)));

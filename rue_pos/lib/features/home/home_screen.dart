@@ -5,6 +5,7 @@ import '../../core/models/shift.dart';
 import '../../core/providers/auth_notifier.dart';
 import '../../core/providers/order_history_notifier.dart';
 import '../../core/providers/shift_notifier.dart';
+import '../shift/cash_movement_sheet.dart';
 import '../../core/services/connectivity_service.dart';
 import '../../core/services/offline_queue.dart';
 import '../../core/theme/app_theme.dart';
@@ -268,6 +269,17 @@ class _OpenShiftView extends ConsumerWidget {
               onTap: () => context.go('/pending-orders'),
               isTablet: isTablet,
             )),
+            const SizedBox(width: 8),
+            Expanded(
+                child: _CardBtn(
+              label: 'Cash',
+                    icon: Icons.payments_outlined,
+                    isTablet: isTablet,
+                    onTap: () => CashMovementSheet.show(
+                      context,
+                      shiftId: shift.id,
+                      onSuccess: onRefresh,
+                    ))),
             const SizedBox(width: 8),
             Expanded(
                 child: _CardBtn(

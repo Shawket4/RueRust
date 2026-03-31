@@ -3,10 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/api/shift_api.dart';
+import 'shift_report_preview_sheet.dart';
 import '../../core/providers/auth_notifier.dart';
 import '../../core/providers/shift_notifier.dart';
 import '../../core/services/connectivity_service.dart';
-import '../../core/services/printer_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/app_button.dart';
@@ -78,42 +78,27 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
   }
 
   Future<void> _printReport() async {
-    final shift  = ref.read(shiftProvider).shift;
-    final branch = ref.read(authProvider).branch;
+    final shift = ref.read(shiftProvider).shift;
     if (shift == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No open shift'), backgroundColor: AppColors.warning));
-      return;
-    }
-    if (branch == null || !branch.hasPrinter) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No printer configured for this branch'),
+          content: Text('No open shift'),
           backgroundColor: AppColors.warning));
       return;
     }
     setState(() => _printing = true);
     try {
       final report = await ref.read(shiftApiProvider).getReport(shift.id);
-      final err    = await PrinterService.printShiftReport(
-        ip:         branch.printerIp!,
-        port:       branch.printerPort,
-        brand:      branch.printerBrand!,
-        report:     report,
-        branchName: branch.name,
-      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text(err ?? 'Report printed'),
-            backgroundColor: err != null ? AppColors.danger : AppColors.success));
+        setState(() => _printing = false);
+        await ShiftReportPreviewSheet.show(context, report);
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _printing = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text('Failed: $e'),
+            content: Text('Failed to load report: $e'),
             backgroundColor: AppColors.danger));
       }
-    } finally {
-      if (mounted) setState(() => _printing = false);
     }
   }
 

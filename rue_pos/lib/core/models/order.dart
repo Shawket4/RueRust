@@ -64,6 +64,10 @@ class Order {
   final int             discountAmount;
   final int             taxAmount;
   final int             totalAmount;
+  final int?            amountTendered; // Item 2
+  final int?            changeGiven;    // Item 2
+  final int?            tipAmount;      // Item 2
+  final String?         discountId;     // Item 6
   final String?         customerName;
   final String?         notes;
   final String?         voidReason;
@@ -77,7 +81,10 @@ class Order {
     required this.paymentMethod, required this.subtotal,
     this.discountType, required this.discountValue,
     required this.discountAmount, required this.taxAmount,
-    required this.totalAmount, this.customerName, this.notes,
+    required this.totalAmount,
+    this.amountTendered, this.changeGiven, this.tipAmount,
+    this.discountId,
+    this.customerName, this.notes,
     this.voidReason, required this.createdAt, required this.items,
   });
 
@@ -98,6 +105,10 @@ class Order {
     discountAmount: (j['discount_amount'] as int?) ?? 0,
     taxAmount:      (j['tax_amount']      as int?) ?? 0,
     totalAmount:    j['total_amount'],
+    amountTendered: j['amount_tendered']  as int?,
+    changeGiven:    j['change_given']     as int?,
+    tipAmount:      j['tip_amount']       as int?,
+    discountId:     j['discount_id']      as String?,
     customerName:   j['customer_name']    as String?,
     notes:          j['notes']            as String?,
     voidReason:     j['void_reason']      as String?,
@@ -112,8 +123,11 @@ class Order {
     'payment_method': paymentMethod, 'subtotal': subtotal,
     'discount_type': discountType, 'discount_value': discountValue,
     'discount_amount': discountAmount, 'tax_amount': taxAmount,
-    'total_amount': totalAmount, 'customer_name': customerName,
-    'notes': notes, 'void_reason': voidReason,
+    'total_amount': totalAmount,
+    'amount_tendered': amountTendered, 'change_given': changeGiven,
+    'tip_amount': tipAmount, 'discount_id': discountId,
+    'customer_name': customerName, 'notes': notes,
+    'void_reason': voidReason,
     'created_at': createdAt.toIso8601String(),
     'items': items.map((i) => i.toJson()).toList(),
   };

@@ -33,13 +33,44 @@ class CartNotifier extends Notifier<CartState> {
     state = state.copyWith(items: updated);
   }
 
-  void setPayment(String m)   => state = state.copyWith(payment: m);
-  void setCustomer(String? n) => state = state.copyWith(customerName: n, clearCustomer: n == null);
-  void setNotes(String? n)    => state = state.copyWith(notes: n);
+  void setPayment(String m) => state = state.copyWith(
+      payment: m, clearSplits: true);
 
+  void setCustomer(String? n) => state =
+      state.copyWith(customerName: n, clearCustomer: n == null);
+
+  void setNotes(String? n) => state = state.copyWith(notes: n);
+
+  // Item 6
   void setDiscount(DiscountType? type, int? value) => state = type == null
-      ? state.copyWith(clearDiscount: true)
-      : state.copyWith(discountType: type, discountValue: value);
+      ? state.copyWith(clearDiscount: true, clearDiscountId: true)
+      : state.copyWith(discountType: type, discountValue: value,
+                       clearDiscountId: true);
+
+  void setDiscountById(String id, DiscountType type, int value) =>
+      state = state.copyWith(
+          discountId: id, discountType: type, discountValue: value);
+
+  void clearDiscount() => state =
+      state.copyWith(clearDiscount: true, clearDiscountId: true);
+
+  // Item 2
+  void setAmountTendered(int? amount) => state =
+      state.copyWith(amountTendered: amount, clearTendered: amount == null);
+
+  void setTip(int? tip) => state = state.copyWith(tipAmount: tip);
+
+  // Item 7
+  void setPaymentSplits(List<PaymentSplit> splits) {
+    final total = splits.fold(0, (s, p) => s + p.amount);
+    final method = splits.length == 1 ? splits.first.method : 'mixed';
+    state = state.copyWith(
+        paymentSplits: splits,
+        payment: method);
+  }
+
+  void clearSplits() => state = state.copyWith(
+      clearSplits: true, payment: 'cash');
 
   void clear() => state = CartState.empty;
 }

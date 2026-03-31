@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/api/order_api.dart';
 import '../../core/api/shift_api.dart';
+import 'shift_report_preview_sheet.dart';
 import '../../core/models/order.dart';
 import '../../core/models/shift.dart';
 import '../../core/providers/auth_notifier.dart';
@@ -109,36 +110,20 @@ class _ShiftTileState extends ConsumerState<_ShiftTile> {
   }
 
   Future<void> _printReport() async {
-    final branch = ref.read(authProvider).branch;
-    if (branch == null || !branch.hasPrinter) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No printer configured'),
-          backgroundColor: AppColors.warning));
-      return;
-    }
     setState(() => _printing = true);
     try {
       final report = await ref.read(shiftApiProvider).getReport(widget.shift.id);
-      final err    = await PrinterService.printShiftReport(
-        ip:         branch.printerIp!,
-        port:       branch.printerPort,
-        brand:      branch.printerBrand!,
-        report:     report,
-        branchName: branch.name,
-      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text(err ?? 'Report printed'),
-            backgroundColor: err != null ? AppColors.danger : AppColors.success));
+        setState(() => _printing = false);
+        await ShiftReportPreviewSheet.show(context, report);
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _printing = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:         Text('Failed: $e'),
+            content: Text('Failed to load report: $e'),
             backgroundColor: AppColors.danger));
       }
-    } finally {
-      if (mounted) setState(() => _printing = false);
     }
   }
 

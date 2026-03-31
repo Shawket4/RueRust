@@ -45,13 +45,13 @@ class SelectedAddon {
 
 @immutable
 class CartItem {
-  final String            menuItemId;
-  final String            itemName;
-  final String?           sizeLabel;
-  final int               unitPrice;
-  final int               quantity;
+  final String              menuItemId;
+  final String              itemName;
+  final String?             sizeLabel;
+  final int                 unitPrice;
+  final int                 quantity;
   final List<SelectedAddon> addons;
-  final String?           notes;
+  final String?             notes;
 
   const CartItem({
     required this.menuItemId,
@@ -115,22 +115,44 @@ extension DiscountTypeX on DiscountType {
   String get apiValue => name;
 }
 
+// ── Payment split (Item 7) ────────────────────────────────────
+@immutable
+class PaymentSplit {
+  final String method;
+  final int    amount;
+
+  const PaymentSplit({required this.method, required this.amount});
+
+  Map<String, dynamic> toApiJson() => {'method': method, 'amount': amount};
+
+  PaymentSplit copyWith({String? method, int? amount}) =>
+      PaymentSplit(method: method ?? this.method, amount: amount ?? this.amount);
+}
+
 @immutable
 class CartState {
-  final List<CartItem> items;
-  final String         payment;
-  final String?        customerName;
-  final String?        notes;
-  final DiscountType?  discountType;
-  final int?           discountValue;
+  final List<CartItem>    items;
+  final String            payment;
+  final String?           customerName;
+  final String?           notes;
+  final DiscountType?     discountType;
+  final int?              discountValue;
+  final String?           discountId;     // Item 6 — pre-defined discount UUID
+  final int?              amountTendered; // Item 2 — cash tendered
+  final int?              tipAmount;      // Item 2 — tip
+  final List<PaymentSplit>? paymentSplits; // Item 7 — split payments
 
   const CartState({
-    this.items        = const [],
-    this.payment      = 'cash',
+    this.items         = const [],
+    this.payment       = 'cash',
     this.customerName,
     this.notes,
     this.discountType,
     this.discountValue,
+    this.discountId,
+    this.amountTendered,
+    this.tipAmount,
+    this.paymentSplits,
   });
 
   bool get isEmpty  => items.isEmpty;
@@ -146,22 +168,43 @@ class CartState {
 
   int get total => subtotal - discountAmount;
 
+  /// Change due back to customer (cash orders only)
+  int get changeGiven {
+    if (amountTendered == null) return 0;
+    return (amountTendered! - total).clamp(0, 999999);
+  }
+
+  /// Whether this is a split / mixed payment
+  bool get isSplitPayment =>
+      paymentSplits != null && paymentSplits!.isNotEmpty;
+
   CartState copyWith({
-    List<CartItem>? items,
-    String?         payment,
-    String?         customerName,
-    String?         notes,
-    DiscountType?   discountType,
-    int?            discountValue,
-    bool            clearDiscount = false,
-    bool            clearCustomer = false,
+    List<CartItem>?     items,
+    String?             payment,
+    String?             customerName,
+    String?             notes,
+    DiscountType?       discountType,
+    int?                discountValue,
+    String?             discountId,
+    int?                amountTendered,
+    int?                tipAmount,
+    List<PaymentSplit>? paymentSplits,
+    bool clearDiscount      = false,
+    bool clearCustomer      = false,
+    bool clearTendered      = false,
+    bool clearSplits        = false,
+    bool clearDiscountId    = false,
   }) => CartState(
-    items:         items         ?? this.items,
-    payment:       payment       ?? this.payment,
-    customerName:  clearCustomer  ? null : (customerName ?? this.customerName),
-    notes:         notes          ?? this.notes,
-    discountType:  clearDiscount  ? null : (discountType  ?? this.discountType),
-    discountValue: clearDiscount  ? null : (discountValue ?? this.discountValue),
+    items:          items          ?? this.items,
+    payment:        payment        ?? this.payment,
+    customerName:   clearCustomer   ? null : (customerName ?? this.customerName),
+    notes:          notes           ?? this.notes,
+    discountType:   clearDiscount   ? null : (discountType  ?? this.discountType),
+    discountValue:  clearDiscount   ? null : (discountValue ?? this.discountValue),
+    discountId:     clearDiscountId ? null : (discountId    ?? this.discountId),
+    amountTendered: clearTendered   ? null : (amountTendered ?? this.amountTendered),
+    tipAmount:      tipAmount       ?? this.tipAmount,
+    paymentSplits:  clearSplits     ? null : (paymentSplits ?? this.paymentSplits),
   );
 
   static const empty = CartState();

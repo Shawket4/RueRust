@@ -110,6 +110,10 @@ class PendingOrder extends PendingAction {
   final String? customerName;
   final String? discountType;
   final int? discountValue;
+  final String? discountId; // Item 6
+  final int? amountTendered; // Item 2
+  final int? tipAmount; // Item 2
+  final List<Map<String, dynamic>>? paymentSplits; // Item 7
   final List<CartItem> items;
   final DateTime orderedAt;
 
@@ -123,6 +127,10 @@ class PendingOrder extends PendingAction {
     this.customerName,
     this.discountType,
     this.discountValue,
+    this.discountId,
+    this.amountTendered,
+    this.tipAmount,
+    this.paymentSplits,
     required this.items,
     required this.orderedAt,
   }) : super(type: PendingActionType.order);
@@ -137,6 +145,10 @@ class PendingOrder extends PendingAction {
         customerName: customerName,
         discountType: discountType,
         discountValue: discountValue,
+        discountId: discountId,
+        amountTendered: amountTendered,
+        tipAmount: tipAmount,
+        paymentSplits: paymentSplits,
         items: items,
         orderedAt: orderedAt,
         retryCount: retryCount + 1,
@@ -152,6 +164,10 @@ class PendingOrder extends PendingAction {
         customerName: customerName,
         discountType: discountType,
         discountValue: discountValue,
+        discountId: discountId,
+        amountTendered: amountTendered,
+        tipAmount: tipAmount,
+        paymentSplits: paymentSplits,
         items: items,
         orderedAt: orderedAt,
       );
@@ -168,6 +184,10 @@ class PendingOrder extends PendingAction {
         'customer_name': customerName,
         'discount_type': discountType,
         'discount_value': discountValue,
+        'discount_id': discountId,
+        'amount_tendered': amountTendered,
+        'tip_amount': tipAmount,
+        if (paymentSplits != null) 'payment_splits': paymentSplits,
         'ordered_at': orderedAt.toUtc().toIso8601String(),
         'items': items.map((i) => i.toStorageJson()).toList(),
       };
@@ -182,6 +202,11 @@ class PendingOrder extends PendingAction {
         customerName: j['customer_name'] as String?,
         discountType: j['discount_type'] as String?,
         discountValue: j['discount_value'] as int?,
+        discountId: j['discount_id'] as String?,
+        amountTendered: j['amount_tendered'] as int?,
+        tipAmount: j['tip_amount'] as int?,
+        paymentSplits:
+            (j['payment_splits'] as List?)?.cast<Map<String, dynamic>>(),
         orderedAt: DateTime.parse(
             (j['ordered_at'] as String?) ?? j['created_at'] as String),
         items: (j['items'] as List)

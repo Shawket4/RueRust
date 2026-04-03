@@ -6,232 +6,822 @@ use uuid::Uuid;
 use crate::{
     auth::jwt::Claims,
     errors::AppError,
+    models::UserRole,
     permissions::checker::check_permission,
 };
 
-// ── Models ────────────────────────────────────────────────────
+// ── Response models ───────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct InventoryItem {
+pub struct OrgIngredient {
+    pub id:            Uuid,
+    pub org_id:        Uuid,
+    pub name:          String,
+    pub unit:          String,
+    pub description:   Option<String>,
+    pub cost_per_unit: i32,
+    pub is_active:     bool,
+    pub created_at:    chrono::DateTime<chrono::Utc>,
+    pub updated_at:    chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BranchInventoryItem {
     pub id:                Uuid,
     pub branch_id:         Uuid,
-    pub name:              String,
+    pub org_ingredient_id: Uuid,
+    pub ingredient_name:   String,
     pub unit:              String,
+    pub description:       Option<String>,
+    pub cost_per_unit:     i32,
     pub current_stock:     sqlx::types::BigDecimal,
     pub reorder_threshold: sqlx::types::BigDecimal,
-    pub cost_per_unit:     i32,
-    pub is_active:         bool,
+    pub below_reorder:     bool,
     pub created_at:        chrono::DateTime<chrono::Utc>,
     pub updated_at:        chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BranchInventoryAdjustment {
+    pub id:                  Uuid,
+    pub branch_id:           Uuid,
+    pub branch_inventory_id: Uuid,
+    pub ingredient_name:     String,
+    pub unit:                String,
+    pub adjustment_type:     String,
+    pub quantity:            sqlx::types::BigDecimal,
+    pub note:                String,
+    pub transfer_id:         Option<Uuid>,
+    pub adjusted_by:         Uuid,
+    pub adjusted_by_name:    String,
+    pub created_at:          chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BranchInventoryTransfer {
+    pub id:                      Uuid,
+    pub org_id:                  Uuid,
+    pub source_branch_id:        Uuid,
+    pub source_branch_name:      String,
+    pub destination_branch_id:   Uuid,
+    pub destination_branch_name: String,
+    pub org_ingredient_id:       Uuid,
+    pub ingredient_name:         String,
+    pub unit:                    String,
+    pub quantity:                sqlx::types::BigDecimal,
+    pub note:                    Option<String>,
+    pub initiated_by:            Uuid,
+    pub initiated_by_name:       String,
+    pub initiated_at:            chrono::DateTime<chrono::Utc>,
 }
 
 // ── Request types ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
-pub struct CreateItemRequest {
-    pub name:              String,
-    pub unit:              String,
-    pub current_stock:     Option<f64>,   // ← add this
-    pub reorder_threshold: Option<f64>,
-    pub cost_per_unit:     Option<i32>,
+pub struct CreateCatalogItemRequest {
+    pub name:          String,
+    pub unit:          String,
+    pub description:   Option<String>,
+    pub cost_per_unit: Option<i32>,
 }
 
 #[derive(Deserialize)]
-pub struct UpdateItemRequest {
-    pub name:              Option<String>,
-    pub unit:              Option<String>,
-    pub current_stock:     Option<f64>,   // ← add this
+pub struct UpdateCatalogItemRequest {
+    pub name:          Option<String>,
+    pub unit:          Option<String>,
+    pub description:   Option<String>,
+    pub cost_per_unit: Option<i32>,
+    pub is_active:     Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct AddToStockRequest {
+    pub org_ingredient_id: Uuid,
+    pub current_stock:     Option<f64>,
     pub reorder_threshold: Option<f64>,
-    pub cost_per_unit:     Option<i32>,
-    pub is_active:         Option<bool>,
 }
 
-// ── POST /inventory/branches/:branch_id/items ─────────────────
-
-pub async fn create_item(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-    body:      web::Json<CreateItemRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "create").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    validate_unit(&body.unit)?;
-
-    let item = sqlx::query_as::<_, InventoryItem>(
-        r#"
-        INSERT INTO inventory_items
-    (branch_id, name, unit, current_stock, reorder_threshold, cost_per_unit)
-VALUES ($1, $2, $3::inventory_unit, $4, $5, $6)
-        RETURNING id, branch_id, name, unit::text, current_stock,
-                  reorder_threshold, cost_per_unit, is_active,
-                  created_at, updated_at
-        "#,
-    )
-    .bind(*branch_id)
-    .bind(&body.name)
-    .bind(&body.unit)
-    .bind(body.current_stock.unwrap_or(0.0))
-    .bind(body.reorder_threshold.unwrap_or(0.0))
-    .bind(body.cost_per_unit.unwrap_or(0))
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Created().json(item))
+#[derive(Deserialize)]
+pub struct UpdateStockRequest {
+    pub reorder_threshold: Option<f64>,
+    pub current_stock:     Option<f64>,
 }
 
-// ── GET /inventory/branches/:branch_id/items ──────────────────
-
-pub async fn list_items(
-    req:       HttpRequest,
-    pool:      web::Data<PgPool>,
-    branch_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
-    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
-
-    let items = sqlx::query_as::<_, InventoryItem>(
-        r#"
-        SELECT id, branch_id, name, unit::text, current_stock,
-               reorder_threshold, cost_per_unit, is_active,
-               created_at, updated_at
-        FROM inventory_items
-        WHERE branch_id = $1
-          AND deleted_at IS NULL
-        ORDER BY name
-        "#,
-    )
-    .bind(*branch_id)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(items))
+#[derive(Deserialize)]
+pub struct CreateAdjustmentRequest {
+    pub branch_inventory_id: Uuid,
+    pub adjustment_type:     String, // "add" | "remove"
+    pub quantity:            f64,
+    pub note:                String,
 }
 
-// ── GET /inventory/items/:item_id ─────────────────────────────
-
-pub async fn get_item(
-    req:     HttpRequest,
-    pool:    web::Data<PgPool>,
-    item_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
-
-    let item = fetch_item_or_404(pool.get_ref(), *item_id).await?;
-    require_branch_access(pool.get_ref(), &claims, item.branch_id).await?;
-
-    Ok(HttpResponse::Ok().json(item))
+#[derive(Deserialize)]
+pub struct CreateTransferRequest {
+    pub source_branch_id:      Uuid,
+    pub destination_branch_id: Uuid,
+    pub org_ingredient_id:     Uuid,
+    pub quantity:              f64,
+    pub note:                  Option<String>,
 }
 
-// ── PATCH /inventory/items/:item_id ───────────────────────────
-
-pub async fn update_item(
-    req:     HttpRequest,
-    pool:    web::Data<PgPool>,
-    item_id: web::Path<Uuid>,
-    body:    web::Json<UpdateItemRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "inventory", "update").await?;
-
-    let existing = fetch_item_or_404(pool.get_ref(), *item_id).await?;
-    require_branch_access(pool.get_ref(), &claims, existing.branch_id).await?;
-
-    if let Some(ref u) = body.unit {
-        validate_unit(u)?;
-    }
-
-    let item = sqlx::query_as::<_, InventoryItem>(
-        r#"
-        UPDATE inventory_items SET
-            name              = COALESCE($2, name),
-            unit              = COALESCE($3::inventory_unit, unit),
-            current_stock     = COALESCE($4, current_stock),
-            reorder_threshold = COALESCE($5, reorder_threshold),
-            cost_per_unit     = COALESCE($6, cost_per_unit),
-            is_active         = COALESCE($7, is_active)
-        WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, branch_id, name, unit::text, current_stock,
-                  reorder_threshold, cost_per_unit, is_active,
-                  created_at, updated_at
-        "#,
-    )
-    .bind(*item_id)
-    .bind(&body.name)
-    .bind(&body.unit)
-    .bind(body.current_stock)
-    .bind(body.reorder_threshold)
-    .bind(body.cost_per_unit)
-    .bind(body.is_active)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .ok_or_else(|| AppError::NotFound("Inventory item not found".into()))?;
-
-    Ok(HttpResponse::Ok().json(item))
+#[derive(Deserialize)]
+pub struct ListTransfersQuery {
+    pub direction: Option<String>, // "incoming" | "outgoing" | None = both
 }
 
-// ── GET /inventory/orgs/:org_id/items ────────────────────────
+// ── GET /inventory/orgs/:org_id/catalog ──────────────────────
 
-pub async fn list_items_by_org(
+pub async fn list_catalog(
     req:    HttpRequest,
     pool:   web::Data<PgPool>,
     org_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
+    require_org_access(&claims, *org_id)?;
 
-    // Ensure caller belongs to this org (or is super_admin)
-    if claims.role != crate::models::UserRole::SuperAdmin {
-        if claims.org_id() != Some(*org_id) {
-            return Err(AppError::Forbidden("Access denied to this org".into()));
-        }
-    }
-
-    let items = sqlx::query_as::<_, InventoryItem>(
+    let rows = sqlx::query_as::<_, OrgIngredient>(
         r#"
-        SELECT i.id, i.branch_id, i.name, i.unit::text, i.current_stock,
-               i.reorder_threshold, i.cost_per_unit, i.is_active,
-               i.created_at, i.updated_at
-        FROM inventory_items i
-        JOIN branches b ON b.id = i.branch_id
-        WHERE b.org_id = $1
-          AND b.deleted_at IS NULL
-          AND i.deleted_at IS NULL
-        ORDER BY i.name
+        SELECT id, org_id, name, unit::text, description, cost_per_unit,
+               is_active, created_at, updated_at
+        FROM org_ingredients
+        WHERE org_id = $1 AND deleted_at IS NULL
+        ORDER BY name
         "#,
     )
     .bind(*org_id)
     .fetch_all(pool.get_ref())
     .await?;
 
-    Ok(HttpResponse::Ok().json(items))
+    Ok(HttpResponse::Ok().json(rows))
 }
 
-// ── DELETE /inventory/items/:item_id (soft delete) ────────────
+// ── POST /inventory/orgs/:org_id/catalog ─────────────────────
 
-pub async fn delete_item(
-    req:     HttpRequest,
-    pool:    web::Data<PgPool>,
-    item_id: web::Path<Uuid>,
+pub async fn create_catalog_item(
+    req:    HttpRequest,
+    pool:   web::Data<PgPool>,
+    org_id: web::Path<Uuid>,
+    body:   web::Json<CreateCatalogItemRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "create").await?;
+    require_org_access(&claims, *org_id)?;
+    validate_unit(&body.unit)?;
+
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".into()));
+    }
+
+    let row = sqlx::query_as::<_, OrgIngredient>(
+        r#"
+        INSERT INTO org_ingredients (org_id, name, unit, description, cost_per_unit)
+        VALUES ($1, $2, $3::inventory_unit, $4, $5)
+        RETURNING id, org_id, name, unit::text, description, cost_per_unit,
+                  is_active, created_at, updated_at
+        "#,
+    )
+    .bind(*org_id)
+    .bind(body.name.trim())
+    .bind(&body.unit)
+    .bind(&body.description)
+    .bind(body.cost_per_unit.unwrap_or(0))
+    .fetch_one(pool.get_ref())
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(ref db) = e {
+            if db.code().as_deref() == Some("23505") {
+                return AppError::Conflict("An ingredient with this name already exists in the catalog".into());
+            }
+        }
+        AppError::Db(e)
+    })?;
+
+    Ok(HttpResponse::Created().json(row))
+}
+
+// ── PATCH /inventory/orgs/:org_id/catalog/:id ────────────────
+
+pub async fn update_catalog_item(
+    req:    HttpRequest,
+    pool:   web::Data<PgPool>,
+    path:   web::Path<(Uuid, Uuid)>,
+    body:   web::Json<UpdateCatalogItemRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "update").await?;
+    let (org_id, id) = path.into_inner();
+    require_org_access(&claims, org_id)?;
+
+    if let Some(ref u) = body.unit { validate_unit(u)?; }
+
+    let row = sqlx::query_as::<_, OrgIngredient>(
+        r#"
+        UPDATE org_ingredients SET
+            name          = COALESCE($2, name),
+            unit          = COALESCE($3::inventory_unit, unit),
+            description   = COALESCE($4, description),
+            cost_per_unit = COALESCE($5, cost_per_unit),
+            is_active     = COALESCE($6, is_active)
+        WHERE id = $1 AND org_id = $7 AND deleted_at IS NULL
+        RETURNING id, org_id, name, unit::text, description, cost_per_unit,
+                  is_active, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(&body.name)
+    .bind(&body.unit)
+    .bind(&body.description)
+    .bind(body.cost_per_unit)
+    .bind(body.is_active)
+    .bind(org_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Ingredient not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+// ── DELETE /inventory/orgs/:org_id/catalog/:id ───────────────
+
+pub async fn delete_catalog_item(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "inventory", "delete").await?;
+    let (org_id, id) = path.into_inner();
+    require_org_access(&claims, org_id)?;
 
-    let existing = fetch_item_or_404(pool.get_ref(), *item_id).await?;
-    require_branch_access(pool.get_ref(), &claims, existing.branch_id).await?;
-
-    sqlx::query(
-        "UPDATE inventory_items SET deleted_at = NOW() WHERE id = $1"
+    // Check if referenced anywhere
+    let referenced: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM menu_item_recipes              WHERE org_ingredient_id = $1
+            UNION ALL
+            SELECT 1 FROM addon_item_ingredients         WHERE org_ingredient_id = $1
+            UNION ALL
+            SELECT 1 FROM drink_option_ingredient_overrides WHERE org_ingredient_id = $1
+            UNION ALL
+            SELECT 1 FROM branch_inventory               WHERE org_ingredient_id = $1
+        )
+        "#,
     )
-    .bind(*item_id)
-    .execute(pool.get_ref())
+    .bind(id)
+    .fetch_one(pool.get_ref())
     .await?;
 
+    if referenced {
+        return Err(AppError::Conflict(
+            "Ingredient is referenced by recipes or branch stock. Remove those references first.".into(),
+        ));
+    }
+
+    sqlx::query("UPDATE org_ingredients SET deleted_at = NOW() WHERE id = $1 AND org_id = $2")
+        .bind(id)
+        .bind(org_id)
+        .execute(pool.get_ref())
+        .await?;
+
     Ok(HttpResponse::NoContent().finish())
+}
+
+// ── GET /inventory/branches/:branch_id/stock ─────────────────
+
+pub async fn list_branch_stock(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    branch_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
+    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
+
+    let rows = sqlx::query_as::<_, BranchInventoryItem>(
+        r#"
+        SELECT
+            bi.id, bi.branch_id, bi.org_ingredient_id,
+            oi.name AS ingredient_name,
+            oi.unit::text AS unit,
+            oi.description,
+            oi.cost_per_unit,
+            bi.current_stock,
+            bi.reorder_threshold,
+            (bi.current_stock <= bi.reorder_threshold) AS below_reorder,
+            bi.created_at, bi.updated_at
+        FROM branch_inventory bi
+        JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id
+        WHERE bi.branch_id = $1
+        ORDER BY oi.name
+        "#,
+    )
+    .bind(*branch_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
+}
+
+// ── POST /inventory/branches/:branch_id/stock ────────────────
+
+pub async fn add_to_branch_stock(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    branch_id: web::Path<Uuid>,
+    body:      web::Json<AddToStockRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "create").await?;
+    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
+
+    // Verify org_ingredient belongs to this branch's org
+    let branch_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(*branch_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten()
+    .ok_or_else(|| AppError::NotFound("Branch not found".into()))
+    .map(Some)?;
+
+    let ing_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM org_ingredients WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(body.org_ingredient_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten();
+
+    if ing_org != branch_org {
+        return Err(AppError::BadRequest(
+            "Ingredient does not belong to this branch's organization".into(),
+        ));
+    }
+
+    let row = sqlx::query_as::<_, BranchInventoryItem>(
+        r#"
+        INSERT INTO branch_inventory (branch_id, org_ingredient_id, current_stock, reorder_threshold)
+        VALUES ($1, $2, $3, $4)
+        RETURNING
+            id, branch_id, org_ingredient_id,
+            (SELECT name        FROM org_ingredients WHERE id = $2) AS ingredient_name,
+            (SELECT unit::text  FROM org_ingredients WHERE id = $2) AS unit,
+            (SELECT description FROM org_ingredients WHERE id = $2) AS description,
+            (SELECT cost_per_unit FROM org_ingredients WHERE id = $2) AS cost_per_unit,
+            current_stock, reorder_threshold,
+            (current_stock <= reorder_threshold) AS below_reorder,
+            created_at, updated_at
+        "#,
+    )
+    .bind(*branch_id)
+    .bind(body.org_ingredient_id)
+    .bind(body.current_stock.unwrap_or(0.0))
+    .bind(body.reorder_threshold.unwrap_or(0.0))
+    .fetch_one(pool.get_ref())
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(ref db) = e {
+            if db.code().as_deref() == Some("23505") {
+                return AppError::Conflict("This ingredient is already tracked for this branch".into());
+            }
+        }
+        AppError::Db(e)
+    })?;
+
+    Ok(HttpResponse::Created().json(row))
+}
+
+// ── PATCH /inventory/branches/:branch_id/stock/:id ───────────
+
+pub async fn update_branch_stock(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    path:      web::Path<(Uuid, Uuid)>,
+    body:      web::Json<UpdateStockRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "update").await?;
+    let (branch_id, id) = path.into_inner();
+    require_branch_access(pool.get_ref(), &claims, branch_id).await?;
+
+    let row = sqlx::query_as::<_, BranchInventoryItem>(
+        r#"
+        UPDATE branch_inventory SET
+            reorder_threshold = COALESCE($3, reorder_threshold),
+            current_stock     = COALESCE($4, current_stock)
+        WHERE id = $1 AND branch_id = $2
+        RETURNING
+            id, branch_id, org_ingredient_id,
+            (SELECT name          FROM org_ingredients WHERE id = org_ingredient_id) AS ingredient_name,
+            (SELECT unit::text    FROM org_ingredients WHERE id = org_ingredient_id) AS unit,
+            (SELECT description   FROM org_ingredients WHERE id = org_ingredient_id) AS description,
+            (SELECT cost_per_unit FROM org_ingredients WHERE id = org_ingredient_id) AS cost_per_unit,
+            current_stock, reorder_threshold,
+            (current_stock <= reorder_threshold) AS below_reorder,
+            created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(branch_id)
+    .bind(body.reorder_threshold)
+    .bind(body.current_stock)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Branch inventory item not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+// ── DELETE /inventory/branches/:branch_id/stock/:id ──────────
+
+pub async fn remove_from_branch_stock(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory", "delete").await?;
+    let (branch_id, id) = path.into_inner();
+    require_branch_access(pool.get_ref(), &claims, branch_id).await?;
+
+    sqlx::query("DELETE FROM branch_inventory WHERE id = $1 AND branch_id = $2")
+        .bind(id)
+        .bind(branch_id)
+        .execute(pool.get_ref())
+        .await
+        .map_err(|e| {
+            if let sqlx::Error::Database(ref db) = e {
+                if db.code().as_deref() == Some("23503") {
+                    return AppError::Conflict(
+                        "Cannot remove ingredient with existing adjustment or transfer history".into(),
+                    );
+                }
+            }
+            AppError::Db(e)
+        })?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
+// ── POST /inventory/branches/:branch_id/adjustments ──────────
+
+pub async fn create_adjustment(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    branch_id: web::Path<Uuid>,
+    body:      web::Json<CreateAdjustmentRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_adjustments", "create").await?;
+    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
+
+    match body.adjustment_type.as_str() {
+        "add" | "remove" => {}
+        _ => return Err(AppError::BadRequest("adjustment_type must be 'add' or 'remove'".into())),
+    }
+    if body.quantity <= 0.0 {
+        return Err(AppError::BadRequest("quantity must be greater than 0".into()));
+    }
+    if body.note.trim().is_empty() {
+        return Err(AppError::BadRequest("note is required for adjustments".into()));
+    }
+
+    // Verify branch_inventory belongs to this branch
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM branch_inventory WHERE id = $1 AND branch_id = $2)"
+    )
+    .bind(body.branch_inventory_id)
+    .bind(*branch_id)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    if !exists {
+        return Err(AppError::BadRequest("Inventory item does not belong to this branch".into()));
+    }
+
+    // For remove: check sufficient stock
+    if body.adjustment_type == "remove" {
+        let current: sqlx::types::BigDecimal = sqlx::query_scalar(
+            "SELECT current_stock FROM branch_inventory WHERE id = $1"
+        )
+        .bind(body.branch_inventory_id)
+        .fetch_one(pool.get_ref())
+        .await?;
+
+        let qty = sqlx::types::BigDecimal::try_from(body.quantity)
+            .map_err(|_| AppError::BadRequest("Invalid quantity".into()))?;
+
+        if current < qty {
+            return Err(AppError::BadRequest(format!(
+                "Insufficient stock. Current: {}, Requested: {}", current, qty
+            )));
+        }
+    }
+
+    let delta: f64 = match body.adjustment_type.as_str() {
+        "add"    =>  body.quantity,
+        "remove" => -body.quantity,
+        _        => unreachable!(),
+    };
+
+    let mut tx = pool.get_ref().begin().await?;
+
+    sqlx::query(
+        "UPDATE branch_inventory SET current_stock = current_stock + $1 WHERE id = $2"
+    )
+    .bind(delta)
+    .bind(body.branch_inventory_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let adj = sqlx::query_as::<_, BranchInventoryAdjustment>(
+        r#"
+        INSERT INTO branch_inventory_adjustments
+            (branch_id, branch_inventory_id, type, quantity, note, adjusted_by)
+        VALUES ($1, $2, $3::inventory_adjustment_type, $4, $5, $6)
+        RETURNING
+            id, branch_id, branch_inventory_id,
+            (SELECT oi.name FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS ingredient_name,
+            (SELECT oi.unit::text FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS unit,
+            type::text AS adjustment_type,
+            quantity, note, transfer_id, adjusted_by,
+            (SELECT name FROM users WHERE id = $6) AS adjusted_by_name,
+            created_at
+        "#,
+    )
+    .bind(*branch_id)
+    .bind(body.branch_inventory_id)
+    .bind(&body.adjustment_type)
+    .bind(body.quantity)
+    .bind(body.note.trim())
+    .bind(claims.user_id())
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(HttpResponse::Created().json(adj))
+}
+
+// ── GET /inventory/branches/:branch_id/adjustments ───────────
+
+pub async fn list_adjustments(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    branch_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_adjustments", "read").await?;
+    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
+
+    let rows = sqlx::query_as::<_, BranchInventoryAdjustment>(
+        r#"
+        SELECT
+            a.id, a.branch_id, a.branch_inventory_id,
+            oi.name     AS ingredient_name,
+            oi.unit::text AS unit,
+            a.type::text AS adjustment_type,
+            a.quantity, a.note, a.transfer_id, a.adjusted_by,
+            u.name      AS adjusted_by_name,
+            a.created_at
+        FROM branch_inventory_adjustments a
+        JOIN branch_inventory bi ON bi.id = a.branch_inventory_id
+        JOIN org_ingredients oi  ON oi.id = bi.org_ingredient_id
+        JOIN users u             ON u.id  = a.adjusted_by
+        WHERE a.branch_id = $1
+        ORDER BY a.created_at DESC
+        "#,
+    )
+    .bind(*branch_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
+}
+
+// ── POST /inventory/transfers ─────────────────────────────────
+
+pub async fn create_transfer(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateTransferRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_transfers", "create").await?;
+    require_branch_access(pool.get_ref(), &claims, body.source_branch_id).await?;
+
+    if body.quantity <= 0.0 {
+        return Err(AppError::BadRequest("quantity must be greater than 0".into()));
+    }
+    if body.source_branch_id == body.destination_branch_id {
+        return Err(AppError::BadRequest("Source and destination branches must be different".into()));
+    }
+
+    // Both branches must be in same org
+    let src_org: Uuid = sqlx::query_scalar(
+        "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(body.source_branch_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten()
+    .ok_or_else(|| AppError::NotFound("Source branch not found".into()))?;
+
+    let dst_org: Uuid = sqlx::query_scalar(
+        "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(body.destination_branch_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten()
+    .ok_or_else(|| AppError::NotFound("Destination branch not found".into()))?;
+
+    if src_org != dst_org {
+        return Err(AppError::BadRequest("Both branches must belong to the same organization".into()));
+    }
+
+    // Verify ingredient belongs to this org
+    let ing_org: Uuid = sqlx::query_scalar(
+        "SELECT org_id FROM org_ingredients WHERE id = $1 AND deleted_at IS NULL"
+    )
+    .bind(body.org_ingredient_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten()
+    .ok_or_else(|| AppError::NotFound("Ingredient not found in org catalog".into()))?;
+
+    if ing_org != src_org {
+        return Err(AppError::BadRequest("Ingredient does not belong to this organization".into()));
+    }
+
+    // Source branch must have sufficient stock
+    let src_stock: Option<sqlx::types::BigDecimal> = sqlx::query_scalar(
+        "SELECT current_stock FROM branch_inventory WHERE branch_id = $1 AND org_ingredient_id = $2"
+    )
+    .bind(body.source_branch_id)
+    .bind(body.org_ingredient_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .flatten();
+
+    let src_stock = src_stock.ok_or_else(|| AppError::BadRequest(
+        "Source branch does not track this ingredient".into()
+    ))?;
+
+    let qty = sqlx::types::BigDecimal::try_from(body.quantity)
+        .map_err(|_| AppError::BadRequest("Invalid quantity".into()))?;
+
+    if src_stock < qty {
+        return Err(AppError::BadRequest(format!(
+            "Insufficient stock on source branch. Current: {}, Requested: {}", src_stock, qty
+        )));
+    }
+
+    let mut tx = pool.get_ref().begin().await?;
+
+    // Deduct from source
+    let src_bi_id: Uuid = sqlx::query_scalar(
+        "UPDATE branch_inventory SET current_stock = current_stock - $1
+         WHERE branch_id = $2 AND org_ingredient_id = $3
+         RETURNING id"
+    )
+    .bind(body.quantity)
+    .bind(body.source_branch_id)
+    .bind(body.org_ingredient_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Upsert destination — create if not tracked, add stock if exists
+    let dst_bi_id: Uuid = sqlx::query_scalar(
+        r#"
+        INSERT INTO branch_inventory (branch_id, org_ingredient_id, current_stock, reorder_threshold)
+        VALUES ($1, $2, $3, 0)
+        ON CONFLICT (branch_id, org_ingredient_id)
+        DO UPDATE SET current_stock = branch_inventory.current_stock + EXCLUDED.current_stock
+        RETURNING id
+        "#,
+    )
+    .bind(body.destination_branch_id)
+    .bind(body.org_ingredient_id)
+    .bind(body.quantity)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Record transfer
+    let transfer = sqlx::query_as::<_, BranchInventoryTransfer>(
+        r#"
+        INSERT INTO branch_inventory_transfers
+            (org_id, source_branch_id, destination_branch_id, org_ingredient_id, quantity, note, initiated_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING
+            id, org_id,
+            source_branch_id,
+            (SELECT name FROM branches WHERE id = $2) AS source_branch_name,
+            destination_branch_id,
+            (SELECT name FROM branches WHERE id = $3) AS destination_branch_name,
+            org_ingredient_id,
+            (SELECT name     FROM org_ingredients WHERE id = $4) AS ingredient_name,
+            (SELECT unit::text FROM org_ingredients WHERE id = $4) AS unit,
+            quantity, note, initiated_by,
+            (SELECT name FROM users WHERE id = $7) AS initiated_by_name,
+            initiated_at
+        "#,
+    )
+    .bind(src_org)
+    .bind(body.source_branch_id)
+    .bind(body.destination_branch_id)
+    .bind(body.org_ingredient_id)
+    .bind(body.quantity)
+    .bind(&body.note)
+    .bind(claims.user_id())
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Log adjustments on both sides
+    sqlx::query(
+        r#"INSERT INTO branch_inventory_adjustments
+            (branch_id, branch_inventory_id, type, quantity, note, transfer_id, adjusted_by)
+           VALUES ($1, $2, 'transfer_out'::inventory_adjustment_type, $3, $4, $5, $6)"#,
+    )
+    .bind(body.source_branch_id)
+    .bind(src_bi_id)
+    .bind(body.quantity)
+    .bind(format!("Transfer to branch — {}", body.destination_branch_id))
+    .bind(transfer.id)
+    .bind(claims.user_id())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"INSERT INTO branch_inventory_adjustments
+            (branch_id, branch_inventory_id, type, quantity, note, transfer_id, adjusted_by)
+           VALUES ($1, $2, 'transfer_in'::inventory_adjustment_type, $3, $4, $5, $6)"#,
+    )
+    .bind(body.destination_branch_id)
+    .bind(dst_bi_id)
+    .bind(body.quantity)
+    .bind(format!("Transfer from branch — {}", body.source_branch_id))
+    .bind(transfer.id)
+    .bind(claims.user_id())
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(HttpResponse::Created().json(transfer))
+}
+
+// ── GET /inventory/branches/:branch_id/transfers ─────────────
+
+pub async fn list_transfers(
+    req:       HttpRequest,
+    pool:      web::Data<PgPool>,
+    branch_id: web::Path<Uuid>,
+    query:     web::Query<ListTransfersQuery>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_transfers", "read").await?;
+    require_branch_access(pool.get_ref(), &claims, *branch_id).await?;
+
+    let condition = match query.direction.as_deref() {
+        Some("incoming") => "t.destination_branch_id = $1",
+        Some("outgoing") => "t.source_branch_id = $1",
+        _                => "(t.source_branch_id = $1 OR t.destination_branch_id = $1)",
+    };
+
+    let sql = format!(
+        r#"
+        SELECT
+            t.id, t.org_id,
+            t.source_branch_id,
+            sb.name AS source_branch_name,
+            t.destination_branch_id,
+            db.name AS destination_branch_name,
+            t.org_ingredient_id,
+            oi.name      AS ingredient_name,
+            oi.unit::text AS unit,
+            t.quantity, t.note, t.initiated_by,
+            u.name AS initiated_by_name,
+            t.initiated_at
+        FROM branch_inventory_transfers t
+        JOIN branches sb        ON sb.id  = t.source_branch_id
+        JOIN branches db        ON db.id  = t.destination_branch_id
+        JOIN org_ingredients oi ON oi.id  = t.org_ingredient_id
+        JOIN users u            ON u.id   = t.initiated_by
+        WHERE {}
+        ORDER BY t.initiated_at DESC
+        "#,
+        condition
+    );
+
+    let rows = sqlx::query_as::<_, BranchInventoryTransfer>(&sql)
+        .bind(*branch_id)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -243,40 +833,21 @@ fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
 
-async fn fetch_item_or_404(pool: &PgPool, item_id: Uuid) -> Result<InventoryItem, AppError> {
-    sqlx::query_as::<_, InventoryItem>(
-        r#"
-        SELECT id, branch_id, name, unit::text, current_stock,
-               reorder_threshold, cost_per_unit, is_active,
-               created_at, updated_at
-        FROM inventory_items
-        WHERE id = $1 AND deleted_at IS NULL
-        "#,
-    )
-    .bind(item_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Inventory item not found".into()))
+fn require_org_access(claims: &Claims, org_id: Uuid) -> Result<(), AppError> {
+    if claims.role == UserRole::SuperAdmin { return Ok(()); }
+    if claims.org_id() != Some(org_id) {
+        return Err(AppError::Forbidden("Access denied to this org".into()));
+    }
+    Ok(())
 }
 
-/// Ensure the caller has access to the branch:
-/// - super_admin → always allowed
-/// - org_admin   → must belong to same org as branch
-/// - branch_manager / teller → must be assigned to that branch
 async fn require_branch_access(
     pool:      &PgPool,
     claims:    &Claims,
     branch_id: Uuid,
 ) -> Result<(), AppError> {
-    use crate::models::UserRole;
+    if claims.role == UserRole::SuperAdmin { return Ok(()); }
 
-    if claims.role == UserRole::SuperAdmin {
-        return Ok(());
-    }
-
-    let caller_org: Option<Uuid> = claims.org_id();
-
-    // Fetch branch org
     let branch_org: Option<Uuid> = sqlx::query_scalar(
         "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
     )
@@ -285,18 +856,14 @@ async fn require_branch_access(
     .await?
     .flatten();
 
-    let branch_org = branch_org
-        .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+    let branch_org = branch_org.ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
 
-    if caller_org != Some(branch_org) {
+    if claims.org_id() != Some(branch_org) {
         return Err(AppError::Forbidden("Branch belongs to a different org".into()));
     }
 
-    if claims.role == UserRole::OrgAdmin {
-        return Ok(());
-    }
+    if claims.role == UserRole::OrgAdmin { return Ok(()); }
 
-    // branch_manager / teller must be assigned
     let assigned: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM user_branch_assignments WHERE user_id = $1 AND branch_id = $2)"
     )
@@ -315,8 +882,6 @@ async fn require_branch_access(
 fn validate_unit(unit: &str) -> Result<(), AppError> {
     match unit {
         "g" | "kg" | "ml" | "l" | "pcs" => Ok(()),
-        _ => Err(AppError::BadRequest(
-            "Unit must be one of: g, kg, ml, l, pcs".into(),
-        )),
+        _ => Err(AppError::BadRequest("Unit must be one of: g, kg, ml, l, pcs".into())),
     }
 }

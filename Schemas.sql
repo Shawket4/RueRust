@@ -1,387 +1,2080 @@
--- ============================================================
--- COFFEE SHOP POS — PostgreSQL Schema
--- Run this on your Hostinger VPS as the DB owner user
--- ============================================================
+--
+-- PostgreSQL database dump
+--
 
--- EXTENSIONS
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+\restrict if3dmUN7qWpS2XzIcd9zxRcNU2mre2DrVyu7uugj1dROYG7f8TFqFevZTdDtSJx
 
--- ============================================================
--- ENUMS
--- ============================================================
-CREATE TYPE user_role       AS ENUM ('super_admin', 'org_admin', 'branch_manager', 'teller');
-CREATE TYPE shift_status    AS ENUM ('open', 'closed', 'force_closed');
-CREATE TYPE order_status    AS ENUM ('pending', 'preparing', 'ready', 'completed', 'voided', 'refunded');
-CREATE TYPE payment_method  AS ENUM ('cash', 'card', 'digital_wallet', 'mixed');
-CREATE TYPE item_size       AS ENUM ('small', 'medium', 'large', 'extra_large', 'one_size');
-CREATE TYPE addon_selection AS ENUM ('single', 'multi');
-CREATE TYPE discount_type   AS ENUM ('percentage', 'fixed');
-CREATE TYPE void_reason     AS ENUM ('customer_request', 'wrong_order', 'quality_issue', 'other');
+-- Dumped from database version 17.9 (Debian 17.9-0+deb13u1)
+-- Dumped by pg_dump version 17.9 (Debian 17.9-0+deb13u1)
 
--- ============================================================
--- 1. ORGANIZATIONS
--- ============================================================
-CREATE TABLE organizations (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    name           TEXT        NOT NULL,
-    slug           TEXT        NOT NULL UNIQUE,
-    logo_url       TEXT,
-    currency_code  CHAR(3)     NOT NULL DEFAULT 'EGP',
-    tax_rate       NUMERIC(5,4) NOT NULL DEFAULT 0.14,
-    receipt_footer TEXT,
-    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at     TIMESTAMPTZ
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: pg_trgm; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pg_trgm; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pg_trgm IS 'text similarity measurement and index searching based on trigrams';
+
+
+--
+-- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
+
+
+--
+-- Name: addon_selection; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.addon_selection AS ENUM (
+    'single',
+    'multi'
 );
 
--- ============================================================
--- 2. BRANCHES
--- ============================================================
-CREATE TABLE branches (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id       UUID        NOT NULL REFERENCES organizations(id),
-    name         TEXT        NOT NULL,
-    address      TEXT,
-    phone        TEXT,
-    timezone     TEXT        NOT NULL DEFAULT 'Africa/Cairo',
-    printer_ip   INET,
-    printer_port INTEGER              DEFAULT 9100,
-    is_active    BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at   TIMESTAMPTZ,
 
-    UNIQUE (org_id, name)
+--
+-- Name: discount_type; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.discount_type AS ENUM (
+    'percentage',
+    'fixed'
 );
 
--- ============================================================
--- 3. USERS
--- ============================================================
-CREATE TABLE users (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id         UUID        NOT NULL REFERENCES organizations(id),
-    name           TEXT        NOT NULL,
-    email          TEXT        UNIQUE,
-    phone          TEXT,
-    password_hash  TEXT,
-    pin_hash       TEXT,
-    role           user_role   NOT NULL,
-    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    last_login_at  TIMESTAMPTZ,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at     TIMESTAMPTZ,
 
-    CONSTRAINT chk_login_method CHECK (
-        password_hash IS NOT NULL OR pin_hash IS NOT NULL
-    )
+--
+-- Name: inventory_adjustment_type; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.inventory_adjustment_type AS ENUM (
+    'add',
+    'remove',
+    'transfer_out',
+    'transfer_in'
 );
 
-CREATE TABLE user_branch_assignments (
-    user_id     UUID        NOT NULL REFERENCES users(id),
-    branch_id   UUID        NOT NULL REFERENCES branches(id),
-    assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    assigned_by UUID        REFERENCES users(id),
 
-    PRIMARY KEY (user_id, branch_id)
+--
+-- Name: inventory_unit; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.inventory_unit AS ENUM (
+    'g',
+    'kg',
+    'ml',
+    'l',
+    'pcs'
 );
 
--- ============================================================
--- 4. SHIFTS
--- ============================================================
-CREATE TABLE shifts (
-    id                     UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    branch_id              UUID         NOT NULL REFERENCES branches(id),
-    teller_id              UUID         NOT NULL REFERENCES users(id),
-    status                 shift_status NOT NULL DEFAULT 'open',
-    opening_cash           INTEGER      NOT NULL DEFAULT 0,
-    closing_cash_declared  INTEGER,
-    closing_cash_system    INTEGER,
-    cash_discrepancy       INTEGER      GENERATED ALWAYS AS (
-                               closing_cash_declared - closing_cash_system
-                           ) STORED,
-    opened_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    closed_at              TIMESTAMPTZ,
-    closed_by              UUID         REFERENCES users(id),
-    notes                  TEXT,
-    created_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+
+--
+-- Name: item_size; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.item_size AS ENUM (
+    'small',
+    'medium',
+    'large',
+    'extra_large',
+    'one_size'
 );
 
--- Only one open shift per branch at a time
-CREATE UNIQUE INDEX idx_shifts_one_open_per_branch
-    ON shifts (branch_id)
-    WHERE status = 'open';
 
--- ============================================================
--- 5. CATEGORIES
--- ============================================================
-CREATE TABLE categories (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id        UUID        NOT NULL REFERENCES organizations(id),
-    name          TEXT        NOT NULL,
-    image_url     TEXT,
-    display_order INTEGER     NOT NULL DEFAULT 0,
-    is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at    TIMESTAMPTZ,
+--
+-- Name: order_status; Type: TYPE; Schema: public; Owner: -
+--
 
-    UNIQUE (org_id, name)
+CREATE TYPE public.order_status AS ENUM (
+    'pending',
+    'preparing',
+    'ready',
+    'completed',
+    'voided',
+    'refunded'
 );
 
--- ============================================================
--- 6. MENU ITEMS (drinks + addons in one table)
--- ============================================================
-CREATE TABLE menu_items (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id        UUID        NOT NULL REFERENCES organizations(id),
-    category_id   UUID        REFERENCES categories(id),  -- nullable for addons
-    name          TEXT        NOT NULL,
-    description   TEXT,
-    image_url     TEXT,
-    is_addon      BOOLEAN     NOT NULL DEFAULT FALSE,
-    base_price    INTEGER     NOT NULL DEFAULT 0,          -- piastres
-    addon_type    TEXT,                                    -- Shot | Milk | Sauce | Syrup | Topping
-    is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
-    display_order INTEGER     NOT NULL DEFAULT 0,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at    TIMESTAMPTZ,
 
-    -- addons don't need a category; drinks do
-    CONSTRAINT chk_drink_has_category CHECK (
-        is_addon = TRUE OR category_id IS NOT NULL
-    )
+--
+-- Name: payment_method; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.payment_method AS ENUM (
+    'cash',
+    'card',
+    'digital_wallet',
+    'mixed',
+    'talabat_online',
+    'talabat_cash'
 );
 
--- ============================================================
--- 7. ITEM SIZES
--- Per-drink size variants with absolute prices
--- ============================================================
-CREATE TABLE item_sizes (
-    id             UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
-    menu_item_id   UUID      NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
-    label          item_size NOT NULL,
-    price_override INTEGER   NOT NULL,   -- absolute price for this size, in piastres
-    display_order  INTEGER   NOT NULL DEFAULT 0,
-    is_active      BOOLEAN   NOT NULL DEFAULT TRUE,
 
-    UNIQUE (menu_item_id, label)
+--
+-- Name: permission_action; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.permission_action AS ENUM (
+    'create',
+    'read',
+    'update',
+    'delete'
 );
 
--- ============================================================
--- 8. ADDON GROUPS
--- e.g. "Milk Type" (single, required), "Extras" (multi, optional)
--- ============================================================
-CREATE TABLE addon_groups (
-    id             UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id         UUID           NOT NULL REFERENCES organizations(id),
-    name           TEXT           NOT NULL,
-    selection_type addon_selection NOT NULL DEFAULT 'multi',
-    is_required    BOOLEAN        NOT NULL DEFAULT FALSE,
-    min_selections INTEGER        NOT NULL DEFAULT 0,
-    display_order  INTEGER        NOT NULL DEFAULT 0,
-    is_active      BOOLEAN        NOT NULL DEFAULT TRUE,
-    created_at     TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+
+--
+-- Name: permission_resource; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.permission_resource AS ENUM (
+    'orgs',
+    'branches',
+    'users',
+    'categories',
+    'menu_items',
+    'addon_groups',
+    'shifts',
+    'orders',
+    'order_items',
+    'payments',
+    'permissions',
+    'addon_items',
+    'inventory',
+    'inventory_adjustments',
+    'inventory_transfers',
+    'recipes',
+    'soft_serve_batches',
+    'shift_counts'
 );
 
--- ============================================================
--- 9. ADDON GROUP ITEMS
--- Which addon menu_items belong to which group
--- ============================================================
-CREATE TABLE addon_group_items (
-    addon_group_id UUID    NOT NULL REFERENCES addon_groups(id) ON DELETE CASCADE,
-    addon_item_id  UUID    NOT NULL REFERENCES menu_items(id)   ON DELETE CASCADE,
-    display_order  INTEGER NOT NULL DEFAULT 0,
-    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
 
-    PRIMARY KEY (addon_group_id, addon_item_id),
+--
+-- Name: printer_brand; Type: TYPE; Schema: public; Owner: -
+--
 
-    -- enforce only addon items can be added to a group (checked via trigger below)
-    CONSTRAINT chk_is_addon CHECK (TRUE) -- see trigger
+CREATE TYPE public.printer_brand AS ENUM (
+    'star',
+    'epson'
 );
 
--- Trigger to enforce that only is_addon=TRUE items go into addon_group_items
-CREATE OR REPLACE FUNCTION check_addon_group_item()
-RETURNS TRIGGER AS $$
+
+--
+-- Name: shift_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.shift_status AS ENUM (
+    'open',
+    'closed',
+    'force_closed'
+);
+
+
+--
+-- Name: transfer_status; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.transfer_status AS ENUM (
+    'pending',
+    'completed',
+    'partial',
+    'rejected'
+);
+
+
+--
+-- Name: user_role; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.user_role AS ENUM (
+    'super_admin',
+    'org_admin',
+    'branch_manager',
+    'teller'
+);
+
+
+--
+-- Name: void_reason; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE public.void_reason AS ENUM (
+    'customer_request',
+    'wrong_order',
+    'quality_issue',
+    'other'
+);
+
+
+--
+-- Name: check_addon_group_item(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.check_addon_group_item() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
 BEGIN
     IF NOT (SELECT is_addon FROM menu_items WHERE id = NEW.addon_item_id) THEN
         RAISE EXCEPTION 'Only addon items can be added to an addon group';
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
-CREATE TRIGGER trg_check_addon_group_item
-    BEFORE INSERT OR UPDATE ON addon_group_items
-    FOR EACH ROW EXECUTE FUNCTION check_addon_group_item();
 
--- ============================================================
--- 10. DRINK ADDON GROUPS
--- Which addon groups are attached to which drink
--- ============================================================
-CREATE TABLE drink_addon_groups (
-    menu_item_id   UUID    NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
-    addon_group_id UUID    NOT NULL REFERENCES addon_groups(id) ON DELETE CASCADE,
-    display_order  INTEGER NOT NULL DEFAULT 0,
+--
+-- Name: check_drink_addon_group(); Type: FUNCTION; Schema: public; Owner: -
+--
 
-    PRIMARY KEY (menu_item_id, addon_group_id)
-);
-
--- Trigger to enforce that only is_addon=FALSE items can have addon groups
-CREATE OR REPLACE FUNCTION check_drink_addon_group()
-RETURNS TRIGGER AS $$
+CREATE FUNCTION public.check_drink_addon_group() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
 BEGIN
     IF (SELECT is_addon FROM menu_items WHERE id = NEW.menu_item_id) THEN
         RAISE EXCEPTION 'Only drink items can be linked to addon groups';
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
-CREATE TRIGGER trg_check_drink_addon_group
-    BEFORE INSERT OR UPDATE ON drink_addon_groups
-    FOR EACH ROW EXECUTE FUNCTION check_drink_addon_group();
 
--- ============================================================
--- 11. BRANCH MENU OVERRIDES
--- Per-branch price or availability overrides
--- ============================================================
-CREATE TABLE branch_menu_overrides (
-    branch_id      UUID        NOT NULL REFERENCES branches(id)    ON DELETE CASCADE,
-    menu_item_id   UUID        NOT NULL REFERENCES menu_items(id)  ON DELETE CASCADE,
-    price_override INTEGER,                -- NULL = use global price
-    is_available   BOOLEAN     NOT NULL DEFAULT TRUE,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--
+-- Name: set_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+--
 
-    PRIMARY KEY (branch_id, menu_item_id)
-);
-
--- ============================================================
--- 12. ORDERS
--- ============================================================
-CREATE TABLE orders (
-    id              UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
-    branch_id       UUID           NOT NULL REFERENCES branches(id),
-    shift_id        UUID           NOT NULL REFERENCES shifts(id),
-    teller_id       UUID           NOT NULL REFERENCES users(id),
-    order_number    INTEGER        NOT NULL,           -- sequential per shift
-    status          order_status   NOT NULL DEFAULT 'pending',
-    payment_method  payment_method NOT NULL,
-    subtotal        INTEGER        NOT NULL DEFAULT 0, -- before tax & discount
-    discount_type   discount_type,
-    discount_value  INTEGER        NOT NULL DEFAULT 0,
-    discount_amount INTEGER        NOT NULL DEFAULT 0, -- computed & stored
-    tax_amount      INTEGER        NOT NULL DEFAULT 0, -- computed & stored
-    total_amount    INTEGER        NOT NULL DEFAULT 0, -- final
-    customer_name   TEXT,
-    notes           TEXT,
-    voided_at       TIMESTAMPTZ,
-    void_reason     void_reason,
-    voided_by       UUID           REFERENCES users(id),
-    created_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-
-    UNIQUE (shift_id, order_number)
-);
-
--- ============================================================
--- 13. ORDER ITEMS
--- ============================================================
-CREATE TABLE order_items (
-    id           UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_id     UUID    NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    menu_item_id UUID    NOT NULL REFERENCES menu_items(id),
-    item_name    TEXT    NOT NULL,  -- snapshot
-    size_label   TEXT,              -- snapshot
-    unit_price   INTEGER NOT NULL,  -- snapshot
-    quantity     INTEGER NOT NULL DEFAULT 1,
-    line_total   INTEGER NOT NULL,  -- (unit_price * quantity) + addons total
-    notes        TEXT
-);
-
--- ============================================================
--- 14. ORDER ITEM ADDONS
--- ============================================================
-CREATE TABLE order_item_addons (
-    id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_item_id UUID    NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
-    addon_item_id UUID    NOT NULL REFERENCES menu_items(id),
-    addon_name    TEXT    NOT NULL,  -- snapshot
-    unit_price    INTEGER NOT NULL,  -- snapshot
-    quantity      INTEGER NOT NULL DEFAULT 1,
-    line_total    INTEGER NOT NULL   -- unit_price * quantity
-);
-
--- ============================================================
--- 15. ORDER PAYMENTS
--- Supports mixed payments (part cash + part card)
--- ============================================================
-CREATE TABLE order_payments (
-    id         UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_id   UUID           NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-    method     payment_method NOT NULL,
-    amount     INTEGER        NOT NULL,
-    reference  TEXT,           -- card terminal ref, wallet tx ID
-    created_at TIMESTAMPTZ    NOT NULL DEFAULT NOW()
-);
-
--- ============================================================
--- INDEXES
--- ============================================================
-
--- Branches
-CREATE INDEX idx_branches_org      ON branches (org_id);
-
--- Users
-CREATE INDEX idx_users_org         ON users (org_id);
-CREATE INDEX idx_users_email       ON users (email) WHERE email IS NOT NULL;
-
--- Shifts
-CREATE INDEX idx_shifts_branch     ON shifts (branch_id);
-CREATE INDEX idx_shifts_teller     ON shifts (teller_id);
-CREATE INDEX idx_shifts_opened_at  ON shifts (opened_at);
-
--- Menu items
-CREATE INDEX idx_menu_items_org       ON menu_items (org_id);
-CREATE INDEX idx_menu_items_category  ON menu_items (category_id);
-CREATE INDEX idx_menu_items_is_addon  ON menu_items (is_addon);
-CREATE INDEX idx_menu_items_name_trgm ON menu_items USING gin (name gin_trgm_ops);
-
--- Orders
-CREATE INDEX idx_orders_branch     ON orders (branch_id);
-CREATE INDEX idx_orders_shift      ON orders (shift_id);
-CREATE INDEX idx_orders_teller     ON orders (teller_id);
-CREATE INDEX idx_orders_status     ON orders (status);
-CREATE INDEX idx_orders_created_at ON orders (created_at);
-
--- Order items
-CREATE INDEX idx_order_items_order    ON order_items (order_id);
-CREATE INDEX idx_order_item_addons_oi ON order_item_addons (order_item_id);
-
--- Payments
-CREATE INDEX idx_order_payments_order ON order_payments (order_id);
-
--- ============================================================
--- updated_at AUTO-UPDATE TRIGGER
--- ============================================================
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
+CREATE FUNCTION public.set_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
-CREATE TRIGGER trg_organizations_updated_at  BEFORE UPDATE ON organizations  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_branches_updated_at       BEFORE UPDATE ON branches       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_users_updated_at          BEFORE UPDATE ON users          FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_shifts_updated_at         BEFORE UPDATE ON shifts         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_categories_updated_at     BEFORE UPDATE ON categories     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_menu_items_updated_at     BEFORE UPDATE ON menu_items     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_addon_groups_updated_at   BEFORE UPDATE ON addon_groups   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_orders_updated_at         BEFORE UPDATE ON orders         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: addon_item_ingredients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.addon_item_ingredients (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    addon_item_id uuid NOT NULL,
+    inventory_item_id uuid,
+    quantity_used numeric(12,3) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    ingredient_name text NOT NULL,
+    ingredient_unit text NOT NULL
+);
+
+
+--
+-- Name: addon_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.addon_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    name text NOT NULL,
+    type text NOT NULL,
+    default_price integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    display_order integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT addon_items_type_check CHECK ((type = ANY (ARRAY['coffee_type'::text, 'milk_type'::text, 'extra'::text])))
+);
+
+
+--
+-- Name: branch_menu_overrides; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.branch_menu_overrides (
+    branch_id uuid NOT NULL,
+    menu_item_id uuid NOT NULL,
+    price_override integer,
+    is_available boolean DEFAULT true NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: branches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.branches (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    name text NOT NULL,
+    address text,
+    phone text,
+    timezone text DEFAULT 'Africa/Cairo'::text NOT NULL,
+    printer_ip inet,
+    printer_port integer DEFAULT 9100,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone,
+    printer_brand public.printer_brand
+);
+
+
+--
+-- Name: categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.categories (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    name text NOT NULL,
+    image_url text,
+    display_order integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone
+);
+
+
+--
+-- Name: discounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.discounts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    name text NOT NULL,
+    type public.discount_type NOT NULL,
+    value integer NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: drink_option_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.drink_option_groups (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    menu_item_id uuid NOT NULL,
+    type text NOT NULL,
+    selection_type public.addon_selection DEFAULT 'single'::public.addon_selection NOT NULL,
+    is_required boolean DEFAULT false NOT NULL,
+    min_selections integer DEFAULT 0 NOT NULL,
+    display_order integer DEFAULT 0 NOT NULL,
+    CONSTRAINT drink_option_groups_type_check CHECK ((type = ANY (ARRAY['coffee_type'::text, 'milk_type'::text, 'extra'::text])))
+);
+
+
+--
+-- Name: drink_option_ingredient_overrides; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.drink_option_ingredient_overrides (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    drink_option_item_id uuid NOT NULL,
+    size_label public.item_size,
+    inventory_item_id uuid,
+    quantity_used numeric(12,3) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    ingredient_name text NOT NULL,
+    ingredient_unit text NOT NULL
+);
+
+
+--
+-- Name: drink_option_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.drink_option_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    group_id uuid NOT NULL,
+    addon_item_id uuid NOT NULL,
+    price_override integer,
+    display_order integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL
+);
+
+
+--
+-- Name: inventory_adjustments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inventory_adjustments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    type public.inventory_adjustment_type NOT NULL,
+    quantity numeric(12,3) NOT NULL,
+    note text,
+    transfer_id uuid,
+    adjusted_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: inventory_deduction_logs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inventory_deduction_logs (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    order_id uuid NOT NULL,
+    order_item_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    quantity_deducted numeric(12,3) NOT NULL,
+    source text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: inventory_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inventory_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    name text NOT NULL,
+    unit public.inventory_unit NOT NULL,
+    current_stock numeric(12,3) DEFAULT 0 NOT NULL,
+    reorder_threshold numeric(12,3) DEFAULT 0 NOT NULL,
+    cost_per_unit integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone
+);
+
+
+--
+-- Name: inventory_transfers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inventory_transfers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    source_branch_id uuid NOT NULL,
+    destination_branch_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    quantity_sent numeric(12,3) NOT NULL,
+    quantity_confirmed numeric(12,3),
+    status public.transfer_status DEFAULT 'pending'::public.transfer_status NOT NULL,
+    note text,
+    initiated_by uuid NOT NULL,
+    confirmed_by uuid,
+    initiated_at timestamp with time zone DEFAULT now() NOT NULL,
+    confirmed_at timestamp with time zone,
+    rejection_reason text,
+    CONSTRAINT chk_transfer_different_branches CHECK ((source_branch_id <> destination_branch_id))
+);
+
+
+--
+-- Name: item_sizes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.item_sizes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    menu_item_id uuid NOT NULL,
+    label public.item_size NOT NULL,
+    price_override integer NOT NULL,
+    display_order integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL
+);
+
+
+--
+-- Name: menu_item_recipes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.menu_item_recipes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    menu_item_id uuid NOT NULL,
+    size_label public.item_size NOT NULL,
+    inventory_item_id uuid,
+    quantity_used numeric(12,3) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    ingredient_name text NOT NULL,
+    ingredient_unit text NOT NULL
+);
+
+
+--
+-- Name: menu_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.menu_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    category_id uuid,
+    name text NOT NULL,
+    description text,
+    image_url text,
+    base_price integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    display_order integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone
+);
+
+
+--
+-- Name: order_item_addons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_item_addons (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    order_item_id uuid NOT NULL,
+    addon_item_id uuid NOT NULL,
+    addon_name text NOT NULL,
+    unit_price integer NOT NULL,
+    quantity integer DEFAULT 1 NOT NULL,
+    line_total integer NOT NULL
+);
+
+
+--
+-- Name: order_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_items (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    order_id uuid NOT NULL,
+    menu_item_id uuid NOT NULL,
+    item_name text NOT NULL,
+    size_label text,
+    unit_price integer NOT NULL,
+    quantity integer DEFAULT 1 NOT NULL,
+    line_total integer NOT NULL,
+    notes text
+);
+
+
+--
+-- Name: order_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.order_payments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    order_id uuid NOT NULL,
+    method public.payment_method NOT NULL,
+    amount integer NOT NULL,
+    reference text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: orders; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.orders (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    shift_id uuid NOT NULL,
+    teller_id uuid NOT NULL,
+    order_number integer NOT NULL,
+    status public.order_status DEFAULT 'pending'::public.order_status NOT NULL,
+    payment_method public.payment_method NOT NULL,
+    subtotal integer DEFAULT 0 NOT NULL,
+    discount_type public.discount_type,
+    discount_value integer DEFAULT 0 NOT NULL,
+    discount_amount integer DEFAULT 0 NOT NULL,
+    tax_amount integer DEFAULT 0 NOT NULL,
+    total_amount integer DEFAULT 0 NOT NULL,
+    customer_name text,
+    notes text,
+    voided_at timestamp with time zone,
+    void_reason public.void_reason,
+    voided_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    idempotency_key uuid,
+    amount_tendered integer,
+    change_given integer,
+    tip_amount integer DEFAULT 0,
+    discount_id uuid,
+    tip_payment_method text
+);
+
+
+--
+-- Name: organizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.organizations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    slug text NOT NULL,
+    logo_url text,
+    currency_code character(3) DEFAULT 'EGP'::bpchar NOT NULL,
+    tax_rate numeric(5,4) DEFAULT 0.14 NOT NULL,
+    receipt_footer text,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone
+);
+
+
+--
+-- Name: permissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.permissions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    resource public.permission_resource NOT NULL,
+    action public.permission_action NOT NULL,
+    granted boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: role_permissions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.role_permissions (
+    role public.user_role NOT NULL,
+    resource public.permission_resource NOT NULL,
+    action public.permission_action NOT NULL,
+    granted boolean DEFAULT true NOT NULL
+);
+
+
+--
+-- Name: shift_cash_movements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shift_cash_movements (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    shift_id uuid NOT NULL,
+    amount integer NOT NULL,
+    note text NOT NULL,
+    moved_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: shift_inventory_counts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shift_inventory_counts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    shift_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    expected_stock numeric(12,3) NOT NULL,
+    actual_stock numeric(12,3) NOT NULL,
+    discrepancy numeric(12,3) GENERATED ALWAYS AS ((expected_stock - actual_stock)) STORED,
+    is_suspicious boolean DEFAULT false NOT NULL,
+    note text,
+    counted_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: shift_inventory_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shift_inventory_snapshots (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    shift_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    stock_at_open numeric(12,3) NOT NULL
+);
+
+
+--
+-- Name: shifts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shifts (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    teller_id uuid NOT NULL,
+    status public.shift_status DEFAULT 'open'::public.shift_status NOT NULL,
+    opening_cash integer DEFAULT 0 NOT NULL,
+    closing_cash_declared integer,
+    closing_cash_system integer,
+    cash_discrepancy integer GENERATED ALWAYS AS ((closing_cash_declared - closing_cash_system)) STORED,
+    opened_at timestamp with time zone DEFAULT now() NOT NULL,
+    closed_at timestamp with time zone,
+    closed_by uuid,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    opening_cash_original integer,
+    opening_cash_was_edited boolean DEFAULT false NOT NULL,
+    opening_cash_edit_reason text,
+    force_closed_by uuid,
+    force_closed_at timestamp with time zone,
+    force_close_reason text
+);
+
+
+--
+-- Name: soft_serve_batch_ingredients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.soft_serve_batch_ingredients (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    batch_id uuid NOT NULL,
+    inventory_item_id uuid NOT NULL,
+    quantity_used numeric(12,3) NOT NULL
+);
+
+
+--
+-- Name: soft_serve_batches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.soft_serve_batches (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    menu_item_id uuid NOT NULL,
+    small_serves integer NOT NULL,
+    large_serves integer NOT NULL,
+    logged_by uuid NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    large_ratio numeric DEFAULT 1.5 NOT NULL,
+    total_units numeric DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: soft_serve_serve_pools; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.soft_serve_serve_pools (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    menu_item_id uuid NOT NULL,
+    low_stock_flag boolean DEFAULT false NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    total_units numeric DEFAULT 0 NOT NULL,
+    large_ratio numeric DEFAULT 1.5 NOT NULL
+);
+
+
+--
+-- Name: user_branch_assignments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_branch_assignments (
+    user_id uuid NOT NULL,
+    branch_id uuid NOT NULL,
+    assigned_at timestamp with time zone DEFAULT now() NOT NULL,
+    assigned_by uuid
+);
+
+
+--
+-- Name: users; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.users (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid,
+    name text NOT NULL,
+    email text,
+    phone text,
+    password_hash text,
+    pin_hash text,
+    role public.user_role NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    last_login_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone,
+    CONSTRAINT chk_login_method CHECK (((password_hash IS NOT NULL) OR (pin_hash IS NOT NULL))),
+    CONSTRAINT chk_super_admin_no_org CHECK ((((role = 'super_admin'::public.user_role) AND (org_id IS NULL)) OR ((role <> 'super_admin'::public.user_role) AND (org_id IS NOT NULL))))
+);
+
+
+--
+-- Name: addon_item_ingredients addon_item_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_item_ingredients
+    ADD CONSTRAINT addon_item_ingredients_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: addon_item_ingredients addon_item_ingredients_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_item_ingredients
+    ADD CONSTRAINT addon_item_ingredients_unique UNIQUE (addon_item_id, ingredient_name);
+
+
+--
+-- Name: addon_items addon_items_org_id_name_type_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_items
+    ADD CONSTRAINT addon_items_org_id_name_type_key UNIQUE (org_id, name, type);
+
+
+--
+-- Name: addon_items addon_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_items
+    ADD CONSTRAINT addon_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: branch_menu_overrides branch_menu_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_menu_overrides
+    ADD CONSTRAINT branch_menu_overrides_pkey PRIMARY KEY (branch_id, menu_item_id);
+
+
+--
+-- Name: branches branches_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branches
+    ADD CONSTRAINT branches_org_id_name_key UNIQUE (org_id, name);
+
+
+--
+-- Name: branches branches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branches
+    ADD CONSTRAINT branches_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: categories categories_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_org_id_name_key UNIQUE (org_id, name);
+
+
+--
+-- Name: categories categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: discounts discounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.discounts
+    ADD CONSTRAINT discounts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drink_option_groups drink_option_groups_menu_item_id_type_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_groups
+    ADD CONSTRAINT drink_option_groups_menu_item_id_type_key UNIQUE (menu_item_id, type);
+
+
+--
+-- Name: drink_option_groups drink_option_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_groups
+    ADD CONSTRAINT drink_option_groups_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_ingredient_overrides
+    ADD CONSTRAINT drink_option_ingredient_overrides_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drink_option_items drink_option_items_group_id_addon_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_items
+    ADD CONSTRAINT drink_option_items_group_id_addon_item_id_key UNIQUE (group_id, addon_item_id);
+
+
+--
+-- Name: drink_option_items drink_option_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_items
+    ADD CONSTRAINT drink_option_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: drink_option_ingredient_overrides drink_option_overrides_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_ingredient_overrides
+    ADD CONSTRAINT drink_option_overrides_unique UNIQUE (drink_option_item_id, size_label, ingredient_name);
+
+
+--
+-- Name: inventory_adjustments inventory_adjustments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_adjustments
+    ADD CONSTRAINT inventory_adjustments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inventory_deduction_logs inventory_deduction_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_deduction_logs
+    ADD CONSTRAINT inventory_deduction_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inventory_items inventory_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_items
+    ADD CONSTRAINT inventory_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: inventory_transfers inventory_transfers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: item_sizes item_sizes_menu_item_id_label_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.item_sizes
+    ADD CONSTRAINT item_sizes_menu_item_id_label_key UNIQUE (menu_item_id, label);
+
+
+--
+-- Name: item_sizes item_sizes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.item_sizes
+    ADD CONSTRAINT item_sizes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_item_recipes
+    ADD CONSTRAINT menu_item_recipes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_item_recipes
+    ADD CONSTRAINT menu_item_recipes_unique UNIQUE (menu_item_id, size_label, ingredient_name);
+
+
+--
+-- Name: menu_items menu_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_items
+    ADD CONSTRAINT menu_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_item_addons order_item_addons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_item_addons
+    ADD CONSTRAINT order_item_addons_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_items order_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_items
+    ADD CONSTRAINT order_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_payments order_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_payments
+    ADD CONSTRAINT order_payments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: orders orders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: orders orders_shift_id_order_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_shift_id_order_number_key UNIQUE (shift_id, order_number);
+
+
+--
+-- Name: organizations organizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organizations
+    ADD CONSTRAINT organizations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: organizations organizations_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organizations
+    ADD CONSTRAINT organizations_slug_key UNIQUE (slug);
+
+
+--
+-- Name: permissions permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.permissions
+    ADD CONSTRAINT permissions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: permissions permissions_user_id_resource_action_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.permissions
+    ADD CONSTRAINT permissions_user_id_resource_action_key UNIQUE (user_id, resource, action);
+
+
+--
+-- Name: role_permissions role_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permissions
+    ADD CONSTRAINT role_permissions_pkey PRIMARY KEY (role, resource, action);
+
+
+--
+-- Name: shift_cash_movements shift_cash_movements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_cash_movements
+    ADD CONSTRAINT shift_cash_movements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: shift_inventory_counts shift_inventory_counts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: shift_inventory_counts shift_inventory_counts_shift_id_inventory_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_shift_id_inventory_item_id_key UNIQUE (shift_id, inventory_item_id);
+
+
+--
+-- Name: shift_inventory_snapshots shift_inventory_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_snapshots
+    ADD CONSTRAINT shift_inventory_snapshots_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: shift_inventory_snapshots shift_inventory_snapshots_shift_id_inventory_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_snapshots
+    ADD CONSTRAINT shift_inventory_snapshots_shift_id_inventory_item_id_key UNIQUE (shift_id, inventory_item_id);
+
+
+--
+-- Name: shifts shifts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batch_ingredients
+    ADD CONSTRAINT soft_serve_batch_ingredients_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: soft_serve_batches soft_serve_batches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batches
+    ADD CONSTRAINT soft_serve_batches_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: soft_serve_serve_pools soft_serve_serve_pools_branch_id_menu_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_serve_pools
+    ADD CONSTRAINT soft_serve_serve_pools_branch_id_menu_item_id_key UNIQUE (branch_id, menu_item_id);
+
+
+--
+-- Name: soft_serve_serve_pools soft_serve_serve_pools_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_serve_pools
+    ADD CONSTRAINT soft_serve_serve_pools_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_branch_assignments user_branch_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_branch_assignments
+    ADD CONSTRAINT user_branch_assignments_pkey PRIMARY KEY (user_id, branch_id);
+
+
+--
+-- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_email_key UNIQUE (email);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_branches_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_branches_org ON public.branches USING btree (org_id);
+
+
+--
+-- Name: idx_discounts_org_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_discounts_org_id ON public.discounts USING btree (org_id);
+
+
+--
+-- Name: idx_inventory_adjustments_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_adjustments_branch ON public.inventory_adjustments USING btree (branch_id);
+
+
+--
+-- Name: idx_inventory_adjustments_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_adjustments_item ON public.inventory_adjustments USING btree (inventory_item_id);
+
+
+--
+-- Name: idx_inventory_deduction_logs_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_deduction_logs_branch ON public.inventory_deduction_logs USING btree (branch_id);
+
+
+--
+-- Name: idx_inventory_deduction_logs_item; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_deduction_logs_item ON public.inventory_deduction_logs USING btree (inventory_item_id);
+
+
+--
+-- Name: idx_inventory_deduction_logs_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_deduction_logs_order ON public.inventory_deduction_logs USING btree (order_id);
+
+
+--
+-- Name: idx_inventory_items_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_items_branch ON public.inventory_items USING btree (branch_id);
+
+
+--
+-- Name: idx_inventory_transfers_destination; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_transfers_destination ON public.inventory_transfers USING btree (destination_branch_id);
+
+
+--
+-- Name: idx_inventory_transfers_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_transfers_source ON public.inventory_transfers USING btree (source_branch_id);
+
+
+--
+-- Name: idx_inventory_transfers_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_inventory_transfers_status ON public.inventory_transfers USING btree (status);
+
+
+--
+-- Name: idx_menu_item_recipes_item_size; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_menu_item_recipes_item_size ON public.menu_item_recipes USING btree (menu_item_id, size_label);
+
+
+--
+-- Name: idx_menu_items_category; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_menu_items_category ON public.menu_items USING btree (category_id);
+
+
+--
+-- Name: idx_menu_items_name_trgm; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_menu_items_name_trgm ON public.menu_items USING gin (name public.gin_trgm_ops);
+
+
+--
+-- Name: idx_menu_items_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_menu_items_org ON public.menu_items USING btree (org_id);
+
+
+--
+-- Name: idx_order_item_addons_oi; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_item_addons_oi ON public.order_item_addons USING btree (order_item_id);
+
+
+--
+-- Name: idx_order_items_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_items_order ON public.order_items USING btree (order_id);
+
+
+--
+-- Name: idx_order_payments_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_payments_order ON public.order_payments USING btree (order_id);
+
+
+--
+-- Name: idx_order_payments_order_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_order_payments_order_id ON public.order_payments USING btree (order_id);
+
+
+--
+-- Name: idx_orders_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_branch ON public.orders USING btree (branch_id);
+
+
+--
+-- Name: idx_orders_branch_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_branch_id ON public.orders USING btree (branch_id);
+
+
+--
+-- Name: idx_orders_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_created_at ON public.orders USING btree (created_at);
+
+
+--
+-- Name: idx_orders_shift; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_shift ON public.orders USING btree (shift_id);
+
+
+--
+-- Name: idx_orders_shift_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_shift_id ON public.orders USING btree (shift_id);
+
+
+--
+-- Name: idx_orders_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_status ON public.orders USING btree (status);
+
+
+--
+-- Name: idx_orders_teller; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_orders_teller ON public.orders USING btree (teller_id);
+
+
+--
+-- Name: idx_permissions_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_permissions_user ON public.permissions USING btree (user_id);
+
+
+--
+-- Name: idx_shift_cash_movements_shift; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shift_cash_movements_shift ON public.shift_cash_movements USING btree (shift_id);
+
+
+--
+-- Name: idx_shift_inventory_counts_shift; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shift_inventory_counts_shift ON public.shift_inventory_counts USING btree (shift_id);
+
+
+--
+-- Name: idx_shift_inventory_snapshots_shift; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shift_inventory_snapshots_shift ON public.shift_inventory_snapshots USING btree (shift_id);
+
+
+--
+-- Name: idx_shifts_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shifts_branch ON public.shifts USING btree (branch_id);
+
+
+--
+-- Name: idx_shifts_one_open_per_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_shifts_one_open_per_branch ON public.shifts USING btree (branch_id) WHERE (status = 'open'::public.shift_status);
+
+
+--
+-- Name: idx_shifts_opened_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shifts_opened_at ON public.shifts USING btree (opened_at);
+
+
+--
+-- Name: idx_shifts_teller; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_shifts_teller ON public.shifts USING btree (teller_id);
+
+
+--
+-- Name: idx_soft_serve_batches_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_soft_serve_batches_branch ON public.soft_serve_batches USING btree (branch_id);
+
+
+--
+-- Name: idx_users_email; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_email ON public.users USING btree (email) WHERE (email IS NOT NULL);
+
+
+--
+-- Name: idx_users_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_users_org ON public.users USING btree (org_id);
+
+
+--
+-- Name: orders_idempotency_key_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX orders_idempotency_key_idx ON public.orders USING btree (idempotency_key) WHERE (idempotency_key IS NOT NULL);
+
+
+--
+-- Name: orders orders_set_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER orders_set_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: addon_item_ingredients trg_addon_item_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_addon_item_ingredients_updated_at BEFORE UPDATE ON public.addon_item_ingredients FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: addon_items trg_addon_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_addon_items_updated_at BEFORE UPDATE ON public.addon_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: branches trg_branches_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_branches_updated_at BEFORE UPDATE ON public.branches FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: categories trg_categories_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_categories_updated_at BEFORE UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: drink_option_ingredient_overrides trg_drink_option_ingredient_overrides_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_drink_option_ingredient_overrides_updated_at BEFORE UPDATE ON public.drink_option_ingredient_overrides FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: inventory_items trg_inventory_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_inventory_items_updated_at BEFORE UPDATE ON public.inventory_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: menu_item_recipes trg_menu_item_recipes_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_menu_item_recipes_updated_at BEFORE UPDATE ON public.menu_item_recipes FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: menu_items trg_menu_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_menu_items_updated_at BEFORE UPDATE ON public.menu_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: orders trg_orders_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_orders_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: organizations trg_organizations_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_organizations_updated_at BEFORE UPDATE ON public.organizations FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: shifts trg_shifts_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON public.shifts FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: soft_serve_serve_pools trg_soft_serve_serve_pools_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_soft_serve_serve_pools_updated_at BEFORE UPDATE ON public.soft_serve_serve_pools FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: users trg_users_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: addon_item_ingredients addon_item_ingredients_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_item_ingredients
+    ADD CONSTRAINT addon_item_ingredients_addon_item_id_fkey FOREIGN KEY (addon_item_id) REFERENCES public.addon_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: addon_items addon_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_items
+    ADD CONSTRAINT addon_items_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: branch_menu_overrides branch_menu_overrides_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_menu_overrides
+    ADD CONSTRAINT branch_menu_overrides_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: branch_menu_overrides branch_menu_overrides_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_menu_overrides
+    ADD CONSTRAINT branch_menu_overrides_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: branches branches_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branches
+    ADD CONSTRAINT branches_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: categories categories_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.categories
+    ADD CONSTRAINT categories_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: discounts discounts_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.discounts
+    ADD CONSTRAINT discounts_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: drink_option_groups drink_option_groups_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_groups
+    ADD CONSTRAINT drink_option_groups_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_drink_option_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_ingredient_overrides
+    ADD CONSTRAINT drink_option_ingredient_overrides_drink_option_item_id_fkey FOREIGN KEY (drink_option_item_id) REFERENCES public.drink_option_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drink_option_items drink_option_items_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_items
+    ADD CONSTRAINT drink_option_items_addon_item_id_fkey FOREIGN KEY (addon_item_id) REFERENCES public.addon_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drink_option_items drink_option_items_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_items
+    ADD CONSTRAINT drink_option_items_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.drink_option_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_adjustments fk_inventory_adjustments_transfer; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_adjustments
+    ADD CONSTRAINT fk_inventory_adjustments_transfer FOREIGN KEY (transfer_id) REFERENCES public.inventory_transfers(id) ON DELETE SET NULL;
+
+
+--
+-- Name: inventory_adjustments inventory_adjustments_adjusted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_adjustments
+    ADD CONSTRAINT inventory_adjustments_adjusted_by_fkey FOREIGN KEY (adjusted_by) REFERENCES public.users(id);
+
+
+--
+-- Name: inventory_adjustments inventory_adjustments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_adjustments
+    ADD CONSTRAINT inventory_adjustments_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_adjustments inventory_adjustments_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_adjustments
+    ADD CONSTRAINT inventory_adjustments_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: inventory_deduction_logs inventory_deduction_logs_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_deduction_logs
+    ADD CONSTRAINT inventory_deduction_logs_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_deduction_logs inventory_deduction_logs_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_deduction_logs
+    ADD CONSTRAINT inventory_deduction_logs_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: inventory_deduction_logs inventory_deduction_logs_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_deduction_logs
+    ADD CONSTRAINT inventory_deduction_logs_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_deduction_logs inventory_deduction_logs_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_deduction_logs
+    ADD CONSTRAINT inventory_deduction_logs_order_item_id_fkey FOREIGN KEY (order_item_id) REFERENCES public.order_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_items inventory_items_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_items
+    ADD CONSTRAINT inventory_items_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: inventory_transfers inventory_transfers_confirmed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_confirmed_by_fkey FOREIGN KEY (confirmed_by) REFERENCES public.users(id);
+
+
+--
+-- Name: inventory_transfers inventory_transfers_destination_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_destination_branch_id_fkey FOREIGN KEY (destination_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: inventory_transfers inventory_transfers_initiated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_initiated_by_fkey FOREIGN KEY (initiated_by) REFERENCES public.users(id);
+
+
+--
+-- Name: inventory_transfers inventory_transfers_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: inventory_transfers inventory_transfers_source_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transfers
+    ADD CONSTRAINT inventory_transfers_source_branch_id_fkey FOREIGN KEY (source_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: item_sizes item_sizes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.item_sizes
+    ADD CONSTRAINT item_sizes_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_item_recipes
+    ADD CONSTRAINT menu_item_recipes_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: menu_items menu_items_category_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_items
+    ADD CONSTRAINT menu_items_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id);
+
+
+--
+-- Name: menu_items menu_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_items
+    ADD CONSTRAINT menu_items_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: order_item_addons order_item_addons_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_item_addons
+    ADD CONSTRAINT order_item_addons_addon_item_id_fkey FOREIGN KEY (addon_item_id) REFERENCES public.addon_items(id);
+
+
+--
+-- Name: order_item_addons order_item_addons_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_item_addons
+    ADD CONSTRAINT order_item_addons_order_item_id_fkey FOREIGN KEY (order_item_id) REFERENCES public.order_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: order_items order_items_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_items
+    ADD CONSTRAINT order_items_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id);
+
+
+--
+-- Name: order_items order_items_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_items
+    ADD CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
+
+
+--
+-- Name: order_payments order_payments_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.order_payments
+    ADD CONSTRAINT order_payments_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
+
+
+--
+-- Name: orders orders_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id);
+
+
+--
+-- Name: orders orders_discount_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_discount_id_fkey FOREIGN KEY (discount_id) REFERENCES public.discounts(id);
+
+
+--
+-- Name: orders orders_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id);
+
+
+--
+-- Name: orders orders_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_teller_id_fkey FOREIGN KEY (teller_id) REFERENCES public.users(id);
+
+
+--
+-- Name: orders orders_voided_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_voided_by_fkey FOREIGN KEY (voided_by) REFERENCES public.users(id);
+
+
+--
+-- Name: permissions permissions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.permissions
+    ADD CONSTRAINT permissions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shift_cash_movements shift_cash_movements_moved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_cash_movements
+    ADD CONSTRAINT shift_cash_movements_moved_by_fkey FOREIGN KEY (moved_by) REFERENCES public.users(id);
+
+
+--
+-- Name: shift_cash_movements shift_cash_movements_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_cash_movements
+    ADD CONSTRAINT shift_cash_movements_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shift_inventory_counts shift_inventory_counts_counted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_counted_by_fkey FOREIGN KEY (counted_by) REFERENCES public.users(id);
+
+
+--
+-- Name: shift_inventory_counts shift_inventory_counts_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: shift_inventory_counts shift_inventory_counts_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shift_inventory_snapshots shift_inventory_snapshots_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_snapshots
+    ADD CONSTRAINT shift_inventory_snapshots_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: shift_inventory_snapshots shift_inventory_snapshots_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_snapshots
+    ADD CONSTRAINT shift_inventory_snapshots_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: shifts shifts_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id);
+
+
+--
+-- Name: shifts shifts_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_closed_by_fkey FOREIGN KEY (closed_by) REFERENCES public.users(id);
+
+
+--
+-- Name: shifts shifts_force_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_force_closed_by_fkey FOREIGN KEY (force_closed_by) REFERENCES public.users(id);
+
+
+--
+-- Name: shifts shifts_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shifts
+    ADD CONSTRAINT shifts_teller_id_fkey FOREIGN KEY (teller_id) REFERENCES public.users(id);
+
+
+--
+-- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batch_ingredients
+    ADD CONSTRAINT soft_serve_batch_ingredients_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.soft_serve_batches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batch_ingredients
+    ADD CONSTRAINT soft_serve_batch_ingredients_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: soft_serve_batches soft_serve_batches_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batches
+    ADD CONSTRAINT soft_serve_batches_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: soft_serve_batches soft_serve_batches_logged_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batches
+    ADD CONSTRAINT soft_serve_batches_logged_by_fkey FOREIGN KEY (logged_by) REFERENCES public.users(id);
+
+
+--
+-- Name: soft_serve_batches soft_serve_batches_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_batches
+    ADD CONSTRAINT soft_serve_batches_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: soft_serve_serve_pools soft_serve_serve_pools_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_serve_pools
+    ADD CONSTRAINT soft_serve_serve_pools_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: soft_serve_serve_pools soft_serve_serve_pools_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.soft_serve_serve_pools
+    ADD CONSTRAINT soft_serve_serve_pools_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_branch_assignments user_branch_assignments_assigned_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_branch_assignments
+    ADD CONSTRAINT user_branch_assignments_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES public.users(id);
+
+
+--
+-- Name: user_branch_assignments user_branch_assignments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_branch_assignments
+    ADD CONSTRAINT user_branch_assignments_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id);
+
+
+--
+-- Name: user_branch_assignments user_branch_assignments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_branch_assignments
+    ADD CONSTRAINT user_branch_assignments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+
+--
+-- Name: users users_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict if3dmUN7qWpS2XzIcd9zxRcNU2mre2DrVyu7uugj1dROYG7f8TFqFevZTdDtSJx
+

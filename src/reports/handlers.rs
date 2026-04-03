@@ -58,14 +58,13 @@ pub struct ShiftSummary {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct InventoryDiscrepancy {
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub stock_at_open:     f64,
-    pub expected_stock:    f64,
-    pub actual_count:      Option<f64>,
-    pub discrepancy:       Option<f64>,
-    pub notes:             Option<String>,
+    pub branch_inventory_id: Uuid,
+    pub ingredient_name:     String,
+    pub unit:                String,
+    pub expected_stock:      f64,
+    pub actual_count:        Option<f64>,
+    pub discrepancy:         Option<f64>,
+    pub note:                Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -123,14 +122,13 @@ pub struct BranchSalesReport {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct StockRow {
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub current_stock:     f64,
-    pub reorder_threshold: f64,
-    pub cost_per_unit:     Option<f64>,
-    pub below_reorder:     bool,
-    pub is_active:         bool,
+    pub branch_inventory_id: Uuid,
+    pub ingredient_name:     String,
+    pub unit:                String,
+    pub current_stock:       f64,
+    pub reorder_threshold:   f64,
+    pub cost_per_unit:       i32,
+    pub below_reorder:       bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,30 +268,18 @@ pub async fn shift_inventory_discrepancies(
     let rows = sqlx::query_as::<_, InventoryDiscrepancy>(
         r#"
         SELECT
-            ii.id                                           AS inventory_item_id,
-            ii.name                                         AS item_name,
-            ii.unit::text                                   AS unit,
-            snap.quantity_at_open::float8                   AS stock_at_open,
-            GREATEST(0,
-                snap.quantity_at_open::float8
-                - COALESCE(deduct.total_deducted, 0)
-            )                                               AS expected_stock,
-            cnt.actual_count::float8,
-            cnt.discrepancy::float8,
-            cnt.notes
-        FROM shift_inventory_snapshots snap
-        JOIN inventory_items ii ON ii.id = snap.inventory_item_id
-        LEFT JOIN (
-            SELECT inventory_item_id, SUM(quantity_deducted) AS total_deducted
-            FROM inventory_deduction_logs
-            WHERE order_id IN (SELECT id FROM orders WHERE shift_id = $1)
-            GROUP BY inventory_item_id
-        ) deduct ON deduct.inventory_item_id = snap.inventory_item_id
-        LEFT JOIN shift_inventory_counts cnt
-               ON cnt.shift_id = snap.shift_id
-              AND cnt.inventory_item_id = snap.inventory_item_id
-        WHERE snap.shift_id = $1
-        ORDER BY ii.name ASC
+            sic.branch_inventory_id,
+            oi.name         AS ingredient_name,
+            oi.unit::text   AS unit,
+            sic.expected_stock::float8,
+            sic.actual_stock::float8 AS actual_count,
+            sic.discrepancy::float8,
+            sic.note
+        FROM shift_inventory_counts sic
+        JOIN branch_inventory bi ON bi.id = sic.branch_inventory_id
+        JOIN org_ingredients oi  ON oi.id = bi.org_ingredient_id
+        WHERE sic.shift_id = $1
+        ORDER BY oi.name ASC
         "#,
     )
     .bind(*shift_id)
@@ -314,30 +300,9 @@ pub async fn shift_deductions(
     check_permission(pool.get_ref(), &claims, "inventory", "read").await?;
     require_shift_branch_access(pool.get_ref(), &claims, *shift_id).await?;
 
-    let rows = sqlx::query_as::<_, DeductionLogRow>(
-        r#"
-        SELECT
-            dl.id,
-            dl.order_id,
-            dl.order_item_id,
-            dl.inventory_item_id,
-            ii.name         AS item_name,
-            ii.unit::text   AS unit,
-            dl.quantity_deducted::float8,
-            dl.source,
-            dl.created_at
-        FROM inventory_deduction_logs dl
-        JOIN inventory_items ii ON ii.id = dl.inventory_item_id
-        WHERE dl.order_id IN (
-            SELECT id FROM orders WHERE shift_id = $1
-        )
-        ORDER BY dl.created_at ASC
-        "#,
-    )
-    .bind(*shift_id)
-    .fetch_all(pool.get_ref())
-    .await?;
-
+    // Inventory deduction logs no longer exist — deductions happen directly on branch_inventory.
+    // Return empty array to maintain API compatibility.
+    let rows: Vec<DeductionLogRow> = Vec::new();
     Ok(HttpResponse::Ok().json(rows))
 }
 
@@ -508,12 +473,18 @@ pub async fn branch_stock(
 
     let items = sqlx::query_as::<_, StockRow>(
         r#"
-        SELECT id AS inventory_item_id, name AS item_name, unit::text,
-               current_stock::float8, reorder_threshold::float8, cost_per_unit::float8,
-               (current_stock <= reorder_threshold) AS below_reorder, is_active
-        FROM inventory_items
-        WHERE branch_id = $1 AND deleted_at IS NULL
-        ORDER BY (current_stock <= reorder_threshold) DESC, name ASC
+        SELECT
+            bi.id              AS branch_inventory_id,
+            oi.name            AS ingredient_name,
+            oi.unit::text      AS unit,
+            bi.current_stock::float8,
+            bi.reorder_threshold::float8,
+            oi.cost_per_unit,
+            (bi.current_stock <= bi.reorder_threshold) AS below_reorder
+        FROM branch_inventory bi
+        JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id
+        WHERE bi.branch_id = $1
+        ORDER BY (bi.current_stock <= bi.reorder_threshold) DESC, oi.name ASC
         "#,
     )
     .bind(*branch_id)

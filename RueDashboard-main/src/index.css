@@ -1,0 +1,226 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+/* ── Cairo font baseline ─────────────────────────────────────── */
+* {
+  font-family: "Cairo", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+}
+
+body { position: relative; }
+
+/* ── shadcn CSS variables — Light mode ───────────────────────── */
+:root {
+  /* Slightly warm off-white — easy on the eyes, clear separation from cards */
+  --background:          220 20% 97%;
+  --foreground:          222 47% 10%;
+
+  --card:                0 0% 100%;
+  --card-foreground:     222 47% 10%;
+
+  --popover:             0 0% 100%;
+  --popover-foreground:  222 47% 10%;
+
+  /* Brand blue: #1a56db */
+  --primary:             221 78% 47%;
+  --primary-foreground:  0 0% 100%;
+
+  --secondary:           214 30% 92%;
+  --secondary-foreground:222 47% 15%;
+
+  /* Muted — used for subtle backgrounds (sidebar icons, input bg, etc.) */
+  --muted:               214 25% 93%;
+  /* ↑ Raised lightness so bg-muted is clearly lighter than card */
+  --muted-foreground:    215 20% 38%;
+  /* ↑ Darker than original (47% → 38%) — fixes invisible labels */
+
+  --accent:              221 78% 93%;
+  --accent-foreground:   221 78% 32%;
+  /* ↑ Darker accent-foreground for better contrast on accent bg */
+
+  --destructive:         0 84% 56%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border:              214 25% 87%;
+  --input:               214 25% 87%;
+  --ring:                221 78% 47%;
+
+  --radius: 0.625rem;
+
+  /* Chart palette */
+  --chart-1: 221 78% 47%;
+  --chart-2: 160 60% 38%;
+  --chart-3: 258 58% 52%;
+  --chart-4: 38 80% 48%;
+  --chart-5: 4 84% 58%;
+}
+
+:root {
+  /* Slightly warm off-white — easy on the eyes, clear separation from cards */
+  --background:          220 20% 97%;
+  --foreground:          222 47% 10%;
+
+  --card:                0 0% 100%;
+  --card-foreground:     222 47% 10%;
+
+  --popover:             0 0% 100%;
+  --popover-foreground:  222 47% 10%;
+
+  /* Brand blue: #1a56db */
+  --primary:             221 78% 47%;
+  --primary-foreground:  0 0% 100%;
+
+  --secondary:           214 30% 92%;
+  --secondary-foreground:222 47% 15%;
+
+  /* Muted — used for subtle backgrounds (sidebar icons, input bg, etc.) */
+  --muted:               214 25% 93%;
+  /* ↑ Raised lightness so bg-muted is clearly lighter than card */
+  --muted-foreground:    215 20% 38%;
+  /* ↑ Darker than original (47% → 38%) — fixes invisible labels */
+
+  --accent:              221 78% 93%;
+  --accent-foreground:   221 78% 32%;
+  /* ↑ Darker accent-foreground for better contrast on accent bg */
+
+  --destructive:         0 84% 56%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border:              214 25% 87%;
+  --input:               214 25% 87%;
+  --ring:                221 78% 47%;
+
+  --radius: 0.625rem;
+
+  /* Chart palette */
+  --chart-1: 221 78% 47%;
+  --chart-2: 160 60% 38%;
+  --chart-3: 258 58% 52%;
+  --chart-4: 38 80% 48%;
+  --chart-5: 4 84% 58%;
+}
+
+/* ── Dark mode ───────────────────────────────────────────────── */
+.dark {
+  /* Background: slightly lighter than before so it's not pure black */
+  --background:          222 25% 10%;
+  --foreground:          210 35% 94%;
+
+  /* Card must be clearly distinct from background */
+  --card:                222 25% 14%;
+  --card-foreground:     210 35% 94%;
+
+  --popover:             222 25% 14%;
+  --popover-foreground:  210 35% 94%;
+
+  /* Primary stays vivid in dark */
+  --primary:             221 78% 62%;
+  --primary-foreground:  0 0% 100%;
+
+  /* Secondary — clearly above card */
+  --secondary:           217 25% 22%;
+  --secondary-foreground:210 35% 90%;
+
+  /* Muted — used for sidebar icon backgrounds, table headers, etc.
+     Must be visibly different from both background AND card */
+  --muted:               217 22% 20%;
+  --muted-foreground:    215 18% 62%;
+  /* ↑ Raised from 65% to 62% — enough contrast on card (14%) and bg (10%) */
+
+  --accent:              221 60% 25%;
+  --accent-foreground:   221 78% 82%;
+  /* ↑ Brighter accent-foreground so active nav labels are clearly readable */
+
+  --destructive:         0 65% 52%;
+  --destructive-foreground: 0 0% 100%;
+
+  /* Borders clearly visible in dark */
+  --border:              217 22% 24%;
+  --input:               217 22% 24%;
+  --ring:                221 78% 62%;
+
+  /* Chart palette — slightly brighter for dark backgrounds */
+  --chart-1: 221 78% 62%;
+  --chart-2: 160 60% 52%;
+  --chart-3: 258 58% 65%;
+  --chart-4: 38 80% 62%;
+  --chart-5: 4 84% 65%;
+}
+
+/* ── Brand gradient utility ──────────────────────────────────── */
+.brand-gradient {
+  background: linear-gradient(135deg, #1a56db 0%, #3b28cc 100%);
+}
+
+.brand-gradient-text {
+  background: linear-gradient(135deg, #1a56db 0%, #3b28cc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Scrollbar styling ───────────────────────────────────────── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+/* ── RTL utilities ───────────────────────────────────────────── */
+[dir="rtl"] .rtl-mirror { transform: scaleX(-1); }
+[dir="rtl"] .ltr-only   { display: none; }
+[dir="ltr"] .rtl-only   { display: none; }
+
+/* ── Safe area ───────────────────────────────────────────────── */
+.pb-safe { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+.pt-safe { padding-top: env(safe-area-inset-top); }
+
+/* ── Smooth momentum scrolling on iOS ───────────────────────── */
+.scroll-ios { -webkit-overflow-scrolling: touch; }
+
+/* ── Table row hover ─────────────────────────────────────────── */
+.table-row-hover:hover { background: hsl(var(--muted) / 0.5); }
+
+/* ── Sidebar active link gradient indicator ──────────────────── */
+.nav-active-indicator {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, #1a56db, #3b28cc);
+}
+
+[dir="rtl"] .nav-active-indicator {
+  left: auto;
+  right: 0;
+  border-radius: 3px 0 0 3px;
+}
+
+/* ── Skeleton pulse ──────────────────────────────────────────── */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+.skeleton-pulse { animation: skeleton-pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+
+/* ── Ensure badge/role colours are readable in both modes ────── */
+/* These override the inline color classes when contrast is insufficient */
+.dark .badge-role-teller         { color: hsl(38 80% 75%);  border-color: hsl(38 50% 40%); }
+.dark .badge-role-branch_manager { color: hsl(258 80% 78%); border-color: hsl(258 50% 40%); }
+.dark .badge-role-org_admin      { color: hsl(221 80% 78%); border-color: hsl(221 50% 40%); }
+.dark .badge-role-super_admin    { color: hsl(160 70% 68%); border-color: hsl(160 50% 35%); }

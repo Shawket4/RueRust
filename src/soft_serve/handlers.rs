@@ -42,12 +42,12 @@ pub struct SoftServeBatch {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct BatchIngredient {
-    pub id:                   Uuid,
-    pub batch_id:             Uuid,
-    pub inventory_item_id:    Uuid,
-    pub inventory_item_name:  String,
-    pub unit:                 String,
-    pub quantity_used:        sqlx::types::BigDecimal,
+    pub id:                  Uuid,
+    pub batch_id:            Uuid,
+    pub branch_inventory_id: Uuid,
+    pub ingredient_name:     String,
+    pub unit:                String,
+    pub quantity_used:       sqlx::types::BigDecimal,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,28 +61,23 @@ pub struct BatchWithIngredients {
 
 #[derive(Deserialize)]
 pub struct BatchIngredientInput {
-    pub inventory_item_id: Uuid,
-    pub quantity_used:     f64,
+    pub branch_inventory_id: Uuid,
+    pub quantity_used:       f64,
 }
 
 #[derive(Deserialize)]
 pub struct LogBatchRequest {
     pub menu_item_id: Uuid,
-    pub small_serves: Option<i32>,   // defaults to 15
-    pub large_serves: Option<i32>,   // defaults to 10
+    pub small_serves: Option<i32>,
+    pub large_serves: Option<i32>,
     pub notes:        Option<String>,
-    pub ingredients:  Option<Vec<BatchIngredientInput>>, // if None, use global defaults
+    pub ingredients:  Option<Vec<BatchIngredientInput>>,
 }
 
-// Global soft serve batch defaults
 const DEFAULT_SMALL_SERVES: i32 = 15;
 const DEFAULT_LARGE_SERVES: i32 = 10;
-
-// Default ingredient IDs are not hardcoded — manager must have set up
-// inventory items named "Powder" and "Milk" on their branch.
-// The defaults only apply to quantities (0.5kg each).
-const DEFAULT_POWDER_KG: f64 = 0.5;
-const DEFAULT_MILK_KG:   f64 = 0.5;
+const DEFAULT_POWDER_KG: f64    = 0.5;
+const DEFAULT_MILK_KG: f64      = 0.5;
 
 // ── POST /soft-serve/branches/:branch_id/batches ──────────────
 
@@ -103,7 +98,7 @@ pub async fn log_batch(
         return Err(AppError::BadRequest("Serves cannot be negative".into()));
     }
 
-    // Verify menu item exists and belongs to this branch's org
+    // Verify menu item belongs to this branch's org
     let item_name: Option<String> = sqlx::query_scalar(
         r#"
         SELECT m.name FROM menu_items m
@@ -119,15 +114,14 @@ pub async fn log_batch(
 
     item_name.ok_or_else(|| AppError::NotFound("Menu item not found for this branch".into()))?;
 
-    // Resolve ingredients — use provided list or fall back to defaults
-    let ingredients = match &body.ingredients {
+    // Resolve ingredients
+    let ingredients: Vec<(Uuid, f64)> = match &body.ingredients {
         Some(list) if !list.is_empty() => {
-            // Validate all items belong to this branch
             for ing in list {
                 let belongs: bool = sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM inventory_items WHERE id = $1 AND branch_id = $2 AND deleted_at IS NULL)"
+                    "SELECT EXISTS(SELECT 1 FROM branch_inventory WHERE id = $1 AND branch_id = $2)"
                 )
-                .bind(ing.inventory_item_id)
+                .bind(ing.branch_inventory_id)
                 .bind(*branch_id)
                 .fetch_one(pool.get_ref())
                 .await?;
@@ -135,24 +129,21 @@ pub async fn log_batch(
                 if !belongs {
                     return Err(AppError::BadRequest(format!(
                         "Inventory item {} does not belong to this branch",
-                        ing.inventory_item_id
+                        ing.branch_inventory_id
                     )));
                 }
-
                 if ing.quantity_used <= 0.0 {
-                    return Err(AppError::BadRequest(
-                        "quantity_used must be greater than 0".into(),
-                    ));
+                    return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
                 }
             }
-            list.iter()
-                .map(|i| (i.inventory_item_id, i.quantity_used))
-                .collect::<Vec<_>>()
+            list.iter().map(|i| (i.branch_inventory_id, i.quantity_used)).collect()
         }
         _ => {
-            // Use defaults: find items named "Powder" and "Milk" on this branch
+            // Look up by org_ingredient name on this branch
             let powder_id: Option<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM inventory_items WHERE branch_id = $1 AND LOWER(name) = 'powder' AND deleted_at IS NULL LIMIT 1"
+                r#"SELECT bi.id FROM branch_inventory bi
+                   JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id
+                   WHERE bi.branch_id = $1 AND LOWER(oi.name) = 'powder' LIMIT 1"#,
             )
             .bind(*branch_id)
             .fetch_optional(pool.get_ref())
@@ -160,7 +151,9 @@ pub async fn log_batch(
             .flatten();
 
             let milk_id: Option<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM inventory_items WHERE branch_id = $1 AND LOWER(name) = 'milk' AND deleted_at IS NULL LIMIT 1"
+                r#"SELECT bi.id FROM branch_inventory bi
+                   JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id
+                   WHERE bi.branch_id = $1 AND LOWER(oi.name) = 'milk' LIMIT 1"#,
             )
             .bind(*branch_id)
             .fetch_optional(pool.get_ref())
@@ -168,27 +161,21 @@ pub async fn log_batch(
             .flatten();
 
             let mut defaults = Vec::new();
-            if let Some(id) = powder_id {
-                defaults.push((id, DEFAULT_POWDER_KG));
-            }
-            if let Some(id) = milk_id {
-                defaults.push((id, DEFAULT_MILK_KG));
-            }
+            if let Some(id) = powder_id { defaults.push((id, DEFAULT_POWDER_KG)); }
+            if let Some(id) = milk_id   { defaults.push((id, DEFAULT_MILK_KG)); }
 
             if defaults.is_empty() {
                 return Err(AppError::BadRequest(
                     "No ingredients provided and no default 'Powder'/'Milk' items found on this branch. \
-                     Please provide ingredients explicitly or create inventory items named 'Powder' and 'Milk'.".into(),
+                     Please provide ingredients explicitly or add 'Powder' and 'Milk' to the org catalog and branch stock.".into(),
                 ));
             }
-
             defaults
         }
     };
 
     let mut tx = pool.get_ref().begin().await?;
 
-    // Create batch record
     let large_ratio = if large_serves > 0 {
         small_serves as f64 / large_serves as f64
     } else {
@@ -221,31 +208,31 @@ pub async fn log_batch(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Insert batch ingredients + deduct from inventory
     let mut batch_ingredients: Vec<BatchIngredient> = Vec::new();
 
-    for (inv_item_id, qty) in &ingredients {
-        // Deduct from branch inventory
+    for (bi_id, qty) in &ingredients {
+        // Deduct from branch_inventory
         sqlx::query(
-            "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2"
+            "UPDATE branch_inventory SET current_stock = current_stock - $1 WHERE id = $2"
         )
         .bind(qty)
-        .bind(inv_item_id)
+        .bind(bi_id)
         .execute(&mut *tx)
         .await?;
 
-        // Log the deduction as an inventory adjustment
+        // Log adjustment
         sqlx::query(
-            r#"
-            INSERT INTO inventory_adjustments
-                (branch_id, inventory_item_id, type, quantity, note, adjusted_by)
-            VALUES ($1, $2, 'remove'::inventory_adjustment_type, $3, $4, $5)
-            "#,
+            r#"INSERT INTO branch_inventory_adjustments
+                (branch_id, branch_inventory_id, type, quantity, note, adjusted_by)
+               VALUES ($1, $2, 'remove'::inventory_adjustment_type, $3, $4, $5)"#,
         )
         .bind(*branch_id)
-        .bind(inv_item_id)
+        .bind(bi_id)
         .bind(qty)
-        .bind(format!("Soft serve batch — {:.1} units ({} small, {} large, ratio 1:{:.2})", total_units, small_serves, large_serves, large_ratio))
+        .bind(format!(
+            "Soft serve batch — {:.1} units ({} small, {} large, ratio 1:{:.2})",
+            total_units, small_serves, large_serves, large_ratio
+        ))
         .bind(claims.user_id())
         .execute(&mut *tx)
         .await?;
@@ -253,18 +240,17 @@ pub async fn log_batch(
         // Record batch ingredient
         let ing = sqlx::query_as::<_, BatchIngredient>(
             r#"
-            INSERT INTO soft_serve_batch_ingredients
-                (batch_id, inventory_item_id, quantity_used)
+            INSERT INTO soft_serve_batch_ingredients (batch_id, branch_inventory_id, quantity_used)
             VALUES ($1, $2, $3)
             RETURNING
-                id, batch_id, inventory_item_id,
-                (SELECT name FROM inventory_items WHERE id = $2) AS inventory_item_name,
-                (SELECT unit::text FROM inventory_items WHERE id = $2) AS unit,
+                id, batch_id, branch_inventory_id,
+                (SELECT oi.name FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS ingredient_name,
+                (SELECT oi.unit::text FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS unit,
                 quantity_used
             "#,
         )
         .bind(batch.id)
-        .bind(inv_item_id)
+        .bind(bi_id)
         .bind(qty)
         .fetch_one(&mut *tx)
         .await?;
@@ -272,7 +258,7 @@ pub async fn log_batch(
         batch_ingredients.push(ing);
     }
 
-    // Upsert serve pool — add serves, clear low_stock_flag
+    // Upsert serve pool
     sqlx::query(
         r#"
         INSERT INTO soft_serve_serve_pools
@@ -323,7 +309,7 @@ pub async fn list_batches(
             b.notes, b.created_at
         FROM soft_serve_batches b
         JOIN menu_items m ON m.id = b.menu_item_id
-        JOIN users u ON u.id = b.logged_by
+        JOIN users u      ON u.id = b.logged_by
         WHERE b.branch_id = $1
         ORDER BY b.created_at DESC
         "#,
@@ -351,7 +337,7 @@ pub async fn list_serve_pools(
         SELECT
             p.id, p.branch_id, p.menu_item_id,
             m.name AS item_name,
-           p.total_units, p.large_ratio,
+            p.total_units, p.large_ratio,
             p.low_stock_flag, p.updated_at
         FROM soft_serve_serve_pools p
         JOIN menu_items m ON m.id = p.menu_item_id
@@ -369,9 +355,9 @@ pub async fn list_serve_pools(
 // ── GET /soft-serve/branches/:branch_id/pools/:menu_item_id ───
 
 pub async fn get_serve_pool(
-    req:          HttpRequest,
-    pool:         web::Data<PgPool>,
-    path:         web::Path<(Uuid, Uuid)>,
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "soft_serve_batches", "read").await?;
@@ -384,7 +370,7 @@ pub async fn get_serve_pool(
         SELECT
             p.id, p.branch_id, p.menu_item_id,
             m.name AS item_name,
-           p.total_units, p.large_ratio,
+            p.total_units, p.large_ratio,
             p.low_stock_flag, p.updated_at
         FROM soft_serve_serve_pools p
         JOIN menu_items m ON m.id = p.menu_item_id

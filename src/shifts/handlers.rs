@@ -102,9 +102,9 @@ pub struct CashMovementRequest {
 
 #[derive(Deserialize)]
 pub struct InventoryCountInput {
-    pub inventory_item_id: Uuid,
-    pub actual_stock:      f64,
-    pub note:              Option<String>,
+    pub branch_inventory_id: Uuid,
+    pub actual_stock:        f64,
+    pub note:                Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -275,19 +275,6 @@ pub async fn open_shift(
     .bind(&body.edit_reason)
     .bind(opened_at)
     .fetch_one(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO shift_inventory_snapshots (shift_id, inventory_item_id, stock_at_open)
-        SELECT $1, id, current_stock
-        FROM inventory_items
-        WHERE branch_id = $2 AND deleted_at IS NULL AND is_active = true
-        "#,
-    )
-    .bind(shift.id)
-    .bind(*branch_id)
-    .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
@@ -523,14 +510,14 @@ pub async fn list_cash_movements(
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct InventoryCountRow {
-    pub inventory_item_id: Uuid,
-    pub item_name:         String,
-    pub unit:              String,
-    pub expected_stock:    sqlx::types::BigDecimal,
-    pub actual_stock:      sqlx::types::BigDecimal,
-    pub discrepancy:       sqlx::types::BigDecimal,
-    pub is_suspicious:     bool,
-    pub note:              Option<String>,
+    pub branch_inventory_id: Uuid,
+    pub ingredient_name:     String,
+    pub unit:                String,
+    pub expected_stock:      sqlx::types::BigDecimal,
+    pub actual_stock:        sqlx::types::BigDecimal,
+    pub discrepancy:         sqlx::types::BigDecimal,
+    pub is_suspicious:       bool,
+    pub note:                Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -555,16 +542,17 @@ pub async fn close_shift(
         let existing_counts = sqlx::query_as::<_, InventoryCountRow>(
             r#"
             SELECT
-                sic.inventory_item_id,
-                ii.name AS item_name,
-                ii.unit::text AS unit,
+                sic.branch_inventory_id,
+                oi.name  AS ingredient_name,
+                oi.unit::text AS unit,
                 sic.expected_stock,
                 sic.actual_stock,
                 sic.discrepancy,
                 sic.is_suspicious,
                 sic.note
             FROM shift_inventory_counts sic
-            JOIN inventory_items ii ON ii.id = sic.inventory_item_id
+            JOIN branch_inventory bi ON bi.id = sic.branch_inventory_id
+            JOIN org_ingredients oi  ON oi.id = bi.org_ingredient_id
             WHERE sic.shift_id = $1
             "#,
         )
@@ -605,57 +593,44 @@ pub async fn close_shift(
     let mut inventory_counts: Vec<InventoryCountRow> = Vec::new();
 
     for count in &body.inventory_counts {
-        let snapshot: Option<sqlx::types::BigDecimal> = sqlx::query_scalar(
-            "SELECT stock_at_open FROM shift_inventory_snapshots WHERE shift_id = $1 AND inventory_item_id = $2"
+        // Verify branch_inventory belongs to this shift's branch and get current stock as expected
+        let current_stock: Option<sqlx::types::BigDecimal> = sqlx::query_scalar(
+            "SELECT current_stock FROM branch_inventory WHERE id = $1 AND branch_id = $2"
         )
-        .bind(*shift_id)
-        .bind(count.inventory_item_id)
+        .bind(count.branch_inventory_id)
+        .bind(shift.branch_id)
         .fetch_optional(&mut *tx)
         .await?
         .flatten();
 
-        let snapshot = match snapshot {
+        let expected = match current_stock {
             Some(s) => s,
-            None    => continue,
+            None    => continue, // Not tracked on this branch — skip
         };
 
-        let consumed: sqlx::types::BigDecimal = sqlx::query_scalar(
-            r#"
-            SELECT COALESCE(SUM(quantity_deducted), 0)
-            FROM inventory_deduction_logs
-            WHERE order_id IN (SELECT id FROM orders WHERE shift_id = $1)
-              AND inventory_item_id = $2
-            "#,
-        )
-        .bind(*shift_id)
-        .bind(count.inventory_item_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        let expected      = &snapshot - &consumed;
-        let actual        = sqlx::types::BigDecimal::try_from(count.actual_stock)
+        let actual = sqlx::types::BigDecimal::try_from(count.actual_stock)
             .map_err(|_| AppError::BadRequest("Invalid actual_stock value".into()))?;
         let is_suspicious = actual > expected;
 
         let row = sqlx::query_as::<_, InventoryCountRow>(
             r#"
             INSERT INTO shift_inventory_counts
-                (shift_id, inventory_item_id, expected_stock, actual_stock, is_suspicious, note, counted_by)
+                (shift_id, branch_inventory_id, expected_stock, actual_stock, is_suspicious, note, counted_by)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (shift_id, inventory_item_id)
+            ON CONFLICT (shift_id, branch_inventory_id)
             DO UPDATE SET
                 actual_stock  = EXCLUDED.actual_stock,
                 is_suspicious = EXCLUDED.is_suspicious,
                 note          = EXCLUDED.note
             RETURNING
-                inventory_item_id,
-                (SELECT name FROM inventory_items WHERE id = $2) AS item_name,
-                (SELECT unit::text FROM inventory_items WHERE id = $2) AS unit,
+                branch_inventory_id,
+                (SELECT oi.name FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS ingredient_name,
+                (SELECT oi.unit::text FROM branch_inventory bi JOIN org_ingredients oi ON oi.id = bi.org_ingredient_id WHERE bi.id = $2) AS unit,
                 expected_stock, actual_stock, discrepancy, is_suspicious, note
             "#,
         )
         .bind(*shift_id)
-        .bind(count.inventory_item_id)
+        .bind(count.branch_inventory_id)
         .bind(&expected)
         .bind(&actual)
         .bind(is_suspicious)

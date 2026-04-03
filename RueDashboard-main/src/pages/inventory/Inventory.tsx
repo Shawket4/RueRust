@@ -11,6 +11,8 @@ import {
   Boxes,
   AlertTriangle,
   RotateCcw,
+  ChevronsUpDown,
+  Check,
 } from "lucide-react";
 import { type ColumnDef } from "@tanstack/react-table";
 import { useAuthStore } from "@/store/auth";
@@ -45,13 +47,85 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable } from "@/components/shared/DataTable";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { getErrorMessage } from "@/lib/client";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 const UNITS: InventoryUnit[] = ["g", "kg", "ml", "l", "pcs"];
+
+// ── Searchable ingredient combobox ────────────────────────────────────────────
+function IngredientPicker({
+  items,
+  value,
+  onSelect,
+  placeholder = "Select ingredient…",
+}: {
+  items: { id: string; name: string; unit: string; current_stock?: number }[];
+  value: string;
+  onSelect: (id: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const selected = items.find((i) => i.id === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal h-9"
+        >
+          <span className="truncate">
+            {selected
+              ? `${selected.name} ${selected.current_stock !== undefined ? "— " + Number(selected.current_stock).toFixed(3) : ""} (${fmtUnit(selected.unit)})`
+              : placeholder}
+          </span>
+          <ChevronsUpDown size={16} className="ml-2 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[300px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search ingredients…" className="h-9" />
+          <CommandList>
+            <CommandEmpty className="py-6 text-center text-sm text-muted-foreground">
+              No results found
+            </CommandEmpty>
+            <CommandGroup>
+              <ScrollArea className="h-64">
+                {items.map((ing) => (
+                  <CommandItem
+                    key={ing.id}
+                    value={ing.name}
+                    onSelect={() => { onSelect(ing.id); setOpen(false); }}
+                  >
+                    <Check
+                      size={16}
+                      className={`mr-2 ${ing.id === value ? "opacity-100" : "opacity-0"}`}
+                    />
+                    {ing.name}
+                    {ing.current_stock !== undefined && (
+                      <span className="ml-2 tabular-nums text-muted-foreground">— {Number(ing.current_stock).toFixed(3)}</span>
+                    )}
+                    <span className="ml-auto text-muted-foreground text-xs">{fmtUnit(ing.unit)}</span>
+                  </CommandItem>
+                ))}
+              </ScrollArea>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 // ── Shared field row (matches Shifts dialog pattern) ─────────────────────────
 function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
@@ -398,12 +472,11 @@ function StockTab({ orgId, branchId }: { orgId: string; branchId: string }) {
           <DialogHeader><DialogTitle>Add Ingredient to Branch</DialogTitle></DialogHeader>
           <div className="p-6 space-y-4">
             <Field label="Ingredient *">
-              <Select value={addForm.org_ingredient_id} onValueChange={(v) => setAddForm((f) => ({ ...f, org_ingredient_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select ingredient…" /></SelectTrigger>
-                <SelectContent>
-                  {available.map((c) => <SelectItem key={c.id} value={c.id}>{c.name} ({fmtUnit(c.unit)})</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <IngredientPicker
+                items={available}
+                value={addForm.org_ingredient_id}
+                onSelect={(id) => setAddForm((f) => ({ ...f, org_ingredient_id: id }))}
+              />
             </Field>
             <Field label="Opening Stock">
               <Input type="number" min="0" step="0.001" placeholder="0.000" value={addForm.current_stock} onChange={(e) => setAddForm((f) => ({ ...f, current_stock: e.target.value }))} />
@@ -524,16 +597,11 @@ function AdjustmentsTab({ branchId }: { branchId: string }) {
           <DialogHeader><DialogTitle>Manual Stock Adjustment</DialogTitle></DialogHeader>
           <div className="p-6 space-y-4">
             <Field label="Ingredient *">
-              <Select value={form.branch_inventory_id} onValueChange={(v) => setForm((f) => ({ ...f, branch_inventory_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select ingredient…" /></SelectTrigger>
-                <SelectContent>
-                  {stock.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.ingredient_name} — {Number(s.current_stock).toFixed(3)} {fmtUnit(s.unit)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <IngredientPicker
+                items={stock.map(s => ({ id: s.id, name: s.ingredient_name, unit: s.unit, current_stock: s.current_stock }))}
+                value={form.branch_inventory_id}
+                onSelect={(id) => setForm((f) => ({ ...f, branch_inventory_id: id }))}
+              />
             </Field>
             <Field label="Type *">
               <Select value={form.adjustment_type} onValueChange={(v) => setForm((f) => ({ ...f, adjustment_type: v as "add" | "remove" }))}>
@@ -717,10 +785,11 @@ function TransfersTab({ orgId, branchId }: { orgId: string; branchId: string }) 
               </Select>
             </Field>
             <Field label="Ingredient *">
-              <Select value={form.org_ingredient_id} onValueChange={(v) => setForm((f) => ({ ...f, org_ingredient_id: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
-                <SelectContent>{catalog.filter((c) => c.is_active).map((c) => <SelectItem key={c.id} value={c.id}>{c.name} ({fmtUnit(c.unit)})</SelectItem>)}</SelectContent>
-              </Select>
+              <IngredientPicker
+                items={catalog.filter((c) => c.is_active)}
+                value={form.org_ingredient_id}
+                onSelect={(id) => setForm((f) => ({ ...f, org_ingredient_id: id }))}
+              />
             </Field>
             <Field label="Quantity *">
               <Input type="number" min="0.001" step="0.001" placeholder="0.000" value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))} />

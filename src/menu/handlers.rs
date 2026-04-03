@@ -436,6 +436,8 @@ pub async fn create_menu_item(
     check_permission(pool.get_ref(), &claims, "menu_items", "create").await?;
     require_same_org(&claims, Some(body.org_id))?;
 
+    let mut tx = pool.begin().await?;
+
     let item = sqlx::query_as::<_, MenuItem>(
         r#"
         INSERT INTO menu_items (org_id, category_id, name, description, image_url, base_price, display_order)
@@ -452,8 +454,109 @@ pub async fn create_menu_item(
     .bind(&body.image_url)
     .bind(body.base_price)
     .bind(body.display_order.unwrap_or(0))
-    .fetch_one(pool.get_ref())
+    .fetch_one(&mut *tx)
     .await?;
+
+    // Auto-attach milk types
+    let milk_addons = sqlx::query!(
+        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'milk_type' AND is_active = true",
+        body.org_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !milk_addons.is_empty() {
+        let group_id: Uuid = sqlx::query!(
+            r#"
+            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
+            VALUES ($1, 'milk_type', 'single', false, 0)
+            RETURNING id
+            "#,
+            item.id
+        )
+        .fetch_one(&mut *tx)
+        .await?
+        .id;
+
+        for addon in milk_addons {
+            sqlx::query!(
+                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
+                group_id,
+                addon.id,
+                addon.display_order
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    // Auto-attach coffee types
+    let coffee_addons = sqlx::query!(
+        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'coffee_type' AND is_active = true",
+        body.org_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !coffee_addons.is_empty() {
+        let group_id: Uuid = sqlx::query!(
+            r#"
+            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
+            VALUES ($1, 'coffee_type', 'single', false, 0)
+            RETURNING id
+            "#,
+            item.id
+        )
+        .fetch_one(&mut *tx)
+        .await?
+        .id;
+
+        for addon in coffee_addons {
+            sqlx::query!(
+                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
+                group_id,
+                addon.id,
+                addon.display_order
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    // Auto-attach extra types
+    let extra_addons = sqlx::query!(
+        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'extra' AND is_active = true",
+        body.org_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !extra_addons.is_empty() {
+        let group_id: Uuid = sqlx::query!(
+            r#"
+            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
+            VALUES ($1, 'extra', 'multi', false, 0)
+            RETURNING id
+            "#,
+            item.id
+        )
+        .fetch_one(&mut *tx)
+        .await?
+        .id;
+
+        for addon in extra_addons {
+            sqlx::query!(
+                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
+                group_id,
+                addon.id,
+                addon.display_order
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    tx.commit().await?;
 
     Ok(HttpResponse::Created().json(MenuItemFull { item, sizes: vec![], option_groups: vec![] }))
 }

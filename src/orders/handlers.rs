@@ -391,13 +391,11 @@ pub async fn create_order(
         }
 
         // ── Apply ingredient substitutions (Dynamic Quantity) ────────────────
-        // Map: replaced_id -> substitute_id
-        let mut substitutions = std::collections::HashMap::new();
+        // Set of replaced_org_ingredient_id
+        let mut substitutions = std::collections::HashSet::new();
         for d in &item_deductions {
             if let Some(replaced) = d.replaces_org_ingredient_id {
-                if let Some(sub_id) = d.org_ingredient_id {
-                    substitutions.insert(replaced, sub_id);
-                }
+                substitutions.insert(replaced);
             }
         }
 
@@ -407,7 +405,7 @@ pub async fn create_order(
             for d in &item_deductions {
                 if d.source == "drink_recipe" {
                     if let Some(id) = d.org_ingredient_id {
-                        if substitutions.contains_key(&id) {
+                        if substitutions.contains(&id) {
                             *replaced_quantities.entry(id).or_insert(0.0) += d.quantity;
                         }
                     }
@@ -420,7 +418,7 @@ pub async fn create_order(
                 // Remove the replaced base ingredients entirely
                 if d.source == "drink_recipe" {
                     if let Some(id) = d.org_ingredient_id {
-                        if substitutions.contains_key(&id) {
+                        if substitutions.contains(&id) {
                             continue;
                         }
                     }

@@ -579,7 +579,8 @@ CREATE TABLE public.order_items (
     unit_price integer NOT NULL,
     quantity integer DEFAULT 1 NOT NULL,
     line_total integer NOT NULL,
-    notes text
+    notes text,
+    deductions_snapshot jsonb DEFAULT '[]'::jsonb NOT NULL
 );
 
 

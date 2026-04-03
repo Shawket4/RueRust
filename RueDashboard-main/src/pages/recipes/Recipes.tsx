@@ -184,23 +184,25 @@ function DrinkRecipePanel({ item, orgId }: { item: MenuItem; orgId: string }) {
   });
 
   const [form, setForm] = useState({
-    size_label:      "medium",
-    ingredient_name: "",
-    ingredient_unit: "",
-    quantity_used:   "",
+    size_label:        "medium",
+    org_ingredient_id: null as string | null,
+    ingredient_name:   "",
+    ingredient_unit:   "",
+    quantity_used:     "",
   });
 
   const addMutation = useMutation({
     mutationFn: () => recipesApi.upsertDrinkRecipe(item.id, {
-      size_label:      form.size_label,
-      ingredient_name: form.ingredient_name,
-      ingredient_unit: form.ingredient_unit,
-      quantity_used:   parseFloat(form.quantity_used),
+      size_label:        form.size_label,
+      org_ingredient_id: form.org_ingredient_id,
+      ingredient_name:   form.ingredient_name,
+      ingredient_unit:   form.ingredient_unit,
+      quantity_used:     parseFloat(form.quantity_used),
     }),
     onSuccess: () => {
       toast.success("Recipe saved");
       qc.invalidateQueries({ queryKey: ["drink-recipes", item.id] });
-      setForm((f) => ({ ...f, ingredient_name: "", ingredient_unit: "", quantity_used: "" }));
+      setForm((f) => ({ ...f, org_ingredient_id: null, ingredient_name: "", ingredient_unit: "", quantity_used: "" }));
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   });
@@ -256,7 +258,7 @@ function DrinkRecipePanel({ item, orgId }: { item: MenuItem; orgId: string }) {
           <IngredientPicker
             items={uniqueInvItems}
             value={form.ingredient_name}
-            onSelect={(ing) => setForm((f) => ({ ...f, ingredient_name: ing.name, ingredient_unit: ing.unit }))}
+            onSelect={(ing) => setForm((f) => ({ ...f, org_ingredient_id: ing.id, ingredient_name: ing.name, ingredient_unit: ing.unit }))}
           />
         </div>
         <div className="col-span-2">
@@ -287,6 +289,7 @@ function AddonRecipePanel({ addon, orgId }: { addon: AddonItem; orgId: string })
   });
 
   const [form, setForm] = useState({
+    org_ingredient_id:          null as string | null,
     ingredient_name:            "",
     ingredient_unit:            "",
     quantity_used:              "",
@@ -300,15 +303,16 @@ function AddonRecipePanel({ addon, orgId }: { addon: AddonItem; orgId: string })
 
   const addMutation = useMutation({
     mutationFn: () => recipesApi.upsertAddonIngredient(addon.id, {
+      org_ingredient_id:          form.org_ingredient_id,
       ingredient_name:            form.ingredient_name,
       ingredient_unit:            form.ingredient_unit,
       quantity_used:              parseFloat(form.quantity_used),
-      replaces_org_ingredient_id: form.replaces_org_ingredient_id ?? undefined,
+      replaces_org_ingredient_id: form.replaces_org_ingredient_id ?? null,
     }),
     onSuccess: () => {
       toast.success("Saved");
       qc.invalidateQueries({ queryKey: ["addon-ingredients", addon.id] });
-      setForm((f) => ({ ...f, ingredient_name: "", ingredient_unit: "", quantity_used: "", replaces_org_ingredient_id: null }));
+      setForm((f) => ({ ...f, org_ingredient_id: null, ingredient_name: "", ingredient_unit: "", quantity_used: "", replaces_org_ingredient_id: null }));
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   });
@@ -358,7 +362,7 @@ function AddonRecipePanel({ addon, orgId }: { addon: AddonItem; orgId: string })
           <IngredientPicker
             items={uniqueInvItems}
             value={form.ingredient_name}
-            onSelect={(ing) => setForm((f) => ({ ...f, ingredient_name: ing.name, ingredient_unit: ing.unit }))}
+            onSelect={(ing) => setForm((f) => ({ ...f, org_ingredient_id: ing.id, ingredient_name: ing.name, ingredient_unit: ing.unit }))}
           />
         </div>
         <div className="space-y-1">

@@ -731,6 +731,34 @@ class _ItemRow extends StatelessWidget {
                         );
                       }).toList()),
                 ],
+                if (item.deductionsSnapshot.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.bg,
+                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(AppRadius.xs),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('INGREDIENTS USED', style: cairo(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.textMuted)),
+                        const SizedBox(height: 4),
+                        ...item.deductionsSnapshot.map((d) => Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text('${d.ingredientName} (${d.source.replaceAll('_', ' ')})', style: cairo(fontSize: 10, color: AppColors.textSecondary)),
+                              Text('${d.quantity} ${d.unit}', style: cairo(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+                            ],
+                          ),
+                        )),
+                      ],
+                    ),
+                  ),
+                ],
               ])),
           const SizedBox(width: 10),
           Text(egp(item.lineTotal),

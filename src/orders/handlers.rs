@@ -62,6 +62,7 @@ pub struct OrderItem {
     pub quantity:     i32,
     pub line_total:   i32,
     pub notes:        Option<String>,
+    pub deductions_snapshot: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -135,8 +136,9 @@ pub struct CreateOrderRequest {
 
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
-    pub reason:    String,
-    pub voided_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub reason:            String,
+    pub voided_at:         Option<chrono::DateTime<chrono::Utc>>,
+    pub restore_inventory: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -250,8 +252,11 @@ pub async fn create_order(
         unit_price:    i32,
         quantity:      i32,
     }
+    #[derive(Serialize, Clone)]
     struct InventoryDeduction {
         org_ingredient_id:         Option<Uuid>,
+        ingredient_name:           String,
+        unit:                      String,
         quantity:                  f64,
         source:                    String,
         replaces_org_ingredient_id: Option<Uuid>,  // if set, removes the matching base-recipe deduction
@@ -290,9 +295,9 @@ pub async fn create_order(
 
         let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
 
-        let recipe_rows: Vec<(Option<Uuid>, f64)> = if let Some(size) = &item_input.size_label {
+        let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> = if let Some(size) = &item_input.size_label {
             sqlx::query_as(
-                "SELECT org_ingredient_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
+                "SELECT org_ingredient_id, quantity_used::float8, ingredient_name, ingredient_unit FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
             )
             .bind(item_input.menu_item_id)
             .bind(size)
@@ -301,7 +306,7 @@ pub async fn create_order(
         } else {
             sqlx::query_as(
                 r#"
-                SELECT org_ingredient_id, quantity_used::float8 
+                SELECT org_ingredient_id, quantity_used::float8, ingredient_name, ingredient_unit
                 FROM menu_item_recipes 
                 WHERE menu_item_id = $1 
                   AND size_label = (
@@ -314,9 +319,11 @@ pub async fn create_order(
             .await?
         };
         
-        for (ing_id, qty) in recipe_rows {
+        for (ing_id, qty, name, unit) in recipe_rows {
             item_deductions.push(InventoryDeduction {
                 org_ingredient_id:         ing_id,
+                ingredient_name:           name,
+                unit:                      unit,
                 quantity:                  qty * item_input.quantity as f64,
                 source:                    "drink_recipe".into(),
                 replaces_org_ingredient_id: None,
@@ -353,9 +360,9 @@ pub async fn create_order(
 
             let size_label = item_input.size_label.as_deref();
             // Fetch override ingredient linkages (org_ingredient_id + optional substitution)
-            let override_rows: Vec<(Option<Uuid>, f64, Option<Uuid>)> = if let Some(size) = size_label {
+            let override_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> = if let Some(size) = size_label {
                 sqlx::query_as(
-                    r#"SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id
+                    r#"SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id, ingredient_name, ingredient_unit
                     FROM drink_option_ingredient_overrides
                     WHERE drink_option_item_id = $1
                       AND (size_label = $2::item_size OR size_label IS NULL)
@@ -367,7 +374,7 @@ pub async fn create_order(
                 .await?
             } else {
                 sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
+                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id, ingredient_name, ingredient_unit FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
                 )
                 .bind(addon_input.drink_option_item_id)
                 .fetch_all(pool.get_ref())
@@ -376,11 +383,13 @@ pub async fn create_order(
 
             if !override_rows.is_empty() {
                 let mut seen = std::collections::HashSet::new();
-                for (ing_id, qty, replaces) in override_rows {
+                for (ing_id, qty, replaces, name, unit) in override_rows {
                     let key = ing_id.map(|u| u.to_string()).unwrap_or_default();
                     if seen.insert(key) {
                         item_deductions.push(InventoryDeduction {
                             org_ingredient_id:         ing_id,
+                            ingredient_name:           name,
+                            unit:                      unit,
                             quantity:                  qty * item_input.quantity as f64,
                             source:                    "addon_override".into(),
                             replaces_org_ingredient_id: replaces,
@@ -388,15 +397,17 @@ pub async fn create_order(
                     }
                 }
             } else {
-                let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>)> = sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id FROM addon_item_ingredients WHERE addon_item_id = $1"
+                let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> = sqlx::query_as(
+                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id, ingredient_name, ingredient_unit FROM addon_item_ingredients WHERE addon_item_id = $1"
                 )
                 .bind(addon_input.addon_item_id)
                 .fetch_all(pool.get_ref())
                 .await?;
-                for (ing_id, qty, replaces) in base_rows {
+                for (ing_id, qty, replaces, name, unit) in base_rows {
                     item_deductions.push(InventoryDeduction {
                         org_ingredient_id:         ing_id,
+                        ingredient_name:           name,
+                        unit:                      unit,
                         quantity:                  qty * item_input.quantity as f64,
                         source:                    "addon_base".into(),
                         replaces_org_ingredient_id: replaces,
@@ -587,11 +598,14 @@ pub async fn create_order(
     for resolved in resolved_items {
         let line_total = resolved.unit_price * resolved.quantity;
 
+        let snapshot = serde_json::to_value(&resolved.deductions)
+            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+
         let order_item = sqlx::query_as::<_, OrderItem>(
             r#"INSERT INTO order_items
-                (order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes"#,
+                (order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes, deductions_snapshot)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            RETURNING id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes, deductions_snapshot"#,
         )
         .bind(order.id)
         .bind(resolved.menu_item_id)
@@ -601,6 +615,7 @@ pub async fn create_order(
         .bind(resolved.quantity)
         .bind(line_total)
         .bind(&resolved.notes)
+        .bind(snapshot)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -812,6 +827,8 @@ pub async fn void_order(
     validate_void_reason(&body.reason)?;
     let voided_at = body.voided_at.unwrap_or_else(chrono::Utc::now);
 
+    let mut tx = pool.begin().await?;
+
     let updated = sqlx::query_as::<_, Order>(
         r#"UPDATE orders SET status = 'voided', voided_at = $3, void_reason = $2::void_reason, voided_by = $4
         WHERE id = $1
@@ -825,7 +842,31 @@ pub async fn void_order(
             customer_name, notes, voided_at, void_reason::text, voided_by, created_at"#,
     )
     .bind(*order_id).bind(&body.reason).bind(voided_at).bind(claims.user_id())
-    .fetch_one(pool.get_ref()).await?;
+    .fetch_one(&mut *tx).await?;
+
+    if body.restore_inventory.unwrap_or(false) {
+        let items = fetch_order_items_full(pool.get_ref(), *order_id).await?;
+        for item in items {
+            if let Some(deductions) = item.item.deductions_snapshot.as_array() {
+                for d in deductions {
+                    if let (Some(qty), Some(ing_id_str)) = (d.get("quantity").and_then(|v| v.as_f64()), d.get("org_ingredient_id").and_then(|v| v.as_str())) {
+                        if let Ok(ing_id) = Uuid::parse_str(ing_id_str) {
+                            sqlx::query(
+                                "UPDATE branch_inventory SET current_stock = current_stock + $1 WHERE branch_id = $2 AND org_ingredient_id = $3"
+                            )
+                            .bind(qty)
+                            .bind(order.branch_id)
+                            .bind(ing_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    tx.commit().await?;
 
     Ok(HttpResponse::Ok().json(updated))
 }
@@ -851,7 +892,7 @@ async fn fetch_order_by_idempotency_key(pool: &PgPool, key: Uuid) -> Result<Opti
 
 async fn fetch_order_items_full(pool: &PgPool, order_id: Uuid) -> Result<Vec<OrderItemFull>, AppError> {
     let items = sqlx::query_as::<_, OrderItem>(
-        "SELECT id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes FROM order_items WHERE order_id = $1 ORDER BY id",
+        "SELECT id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes, deductions_snapshot FROM order_items WHERE order_id = $1 ORDER BY id",
     ).bind(order_id).fetch_all(pool).await?;
 
     let mut result = Vec::new();

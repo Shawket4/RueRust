@@ -39,6 +39,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/shared/DataTable";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -81,10 +82,11 @@ function OrderDetailDrawer({
   const isVoided = order.status === "voided";
   const disc = discounts.find((d) => d.id === order.discount_id);
   const [voidReason, setVoidReason] = useState("customer_request");
+  const [restoreInventory, setRestoreInventory] = useState(true);
 
   const { mutate: doVoid, isPending } = useMutation({
     mutationFn: (reason: string) =>
-      ordersApi.voidOrder(order.id, { reason, restore_inventory: true }),
+      ordersApi.voidOrder(order.id, { reason, restore_inventory: restoreInventory }),
     onSuccess: () => {
       toast.success("Order voided");
       qc.invalidateQueries({ queryKey: ["orders"] });
@@ -153,6 +155,17 @@ function OrderDetailDrawer({
                                   ? ` +${egp(a.unit_price)}`
                                   : ""}
                               </span>
+                            ))}
+                          </div>
+                        )}
+                        {(item.deductions_snapshot ?? []).length > 0 && (
+                          <div className="mt-2 space-y-1 bg-background rounded-md p-2 text-xs border border-border">
+                            <p className="font-semibold text-[10px] uppercase text-muted-foreground mb-1">Ingredients Used</p>
+                            {item.deductions_snapshot.map((d, i) => (
+                              <div key={i} className="flex justify-between items-center text-muted-foreground">
+                                <span>{d.ingredient_name} <span className="text-[9px] opacity-70 ml-1">({d.source.replace('_', ' ')})</span></span>
+                                <span>{d.quantity} {d.unit}</span>
+                              </div>
                             ))}
                           </div>
                         )}
@@ -288,6 +301,10 @@ function OrderDetailDrawer({
                   <SelectItem value="other">Other</SelectItem>
                 </SelectContent>
               </Select>
+              <div className="flex items-center space-x-2 py-1">
+                <Checkbox id="restoreInv" checked={restoreInventory} onCheckedChange={(c) => setRestoreInventory(!!c)} />
+                <Label htmlFor="restoreInv" className="text-sm font-medium cursor-pointer">Restore inventory from this order</Label>
+              </div>
               <Button
                 variant="destructive"
                 size="sm"

@@ -271,6 +271,15 @@ export interface OrderItemAddon {
   line_total: number;
 }
 
+export interface InventoryDeduction {
+  org_ingredient_id: string | null;
+  ingredient_name: string;
+  unit: string;
+  quantity: number;
+  source: string;
+  replaces_org_ingredient_id: string | null;
+}
+
 export interface OrderItem {
   id: string;
   order_id: string;
@@ -282,6 +291,7 @@ export interface OrderItem {
   line_total: number;
   notes: string | null;
   addons: OrderItemAddon[];
+  deductions_snapshot: InventoryDeduction[];
 }
 
 export interface Order {

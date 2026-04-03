@@ -9,7 +9,6 @@ mod menu;
 mod inventory;
 mod recipes;
 mod adjustments;
-mod soft_serve;
 mod shifts;
 mod orders;
 mod reports;
@@ -79,7 +78,6 @@ async fn main() -> std::io::Result<()> {
             .configure(inventory::routes::configure)
             .configure(recipes::routes::configure)
             .configure(adjustments::routes::configure)
-            .configure(soft_serve::routes::configure)
             .configure(shifts::routes::configure)
             .configure(orders::routes::configure)
             .configure(discounts::routes::configure)

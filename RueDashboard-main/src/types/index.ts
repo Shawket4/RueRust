@@ -251,32 +251,6 @@ export interface BranchInventoryTransfer {
   initiated_at: string;
 }
 
-// ── Soft Serve ────────────────────────────────────────────────────────────────
-export interface ServePool {
-  id: string;
-  branch_id: string;
-  menu_item_id: string;
-  item_name: string;
-  total_units: number;
-  large_ratio: number;
-  low_stock_flag: boolean;
-  updated_at: string;
-}
-
-export interface SoftServeBatch {
-  id: string;
-  branch_id: string;
-  menu_item_id: string;
-  item_name: string;
-  small_serves: number;
-  large_serves: number;
-  large_ratio: number;
-  total_units: number;
-  logged_by: string;
-  logged_by_name: string;
-  notes: string | null;
-  created_at: string;
-}
 
 // ── Orders ────────────────────────────────────────────────────────────────────
 export type PaymentMethod =

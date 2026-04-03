@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 
 const RESOURCES = [
   "orders","shifts","branches","users","menu_items","categories","addon_items",
-  "inventory","recipes","permissions","shift_counts","soft_serve",
+  "inventory","recipes","permissions","shift_counts",
 ];
 
 const ACTIONS = ["read","create","update","delete"];

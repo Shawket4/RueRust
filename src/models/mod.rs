@@ -64,6 +64,7 @@ impl From<User> for UserPublic {
 
 // ── Discount ──────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Discount {
     pub id:         Uuid,

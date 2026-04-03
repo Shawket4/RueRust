@@ -135,9 +135,8 @@ pub struct CreateOrderRequest {
 
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
-    pub reason:            String,
-    pub restore_inventory: Option<bool>,
-    pub voided_at:         Option<chrono::DateTime<chrono::Utc>>,
+    pub reason:    String,
+    pub voided_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -646,7 +645,9 @@ pub async fn list_orders(
     // count query: $1=scope,                          filters from $2
     let mut data_filter_sql  = String::new();
     let mut count_filter_sql = String::new();
+    #[allow(unused_assignments)]
     let mut data_idx  = 4i32;
+    #[allow(unused_assignments)]
     let mut count_idx = 2i32;
 
     macro_rules! push_filter {

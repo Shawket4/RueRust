@@ -74,7 +74,7 @@ ALTER TABLE addon_item_ingredients
 ALTER TABLE drink_option_ingredient_overrides
     ADD COLUMN org_ingredient_id UUID REFERENCES org_ingredients(id) ON DELETE RESTRICT;
 
--- 7. Drop old inventory tables (order matters: children before parents)
+-- 7. Drop old inventory tables + soft serve tracking (order: children before parents)
 DROP TABLE IF EXISTS soft_serve_batch_ingredients;
 DROP TABLE IF EXISTS inventory_deduction_logs;
 DROP TABLE IF EXISTS shift_inventory_counts;
@@ -83,15 +83,12 @@ DROP TABLE IF EXISTS inventory_adjustments;
 DROP TABLE IF EXISTS inventory_transfers;
 DROP TABLE IF EXISTS inventory_items;
 
--- 8. Recreate soft_serve_batch_ingredients pointing to branch_inventory
-CREATE TABLE soft_serve_batch_ingredients (
-    id                  UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    batch_id            UUID          NOT NULL REFERENCES soft_serve_batches(id) ON DELETE CASCADE,
-    branch_inventory_id UUID          NOT NULL REFERENCES branch_inventory(id) ON DELETE RESTRICT,
-    quantity_used       NUMERIC(12,3) NOT NULL
-);
+-- Soft serve is now treated as a regular drink (recipe-based deduction through orders).
+-- Drop the dedicated soft serve tracking tables too.
+DROP TABLE IF EXISTS soft_serve_serve_pools;
+DROP TABLE IF EXISTS soft_serve_batches;
 
--- 9. Recreate shift_inventory_counts pointing to branch_inventory (no snapshots needed)
+-- 8. Recreate shift_inventory_counts pointing to branch_inventory (no snapshots needed)
 CREATE TABLE shift_inventory_counts (
     id                  UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
     shift_id            UUID          NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
@@ -106,7 +103,7 @@ CREATE TABLE shift_inventory_counts (
     UNIQUE (shift_id, branch_inventory_id)
 );
 
--- 10. Indexes
+-- 9. Indexes
 CREATE INDEX idx_org_ingredients_org          ON org_ingredients (org_id);
 CREATE INDEX idx_branch_inventory_branch      ON branch_inventory (branch_id);
 CREATE INDEX idx_branch_inventory_ingredient  ON branch_inventory (org_ingredient_id);
@@ -116,7 +113,6 @@ CREATE INDEX idx_bit_source                   ON branch_inventory_transfers (sou
 CREATE INDEX idx_bit_dest                     ON branch_inventory_transfers (destination_branch_id);
 CREATE INDEX idx_bit_ingredient               ON branch_inventory_transfers (org_ingredient_id);
 CREATE INDEX idx_sic_shift                    ON shift_inventory_counts (shift_id);
-CREATE INDEX idx_ssbi_batch                   ON soft_serve_batch_ingredients (batch_id);
 
 -- 11. Updated-at triggers
 CREATE TRIGGER trg_org_ingredients_updated_at

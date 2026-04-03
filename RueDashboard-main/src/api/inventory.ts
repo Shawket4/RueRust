@@ -48,3 +48,9 @@ export const getTransfers = (branchId: string, direction?: string) =>
 
 export const createTransfer = (data: Record<string, unknown>) =>
   client.post<BranchInventoryTransfer>("/inventory/transfers", data);
+
+export const updateTransfer = (id: string, note: string | null) =>
+  client.patch<BranchInventoryTransfer>(`/inventory/transfers/${id}`, { note });
+
+export const deleteTransfer = (id: string) =>
+  client.delete(`/inventory/transfers/${id}`);

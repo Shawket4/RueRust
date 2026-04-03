@@ -125,6 +125,11 @@ pub struct CreateTransferRequest {
 }
 
 #[derive(Deserialize)]
+pub struct UpdateTransferRequest {
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct ListTransfersQuery {
     pub direction: Option<String>, // "incoming" | "outgoing" | None = both
 }
@@ -709,6 +714,21 @@ pub async fn create_transfer(
     .fetch_one(&mut *tx)
     .await?;
 
+    // Look up branch names for audit notes
+    let src_name: String = sqlx::query_scalar(
+        "SELECT name FROM branches WHERE id = $1"
+    )
+    .bind(body.source_branch_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let dst_name: String = sqlx::query_scalar(
+        "SELECT name FROM branches WHERE id = $1"
+    )
+    .bind(body.destination_branch_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
     // Record transfer
     let transfer = sqlx::query_as::<_, BranchInventoryTransfer>(
         r#"
@@ -748,7 +768,7 @@ pub async fn create_transfer(
     .bind(body.source_branch_id)
     .bind(src_bi_id)
     .bind(body.quantity)
-    .bind(format!("Transfer to branch — {}", body.destination_branch_id))
+    .bind(format!("Transfer to {} — {} units", dst_name, body.quantity))
     .bind(transfer.id)
     .bind(claims.user_id())
     .execute(&mut *tx)
@@ -762,7 +782,7 @@ pub async fn create_transfer(
     .bind(body.destination_branch_id)
     .bind(dst_bi_id)
     .bind(body.quantity)
-    .bind(format!("Transfer from branch — {}", body.source_branch_id))
+    .bind(format!("Transfer from {} — {} units", src_name, body.quantity))
     .bind(transfer.id)
     .bind(claims.user_id())
     .execute(&mut *tx)
@@ -824,7 +844,181 @@ pub async fn list_transfers(
     Ok(HttpResponse::Ok().json(rows))
 }
 
+
+// ── PATCH /inventory/transfers/:id ───────────────────────────
+
+pub async fn update_transfer(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<UpdateTransferRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_transfers", "update").await?;
+
+    // Load transfer so we can check org access
+    let transfer = sqlx::query_as::<_, BranchInventoryTransfer>(
+        r#"
+        SELECT
+            t.id, t.org_id,
+            t.source_branch_id,
+            sb.name AS source_branch_name,
+            t.destination_branch_id,
+            db.name AS destination_branch_name,
+            t.org_ingredient_id,
+            oi.name       AS ingredient_name,
+            oi.unit::text AS unit,
+            t.quantity, t.note, t.initiated_by,
+            u.name AS initiated_by_name,
+            t.initiated_at
+        FROM branch_inventory_transfers t
+        JOIN branches sb        ON sb.id = t.source_branch_id
+        JOIN branches db        ON db.id = t.destination_branch_id
+        JOIN org_ingredients oi ON oi.id = t.org_ingredient_id
+        JOIN users u            ON u.id  = t.initiated_by
+        WHERE t.id = $1
+        "#,
+    )
+    .bind(*id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Transfer not found".into()))?;
+
+    require_org_access(&claims, transfer.org_id)?;
+
+    let updated = sqlx::query_as::<_, BranchInventoryTransfer>(
+        r#"
+        UPDATE branch_inventory_transfers SET note = $2
+        WHERE id = $1
+        RETURNING
+            id, org_id,
+            source_branch_id,
+            (SELECT name FROM branches      WHERE id = source_branch_id)      AS source_branch_name,
+            destination_branch_id,
+            (SELECT name FROM branches      WHERE id = destination_branch_id) AS destination_branch_name,
+            org_ingredient_id,
+            (SELECT name      FROM org_ingredients WHERE id = org_ingredient_id) AS ingredient_name,
+            (SELECT unit::text FROM org_ingredients WHERE id = org_ingredient_id) AS unit,
+            quantity, note, initiated_by,
+            (SELECT name FROM users WHERE id = initiated_by) AS initiated_by_name,
+            initiated_at
+        "#,
+    )
+    .bind(*id)
+    .bind(&body.note)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(updated))
+}
+
+// ── DELETE /inventory/transfers/:id ──────────────────────────
+
+pub async fn delete_transfer(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "inventory_transfers", "delete").await?;
+
+    // Load the transfer
+    let t: Option<(Uuid, Uuid, Uuid, Uuid, sqlx::types::BigDecimal, String, String)> =
+        sqlx::query_as(
+            r#"
+            SELECT
+                t.org_id,
+                t.source_branch_id,
+                t.destination_branch_id,
+                t.org_ingredient_id,
+                t.quantity,
+                sb.name AS source_branch_name,
+                db.name AS destination_branch_name
+            FROM branch_inventory_transfers t
+            JOIN branches sb ON sb.id = t.source_branch_id
+            JOIN branches db ON db.id = t.destination_branch_id
+            WHERE t.id = $1
+            "#,
+        )
+        .bind(*id)
+        .fetch_optional(pool.get_ref())
+        .await?;
+
+    let (org_id, src_id, dst_id, ing_id, qty, src_name, dst_name) =
+        t.ok_or_else(|| AppError::NotFound("Transfer not found".into()))?;
+
+    require_org_access(&claims, org_id)?;
+
+    let mut tx = pool.get_ref().begin().await?;
+
+    // Reverse: add back to source (soft — never fails)
+    sqlx::query(
+        "UPDATE branch_inventory SET current_stock = current_stock + $1
+         WHERE branch_id = $2 AND org_ingredient_id = $3"
+    )
+    .bind(&qty)
+    .bind(src_id)
+    .bind(ing_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Reverse: deduct from destination (soft — allow negative)
+    sqlx::query(
+        "UPDATE branch_inventory SET current_stock = current_stock - $1
+         WHERE branch_id = $2 AND org_ingredient_id = $3"
+    )
+    .bind(&qty)
+    .bind(dst_id)
+    .bind(ing_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Log compensating adjustments on both sides (audit trail)
+    sqlx::query(
+        r#"INSERT INTO branch_inventory_adjustments
+            (branch_id, branch_inventory_id, type, quantity, note, adjusted_by)
+           SELECT $1, bi.id, 'add'::inventory_adjustment_type, $3,
+                  $4, $5
+           FROM branch_inventory bi
+           WHERE bi.branch_id = $1 AND bi.org_ingredient_id = $2"#,
+    )
+    .bind(src_id)
+    .bind(ing_id)
+    .bind(&qty)
+    .bind(format!("Transfer reversal — returned from {}", dst_name))
+    .bind(claims.user_id())
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"INSERT INTO branch_inventory_adjustments
+            (branch_id, branch_inventory_id, type, quantity, note, adjusted_by)
+           SELECT $1, bi.id, 'remove'::inventory_adjustment_type, $3,
+                  $4, $5
+           FROM branch_inventory bi
+           WHERE bi.branch_id = $1 AND bi.org_ingredient_id = $2"#,
+    )
+    .bind(dst_id)
+    .bind(ing_id)
+    .bind(&qty)
+    .bind(format!("Transfer reversal — returned to {}", src_name))
+    .bind(claims.user_id())
+    .execute(&mut *tx)
+    .await?;
+
+    // Delete the transfer record
+    sqlx::query("DELETE FROM branch_inventory_transfers WHERE id = $1")
+        .bind(*id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
 // ── Helpers ───────────────────────────────────────────────────
+
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
     req.extensions()

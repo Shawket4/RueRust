@@ -24,6 +24,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
 
             // ── Transfers (always auto-applied) ───────────────────────
             .route("/transfers",                         web::post().to(handlers::create_transfer))
+            .route("/transfers/{id}",                    web::patch().to(handlers::update_transfer))
+            .route("/transfers/{id}",                    web::delete().to(handlers::delete_transfer))
             .route("/branches/{branch_id}/transfers",    web::get().to(handlers::list_transfers)),
     );
 }

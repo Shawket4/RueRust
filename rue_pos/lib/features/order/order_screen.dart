@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
 import 'package:rue_pos/core/api/client.dart';
+import 'package:rue_pos/core/api/recipe_api.dart';
 import 'package:rue_pos/core/models/pending_action.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/order_api.dart';
@@ -925,6 +926,7 @@ class _CardBg extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  ITEM DETAIL SHEET
 // ─────────────────────────────────────────────────────────────────────────────
+
 class ItemDetailSheet extends ConsumerStatefulWidget {
   final MenuItem item;
   const ItemDetailSheet({super.key, required this.item});
@@ -941,8 +943,13 @@ class ItemDetailSheet extends ConsumerStatefulWidget {
 
 class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   String? _selectedSize;
+
+  // Single-select: groupId → optionItemId
   final Map<String, String> _single = {};
-  final Map<String, Set<String>> _multi = {};
+
+  // Multi-select: groupId → { optionItemId → quantity }
+  final Map<String, Map<String, int>> _multi = {};
+
   int _qty = 1;
 
   @override
@@ -953,12 +960,14 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   }
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
+
   int get _addonsTotal {
     int t = 0;
     for (final g in widget.item.optionGroups) {
       if (g.isMultiSelect) {
         for (final o in g.items) {
-          if ((_multi[g.id] ?? {}).contains(o.id)) t += o.price;
+          final qty = (_multi[g.id] ?? {})[o.id] ?? 0;
+          t += o.price * qty;
         }
       } else {
         for (final o in g.items) {
@@ -973,11 +982,13 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   }
 
   int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
+
   bool get _canAdd {
     for (final g in widget.item.optionGroups) {
       if (!g.isRequired) continue;
       if (g.isMultiSelect) {
-        if ((_multi[g.id] ?? {}).isEmpty) return false;
+        final total = (_multi[g.id] ?? {}).values.fold(0, (s, q) => s + q);
+        if (total == 0) return false;
       } else {
         if (!_single.containsKey(g.id)) return false;
       }
@@ -993,23 +1004,37 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         }
       });
 
-  void _toggleMulti(String gId, String oId) => setState(() {
-        final s = _multi.putIfAbsent(gId, () => {});
-        s.contains(oId) ? s.remove(oId) : s.add(oId);
-        if (s.isEmpty) _multi.remove(gId);
+  // Multi: increment on first tap, stepper handles inc/dec/remove
+  void _incrementMulti(String gId, String oId) => setState(() {
+        final map = _multi.putIfAbsent(gId, () => {});
+        map[oId] = (map[oId] ?? 0) + 1;
       });
 
-  void _addToCart() {
+  void _decrementMulti(String gId, String oId) => setState(() {
+        final map = _multi[gId];
+        if (map == null) return;
+        final cur = map[oId] ?? 0;
+        if (cur <= 1) {
+          map.remove(oId);
+          if (map.isEmpty) _multi.remove(gId);
+        } else {
+          map[oId] = cur - 1;
+        }
+      });
+
+  List<SelectedAddon> get _selectedAddons {
     final addons = <SelectedAddon>[];
     for (final g in widget.item.optionGroups) {
       if (g.isMultiSelect) {
         for (final o in g.items) {
-          if ((_multi[g.id] ?? {}).contains(o.id)) {
+          final qty = (_multi[g.id] ?? {})[o.id] ?? 0;
+          for (var i = 0; i < qty; i++) {
             addons.add(SelectedAddon(
-                addonItemId: o.addonItemId,
-                drinkOptionItemId: o.id,
-                name: o.name,
-                priceModifier: o.price));
+              addonItemId: o.addonItemId,
+              drinkOptionItemId: o.id,
+              name: o.name,
+              priceModifier: o.price,
+            ));
           }
         }
       } else {
@@ -1018,23 +1043,39 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         for (final o in g.items) {
           if (o.id == sId) {
             addons.add(SelectedAddon(
-                addonItemId: o.addonItemId,
-                drinkOptionItemId: o.id,
-                name: o.name,
-                priceModifier: o.price));
+              addonItemId: o.addonItemId,
+              drinkOptionItemId: o.id,
+              name: o.name,
+              priceModifier: o.price,
+            ));
             break;
           }
         }
       }
     }
+    return addons;
+  }
+
+  void _addToCart() {
     ref.read(cartProvider.notifier).add(CartItem(
-        menuItemId: widget.item.id,
-        itemName: normaliseName(widget.item.name),
-        sizeLabel: _selectedSize,
-        unitPrice: _unitPrice,
-        quantity: _qty,
-        addons: addons));
+          menuItemId: widget.item.id,
+          itemName: normaliseName(widget.item.name),
+          sizeLabel: _selectedSize,
+          unitPrice: _unitPrice,
+          quantity: _qty,
+          addons: _selectedAddons,
+        ));
     Navigator.pop(context);
+  }
+
+  void _showRecipe() {
+    _RecipeSheet.show(
+      context,
+      menuItemId: widget.item.id,
+      itemName: normaliseName(widget.item.name),
+      sizeLabel: _selectedSize,
+      addons: _selectedAddons,
+    );
   }
 
   @override
@@ -1047,6 +1088,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: AppRadius.sheetRadius),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // drag handle
           Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Center(
@@ -1056,6 +1098,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: AppColors.border,
                           borderRadius: BorderRadius.circular(2))))),
+
+          // header
           Container(
             padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
             decoration: const BoxDecoration(
@@ -1103,6 +1147,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               ),
             ]),
           ),
+
+          // scrollable body
           Flexible(
               child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
@@ -1133,57 +1179,90 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                   selectedMulti: _multi[g.id] ?? {},
                   onToggleSingle: (oId) =>
                       _toggleSingle(g.id, oId, g.isRequired),
-                  onToggleMulti: (oId) => _toggleMulti(g.id, oId),
+                  onIncrementMulti: (oId) => _incrementMulti(g.id, oId),
+                  onDecrementMulti: (oId) => _decrementMulti(g.id, oId),
                 ),
                 const SizedBox(height: 12),
               ],
               const SizedBox(height: 6),
             ]),
           )),
+
+          // footer
           Container(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
             decoration: const BoxDecoration(
                 color: Colors.white,
                 border: Border(top: BorderSide(color: AppColors.border))),
-            child: Row(children: [
-              Container(
-                decoration: BoxDecoration(
-                    color: AppColors.bg,
-                    borderRadius: BorderRadius.circular(AppRadius.sm),
-                    border: Border.all(color: AppColors.border)),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  _QtyBtn(
-                      icon: Icons.remove,
-                      onTap: () =>
-                          setState(() => _qty = (_qty - 1).clamp(1, 99))),
-                  SizedBox(
-                      width: 40,
-                      child: Center(
-                          child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 150),
-                              transitionBuilder: (child, anim) =>
-                                  ScaleTransition(scale: anim, child: child),
-                              child: Text('$_qty',
-                                  key: ValueKey(_qty),
-                                  style: cairo(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800))))),
-                  _QtyBtn(
-                      icon: Icons.add,
-                      onTap: () =>
-                          setState(() => _qty = (_qty + 1).clamp(1, 99))),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Recipe link — only when all required options are filled
+                if (_canAdd) ...[
+                  GestureDetector(
+                    onTap: _showRecipe,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.science_outlined,
+                                size: 13, color: AppColors.textMuted),
+                            const SizedBox(width: 5),
+                            Text('View recipe',
+                                style: cairo(
+                                  fontSize: 12,
+                                  color: AppColors.textMuted,
+                                  fontWeight: FontWeight.w600,
+                                  decoration: TextDecoration.underline,
+                                )),
+                          ]),
+                    ),
+                  ),
+                ],
+                Row(children: [
+                  // Qty stepper
+                  Container(
+                    decoration: BoxDecoration(
+                        color: AppColors.bg,
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                        border: Border.all(color: AppColors.border)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      _QtyBtn(
+                          icon: Icons.remove,
+                          onTap: () =>
+                              setState(() => _qty = (_qty - 1).clamp(1, 99))),
+                      SizedBox(
+                          width: 40,
+                          child: Center(
+                              child: AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 150),
+                                  transitionBuilder: (child, anim) =>
+                                      ScaleTransition(
+                                          scale: anim, child: child),
+                                  child: Text('$_qty',
+                                      key: ValueKey(_qty),
+                                      style: cairo(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800))))),
+                      _QtyBtn(
+                          icon: Icons.add,
+                          onTap: () =>
+                              setState(() => _qty = (_qty + 1).clamp(1, 99))),
+                    ]),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: AppButton(
+                    label: _canAdd
+                        ? 'Add  —  ${egp(_lineTotal)}'
+                        : 'Select required options',
+                    height: 50,
+                    onTap: _canAdd ? _addToCart : null,
+                  )),
                 ]),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: AppButton(
-                label: _canAdd
-                    ? 'Add  —  ${egp(_lineTotal)}'
-                    : 'Select required options',
-                height: 50,
-                onTap: _canAdd ? _addToCart : null,
-              )),
-            ]),
+              ],
+            ),
           ),
         ]),
       ),
@@ -1194,19 +1273,26 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
 // ─────────────────────────────────────────────────────────────────────────────
 //  OPTION GROUP CARD
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  OPTION GROUP CARD (updated — multi-select now has per-option stepper)
+// ─────────────────────────────────────────────────────────────────────────────
 class _OptionGroupCard extends StatefulWidget {
   final DrinkOptionGroup group;
   final String? selectedSingle;
-  final Set<String> selectedMulti;
+  final Map<String, int> selectedMulti; // optionItemId → qty
   final void Function(String) onToggleSingle;
-  final void Function(String) onToggleMulti;
+  final void Function(String) onIncrementMulti;
+  final void Function(String) onDecrementMulti;
+
   const _OptionGroupCard({
     required this.group,
     required this.selectedSingle,
     required this.selectedMulti,
     required this.onToggleSingle,
-    required this.onToggleMulti,
+    required this.onIncrementMulti,
+    required this.onDecrementMulti,
   });
+
   @override
   State<_OptionGroupCard> createState() => _OptionGroupCardState();
 }
@@ -1214,6 +1300,7 @@ class _OptionGroupCard extends StatefulWidget {
 class _OptionGroupCardState extends State<_OptionGroupCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
+
   @override
   void initState() {
     super.initState();
@@ -1235,8 +1322,9 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
     final opts = _query.isEmpty
         ? allOpts
         : allOpts.where((o) => o.name.toLowerCase().contains(_query)).toList();
+
     final selCount = g.isMultiSelect
-        ? widget.selectedMulti.length
+        ? widget.selectedMulti.values.fold(0, (s, q) => s + q)
         : (widget.selectedSingle != null ? 1 : 0);
 
     return Container(
@@ -1265,7 +1353,7 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
               if (g.isRequired) const _Pill('Required', AppColors.danger),
               if (g.isMultiSelect) ...[
                 const SizedBox(width: 4),
-                const _Pill('Multi', AppColors.primary)
+                const _Pill('Multi', AppColors.primary),
               ],
             ])),
             if (selCount > 0) _CountBadge(count: selCount),
@@ -1310,27 +1398,417 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
           child: opts.isEmpty
               ? Text('No options match "$_query"',
                   style: cairo(fontSize: 12, color: AppColors.textMuted))
-              : Wrap(
-                  spacing: 7,
-                  runSpacing: 7,
-                  children: opts.map((opt) {
-                    final sel = g.isMultiSelect
-                        ? widget.selectedMulti.contains(opt.id)
-                        : widget.selectedSingle == opt.id;
-                    return _Chip(
-                      label: normaliseName(opt.name),
-                      sublabel: opt.price > 0 ? '+${egp(opt.price)}' : null,
-                      selected: sel,
-                      checkbox: g.isMultiSelect,
-                      onTap: () => g.isMultiSelect
-                          ? widget.onToggleMulti(opt.id)
-                          : widget.onToggleSingle(opt.id),
-                    );
-                  }).toList()),
+              : g.isMultiSelect
+                  ? _MultiOptionList(
+                      opts: opts,
+                      selectedQty: widget.selectedMulti,
+                      onIncrement: widget.onIncrementMulti,
+                      onDecrement: widget.onDecrementMulti,
+                    )
+                  : Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: opts.map((opt) {
+                        final sel = widget.selectedSingle == opt.id;
+                        return _Chip(
+                          label: normaliseName(opt.name),
+                          sublabel: opt.price > 0 ? '+${egp(opt.price)}' : null,
+                          selected: sel,
+                          checkbox: false,
+                          onTap: () => widget.onToggleSingle(opt.id),
+                        );
+                      }).toList()),
         ),
       ]),
     );
   }
+}
+
+// Multi-option list with per-row qty stepper
+class _MultiOptionList extends StatelessWidget {
+  final List<DrinkOptionItem> opts;
+  final Map<String, int> selectedQty;
+  final void Function(String) onIncrement;
+  final void Function(String) onDecrement;
+
+  const _MultiOptionList({
+    required this.opts,
+    required this.selectedQty,
+    required this.onIncrement,
+    required this.onDecrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: opts.map((opt) {
+        final qty = selectedQty[opt.id] ?? 0;
+        final selected = qty > 0;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color:
+                  selected ? AppColors.primary.withOpacity(0.05) : AppColors.bg,
+              borderRadius: BorderRadius.circular(AppRadius.xs),
+              border: Border.all(
+                  color: selected
+                      ? AppColors.primary.withOpacity(0.3)
+                      : AppColors.border,
+                  width: selected ? 1.5 : 1),
+            ),
+            child: Row(children: [
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(normaliseName(opt.name),
+                        style: cairo(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: selected
+                                ? AppColors.textPrimary
+                                : AppColors.textPrimary)),
+                    if (opt.price > 0)
+                      Text('+${egp(opt.price)}',
+                          style: cairo(
+                              fontSize: 11,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w600)),
+                  ])),
+              // Stepper
+              if (selected) ...[
+                _InlineBtn(
+                    icon: Icons.remove, onTap: () => onDecrement(opt.id)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 120),
+                    transitionBuilder: (child, anim) =>
+                        ScaleTransition(scale: anim, child: child),
+                    child: Text('$qty',
+                        key: ValueKey(qty),
+                        style: cairo(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primary)),
+                  ),
+                ),
+                _InlineBtn(icon: Icons.add, onTap: () => onIncrement(opt.id)),
+              ] else ...[
+                GestureDetector(
+                  onTap: () => onIncrement(opt.id),
+                  child: Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(AppRadius.xs)),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.add,
+                        size: 16, color: AppColors.primary),
+                  ),
+                ),
+              ],
+            ]),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  RECIPE SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+class _RecipeSheet extends ConsumerStatefulWidget {
+  final String menuItemId;
+  final String itemName;
+  final String? sizeLabel;
+  final List<SelectedAddon> addons;
+
+  const _RecipeSheet({
+    required this.menuItemId,
+    required this.itemName,
+    required this.sizeLabel,
+    required this.addons,
+  });
+
+  static void show(
+    BuildContext ctx, {
+    required String menuItemId,
+    required String itemName,
+    String? sizeLabel,
+    required List<SelectedAddon> addons,
+  }) =>
+      showModalBottomSheet(
+        context: ctx,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _RecipeSheet(
+          menuItemId: menuItemId,
+          itemName: itemName,
+          sizeLabel: sizeLabel,
+          addons: addons,
+        ),
+      );
+
+  @override
+  ConsumerState<_RecipeSheet> createState() => _RecipeSheetState();
+}
+
+class _RecipeSheetState extends ConsumerState<_RecipeSheet> {
+  List<RecipeIngredient>? _ingredients;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final result = await ref.read(recipeApiProvider).preview(
+            menuItemId: widget.menuItemId,
+            sizeLabel: widget.sizeLabel,
+            addons: widget.addons,
+          );
+      if (mounted) setState(() => _ingredients = result);
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyError(e));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = _ingredients?.where((i) => i.isBase).toList() ?? [];
+    final extras = _ingredients?.where((i) => !i.isBase).toList() ?? [];
+    final hasData = _ingredients != null;
+
+    return Container(
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: AppRadius.sheetRadius),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // drag handle
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 4),
+          child: Center(
+              child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(2)))),
+        ),
+
+        // header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
+          child: Row(children: [
+            const Icon(Icons.science_outlined,
+                size: 18, color: AppColors.textSecondary),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text('Recipe',
+                      style: cairo(fontSize: 17, fontWeight: FontWeight.w800)),
+                  Text(
+                      widget.itemName +
+                          (widget.sizeLabel != null
+                              ? ' · ${normaliseName(widget.sizeLabel!)}'
+                              : ''),
+                      style:
+                          cairo(fontSize: 12, color: AppColors.textSecondary)),
+                ])),
+          ]),
+        ),
+        Container(height: 1, color: AppColors.border),
+
+        // body
+        Flexible(
+          child: _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.error_outline_rounded,
+                          size: 32, color: AppColors.border),
+                      const SizedBox(height: 10),
+                      Text(_error!,
+                          style: cairo(
+                              fontSize: 13, color: AppColors.textSecondary),
+                          textAlign: TextAlign.center),
+                      const SizedBox(height: 14),
+                      TextButton(
+                          onPressed: () {
+                            setState(() => _error = null);
+                            _fetch();
+                          },
+                          child: const Text('Retry')),
+                    ]),
+                  ),
+                )
+              : !hasData
+                  ? _RecipeSkeleton()
+                  : (_ingredients!.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Text('No recipe data for this item.',
+                                style: cairo(color: AppColors.textMuted)),
+                          ),
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+                          children: [
+                            if (base.isNotEmpty) ...[
+                              _RecipeSectionHeader('Base Recipe'),
+                              const SizedBox(height: 8),
+                              ...base.map((i) => _IngredientRow(i)),
+                            ],
+                            if (extras.isNotEmpty) ...[
+                              const SizedBox(height: 16),
+                              _RecipeSectionHeader('From Selections'),
+                              const SizedBox(height: 8),
+                              ...extras.map((i) => _IngredientRow(i)),
+                            ],
+                          ],
+                        )),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RecipeSectionHeader extends StatelessWidget {
+  final String text;
+  const _RecipeSectionHeader(this.text);
+  @override
+  Widget build(BuildContext context) => Text(text.toUpperCase(),
+      style: cairo(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textMuted,
+          letterSpacing: 1.1));
+}
+
+class _IngredientRow extends StatelessWidget {
+  final RecipeIngredient ingredient;
+  const _IngredientRow(this.ingredient);
+
+  String _formatQty(double q) {
+    if (q == q.roundToDouble()) return q.toInt().toString();
+    // trim trailing zeros up to 2 dp
+    return q
+        .toStringAsFixed(2)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isOverride = ingredient.source == 'addon_override';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: AppColors.bg,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(children: [
+        Container(
+          width: 4,
+          height: 28,
+          decoration: BoxDecoration(
+              color: ingredient.isBase
+                  ? AppColors.primary.withOpacity(0.5)
+                  : AppColors.success.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(2)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text(normaliseName(ingredient.name),
+                style: cairo(fontSize: 13, fontWeight: FontWeight.w600))),
+        if (isOverride)
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+                color: AppColors.success.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(AppRadius.xs)),
+            child: Text('override',
+                style: cairo(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.success,
+                    letterSpacing: 0.3)),
+          ),
+        Text(
+          '${_formatQty(ingredient.quantity)} ${ingredient.unit}',
+          style: cairo(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textSecondary),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RecipeSkeleton extends StatefulWidget {
+  @override
+  State<_RecipeSkeleton> createState() => _RecipeSkeletonState();
+}
+
+class _RecipeSkeletonState extends State<_RecipeSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1100))
+      ..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _anim,
+        builder: (_, __) {
+          final c = Color.lerp(_skeletonBase, _skeletonHighlight, _anim.value)!;
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+            child: Column(
+                children: List.generate(
+              4,
+              (i) => Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                height: 46,
+                decoration: BoxDecoration(
+                    color: c,
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+              ),
+            )),
+          );
+        },
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("",          web::post().to(handlers::create_order))
             .route("",          web::get().to(handlers::list_orders))
             .route("/{id}",     web::get().to(handlers::get_order))
+            .route("/preview-recipe", web::post().to(handlers::preview_recipe))
             .route("/{id}/void", web::post().to(handlers::void_order)),
     );
 }

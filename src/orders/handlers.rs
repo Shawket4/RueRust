@@ -937,3 +937,211 @@ fn validate_void_reason(reason: &str) -> Result<(), AppError> {
         _ => Err(AppError::BadRequest("Invalid void_reason".into())),
     }
 }
+
+// ── POST /orders/preview-recipe ───────────────────────────────
+
+#[derive(Deserialize)]
+pub struct PreviewRecipeAddonInput {
+    pub addon_item_id:        Uuid,
+    pub drink_option_item_id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct PreviewRecipeRequest {
+    pub menu_item_id: Uuid,
+    pub size_label:   Option<String>,
+    pub addons:       Vec<PreviewRecipeAddonInput>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PreviewIngredient {
+    pub ingredient_name: String,
+    pub unit:            String,
+    pub quantity:        f64,
+    pub source:          String,
+}
+
+pub async fn preview_recipe(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    body: web::Json<PreviewRecipeRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "create").await?;
+
+    // Reuse the exact same deduction logic as create_order ──────────────────
+    #[derive(Clone)]
+    struct Deduction {
+        org_ingredient_id:          Option<Uuid>,
+        ingredient_name:            String,
+        unit:                       String,
+        quantity:                   f64,
+        source:                     String,
+        replaces_org_ingredient_id: Option<Uuid>,
+    }
+
+    let mut deductions: Vec<Deduction> = Vec::new();
+
+    // Base recipe rows
+    let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
+        if let Some(size) = &body.size_label {
+            sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8, ingredient_name, ingredient_unit
+                 FROM menu_item_recipes
+                 WHERE menu_item_id = $1 AND size_label = $2::item_size",
+            )
+            .bind(body.menu_item_id)
+            .bind(size)
+            .fetch_all(pool.get_ref())
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"SELECT org_ingredient_id, quantity_used::float8, ingredient_name, ingredient_unit
+                   FROM menu_item_recipes
+                   WHERE menu_item_id = $1
+                     AND size_label = (
+                         SELECT size_label FROM menu_item_recipes
+                         WHERE menu_item_id = $1 LIMIT 1
+                     )"#,
+            )
+            .bind(body.menu_item_id)
+            .fetch_all(pool.get_ref())
+            .await?
+        };
+
+    for (ing_id, qty, name, unit) in recipe_rows {
+        deductions.push(Deduction {
+            org_ingredient_id:          ing_id,
+            ingredient_name:            name,
+            unit,
+            quantity:                   qty,   // qty=1 for preview
+            source:                     "drink_recipe".into(),
+            replaces_org_ingredient_id: None,
+        });
+    }
+
+    // Addon contributions
+    for addon in &body.addons {
+        let size_label = body.size_label.as_deref();
+
+        let override_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
+            if let Some(size) = size_label {
+                sqlx::query_as(
+                    r#"SELECT org_ingredient_id, quantity_used::float8,
+                              replaces_org_ingredient_id, ingredient_name, ingredient_unit
+                       FROM drink_option_ingredient_overrides
+                       WHERE drink_option_item_id = $1
+                         AND (size_label = $2::item_size OR size_label IS NULL)
+                       ORDER BY size_label DESC NULLS LAST"#,
+                )
+                .bind(addon.drink_option_item_id)
+                .bind(size)
+                .fetch_all(pool.get_ref())
+                .await?
+            } else {
+                sqlx::query_as(
+                    "SELECT org_ingredient_id, quantity_used::float8,
+                             replaces_org_ingredient_id, ingredient_name, ingredient_unit
+                     FROM drink_option_ingredient_overrides
+                     WHERE drink_option_item_id = $1 AND size_label IS NULL",
+                )
+                .bind(addon.drink_option_item_id)
+                .fetch_all(pool.get_ref())
+                .await?
+            };
+
+        if !override_rows.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            for (ing_id, qty, replaces, name, unit) in override_rows {
+                let key = ing_id.map(|u| u.to_string()).unwrap_or_default();
+                if seen.insert(key) {
+                    deductions.push(Deduction {
+                        org_ingredient_id:          ing_id,
+                        ingredient_name:            name,
+                        unit,
+                        quantity:                   qty,
+                        source:                     "addon_override".into(),
+                        replaces_org_ingredient_id: replaces,
+                    });
+                }
+            }
+        } else {
+            let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
+                sqlx::query_as(
+                    "SELECT org_ingredient_id, quantity_used::float8,
+                             replaces_org_ingredient_id, ingredient_name, ingredient_unit
+                     FROM addon_item_ingredients WHERE addon_item_id = $1",
+                )
+                .bind(addon.addon_item_id)
+                .fetch_all(pool.get_ref())
+                .await?;
+
+            for (ing_id, qty, replaces, name, unit) in base_rows {
+                deductions.push(Deduction {
+                    org_ingredient_id:          ing_id,
+                    ingredient_name:            name,
+                    unit,
+                    quantity:                   qty,
+                    source:                     "addon_base".into(),
+                    replaces_org_ingredient_id: replaces,
+                });
+            }
+        }
+    }
+
+    // Substitution pass (identical to create_order) ─────────────────────────
+    let mut substitutions = std::collections::HashSet::new();
+    for d in &deductions {
+        if let Some(replaced) = d.replaces_org_ingredient_id {
+            substitutions.insert(replaced);
+        }
+    }
+
+    let result: Vec<PreviewIngredient> = if substitutions.is_empty() {
+        deductions
+            .into_iter()
+            .map(|d| PreviewIngredient {
+                ingredient_name: d.ingredient_name,
+                unit:            d.unit,
+                quantity:        d.quantity,
+                source:          d.source,
+            })
+            .collect()
+    } else {
+        let mut replaced_quantities = std::collections::HashMap::new();
+        for d in &deductions {
+            if d.source == "drink_recipe" {
+                if let Some(id) = d.org_ingredient_id {
+                    if substitutions.contains(&id) {
+                        *replaced_quantities.entry(id).or_insert(0.0) += d.quantity;
+                    }
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        for mut d in deductions {
+            if d.source == "drink_recipe" {
+                if let Some(id) = d.org_ingredient_id {
+                    if substitutions.contains(&id) {
+                        continue;
+                    }
+                }
+            }
+            if let Some(replaced_id) = d.replaces_org_ingredient_id {
+                if let Some(inherited_qty) = replaced_quantities.get(&replaced_id) {
+                    d.quantity = *inherited_qty;
+                }
+            }
+            out.push(PreviewIngredient {
+                ingredient_name: d.ingredient_name,
+                unit:            d.unit,
+                quantity:        d.quantity,
+                source:          d.source,
+            });
+        }
+        out
+    };
+
+    Ok(HttpResponse::Ok().json(result))
+}

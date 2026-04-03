@@ -7,7 +7,7 @@ class InventoryApi {
   InventoryApi(this._c);
 
   Future<List<InventoryItem>> items(String branchId) async {
-    final res = await _c.dio.get('/inventory/branches/$branchId/items');
+    final res = await _c.dio.get('/inventory/branches/$branchId/stock');
     return (res.data as List).map((i) => InventoryItem.fromJson(i)).toList();
   }
 }

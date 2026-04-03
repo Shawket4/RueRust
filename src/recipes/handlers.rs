@@ -24,23 +24,25 @@ pub struct DrinkRecipe {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AddonIngredient {
-    pub id:               Uuid,
-    pub addon_item_id:    Uuid,
-    pub org_ingredient_id: Option<Uuid>,
-    pub ingredient_name:  String,
-    pub unit:             String,
-    pub quantity_used:    sqlx::types::BigDecimal,
+    pub id:                         Uuid,
+    pub addon_item_id:              Uuid,
+    pub org_ingredient_id:          Option<Uuid>,
+    pub ingredient_name:            String,
+    pub unit:                       String,
+    pub quantity_used:              sqlx::types::BigDecimal,
+    pub replaces_org_ingredient_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DrinkOptionOverride {
-    pub id:                   Uuid,
-    pub drink_option_item_id: Uuid,
-    pub size_label:           Option<String>,
-    pub org_ingredient_id:    Option<Uuid>,
-    pub ingredient_name:      String,
-    pub unit:                 String,
-    pub quantity_used:        sqlx::types::BigDecimal,
+    pub id:                         Uuid,
+    pub drink_option_item_id:       Uuid,
+    pub size_label:                 Option<String>,
+    pub org_ingredient_id:          Option<Uuid>,
+    pub ingredient_name:            String,
+    pub unit:                       String,
+    pub quantity_used:              sqlx::types::BigDecimal,
+    pub replaces_org_ingredient_id: Option<Uuid>,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -56,19 +58,21 @@ pub struct UpsertDrinkRecipeRequest {
 
 #[derive(Deserialize)]
 pub struct UpsertAddonIngredientRequest {
-    pub org_ingredient_id: Option<Uuid>,
-    pub ingredient_name:   String,
-    pub ingredient_unit:   String,
-    pub quantity_used:     f64,
+    pub org_ingredient_id:          Option<Uuid>,
+    pub ingredient_name:            String,
+    pub ingredient_unit:            String,
+    pub quantity_used:              f64,
+    pub replaces_org_ingredient_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
 pub struct UpsertOverrideRequest {
-    pub size_label:        Option<String>,
-    pub org_ingredient_id: Option<Uuid>,
-    pub ingredient_name:   String,
-    pub ingredient_unit:   String,
-    pub quantity_used:     f64,
+    pub size_label:                 Option<String>,
+    pub org_ingredient_id:          Option<Uuid>,
+    pub ingredient_name:            String,
+    pub ingredient_unit:            String,
+    pub quantity_used:              f64,
+    pub replaces_org_ingredient_id: Option<Uuid>,
 }
 
 #[derive(Deserialize)]
@@ -205,7 +209,8 @@ pub async fn list_addon_ingredients(
                org_ingredient_id,
                ingredient_name,
                ingredient_unit AS unit,
-               quantity_used
+               quantity_used,
+               replaces_org_ingredient_id
         FROM addon_item_ingredients
         WHERE addon_item_id = $1
         ORDER BY ingredient_name
@@ -237,18 +242,20 @@ pub async fn upsert_addon_ingredient(
     let row = sqlx::query_as::<_, AddonIngredient>(
         r#"
         INSERT INTO addon_item_ingredients
-            (addon_item_id, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used)
-        VALUES ($1, $2, $3, $4, $5)
+            (addon_item_id, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used, replaces_org_ingredient_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (addon_item_id, ingredient_name)
         DO UPDATE SET
-            org_ingredient_id = EXCLUDED.org_ingredient_id,
-            ingredient_unit   = EXCLUDED.ingredient_unit,
-            quantity_used     = EXCLUDED.quantity_used
+            org_ingredient_id          = EXCLUDED.org_ingredient_id,
+            ingredient_unit            = EXCLUDED.ingredient_unit,
+            quantity_used              = EXCLUDED.quantity_used,
+            replaces_org_ingredient_id = EXCLUDED.replaces_org_ingredient_id
         RETURNING id, addon_item_id,
                   org_ingredient_id,
                   ingredient_name,
                   ingredient_unit AS unit,
-                  quantity_used
+                  quantity_used,
+                  replaces_org_ingredient_id
         "#,
     )
     .bind(*addon_item_id)
@@ -256,6 +263,7 @@ pub async fn upsert_addon_ingredient(
     .bind(&body.ingredient_name)
     .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
+    .bind(body.replaces_org_ingredient_id)
     .fetch_one(pool.get_ref())
     .await?;
 
@@ -305,7 +313,8 @@ pub async fn list_overrides(
                org_ingredient_id,
                ingredient_name,
                ingredient_unit AS unit,
-               quantity_used
+               quantity_used,
+               replaces_org_ingredient_id
         FROM drink_option_ingredient_overrides
         WHERE drink_option_item_id = $1
         ORDER BY size_label, ingredient_name
@@ -337,19 +346,21 @@ pub async fn upsert_override(
     let row = sqlx::query_as::<_, DrinkOptionOverride>(
         r#"
         INSERT INTO drink_option_ingredient_overrides
-            (drink_option_item_id, size_label, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used)
-        VALUES ($1, $2::item_size, $3, $4, $5, $6)
+            (drink_option_item_id, size_label, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used, replaces_org_ingredient_id)
+        VALUES ($1, $2::item_size, $3, $4, $5, $6, $7)
         ON CONFLICT (drink_option_item_id, size_label, ingredient_name)
         DO UPDATE SET
-            org_ingredient_id = EXCLUDED.org_ingredient_id,
-            ingredient_unit   = EXCLUDED.ingredient_unit,
-            quantity_used     = EXCLUDED.quantity_used
+            org_ingredient_id          = EXCLUDED.org_ingredient_id,
+            ingredient_unit            = EXCLUDED.ingredient_unit,
+            quantity_used              = EXCLUDED.quantity_used,
+            replaces_org_ingredient_id = EXCLUDED.replaces_org_ingredient_id
         RETURNING id, drink_option_item_id,
                   size_label::text,
                   org_ingredient_id,
                   ingredient_name,
                   ingredient_unit AS unit,
-                  quantity_used
+                  quantity_used,
+                  replaces_org_ingredient_id
         "#,
     )
     .bind(*drink_option_item_id)
@@ -358,6 +369,7 @@ pub async fn upsert_override(
     .bind(&body.ingredient_name)
     .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
+    .bind(body.replaces_org_ingredient_id)
     .fetch_one(pool.get_ref())
     .await?;
 

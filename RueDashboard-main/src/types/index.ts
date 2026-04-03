@@ -174,6 +174,7 @@ export interface AddonIngredient {
   ingredient_name: string;  // replaces inventory_item_id + inventory_item_name
   unit: string;
   quantity_used: number;
+  replaces_org_ingredient_id?: string | null;
 }
 
 export interface DrinkOptionOverride {
@@ -184,6 +185,7 @@ export interface DrinkOptionOverride {
   inventory_item_name: string;
   unit: string;
   quantity_used: number;
+  replaces_org_ingredient_id?: string | null;
 }
 
 // ── Inventory ─────────────────────────────────────────────────────────────────

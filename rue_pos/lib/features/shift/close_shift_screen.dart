@@ -143,8 +143,8 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
 
     final counts = _invCtrs.entries
         .map((e) => {
-              'inventory_item_id': e.key,
-              'actual_stock':      double.tryParse(e.value.text) ?? 0.0,
+              'branch_inventory_id': e.key,   // was 'inventory_item_id' — renamed in v2 schema
+              'actual_stock':        double.tryParse(e.value.text) ?? 0.0,
             })
         .toList();
 

@@ -251,9 +251,10 @@ pub async fn create_order(
         quantity:      i32,
     }
     struct InventoryDeduction {
-        org_ingredient_id: Option<Uuid>,
-        quantity:          f64,
-        source:            String,
+        org_ingredient_id:         Option<Uuid>,
+        quantity:                  f64,
+        source:                    String,
+        replaces_org_ingredient_id: Option<Uuid>,  // if set, removes the matching base-recipe deduction
     }
 
     let mut resolved_items: Vec<ResolvedItem> = Vec::new();
@@ -300,9 +301,10 @@ pub async fn create_order(
         
         for (ing_id, qty) in recipe_rows {
             item_deductions.push(InventoryDeduction {
-                org_ingredient_id: ing_id,
-                quantity:          qty * item_input.quantity as f64,
-                source:            "drink_recipe".into(),
+                org_ingredient_id:         ing_id,
+                quantity:                  qty * item_input.quantity as f64,
+                source:                    "drink_recipe".into(),
+                replaces_org_ingredient_id: None,
             });
         }
 
@@ -335,10 +337,10 @@ pub async fn create_order(
             });
 
             let size_label = item_input.size_label.as_deref();
-            // Fetch override ingredient linkages (org_ingredient_id)
-            let override_rows: Vec<(Option<Uuid>, f64)> = if let Some(size) = size_label {
+            // Fetch override ingredient linkages (org_ingredient_id + optional substitution)
+            let override_rows: Vec<(Option<Uuid>, f64, Option<Uuid>)> = if let Some(size) = size_label {
                 sqlx::query_as(
-                    r#"SELECT org_ingredient_id, quantity_used::float8
+                    r#"SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id
                     FROM drink_option_ingredient_overrides
                     WHERE drink_option_item_id = $1
                       AND (size_label = $2::item_size OR size_label IS NULL)
@@ -350,7 +352,7 @@ pub async fn create_order(
                 .await?
             } else {
                 sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8 FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
+                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
                 )
                 .bind(addon_input.drink_option_item_id)
                 .fetch_all(pool.get_ref())
@@ -359,31 +361,83 @@ pub async fn create_order(
 
             if !override_rows.is_empty() {
                 let mut seen = std::collections::HashSet::new();
-                for (ing_id, qty) in override_rows {
+                for (ing_id, qty, replaces) in override_rows {
                     let key = ing_id.map(|u| u.to_string()).unwrap_or_default();
                     if seen.insert(key) {
                         item_deductions.push(InventoryDeduction {
-                            org_ingredient_id: ing_id,
-                            quantity:          qty * item_input.quantity as f64,
-                            source:            "addon_override".into(),
+                            org_ingredient_id:         ing_id,
+                            quantity:                  qty * item_input.quantity as f64,
+                            source:                    "addon_override".into(),
+                            replaces_org_ingredient_id: replaces,
                         });
                     }
                 }
             } else {
-                let base_rows: Vec<(Option<Uuid>, f64)> = sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
+                let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>)> = sqlx::query_as(
+                    "SELECT org_ingredient_id, quantity_used::float8, replaces_org_ingredient_id FROM addon_item_ingredients WHERE addon_item_id = $1"
                 )
                 .bind(addon_input.addon_item_id)
                 .fetch_all(pool.get_ref())
                 .await?;
-                for (ing_id, qty) in base_rows {
+                for (ing_id, qty, replaces) in base_rows {
                     item_deductions.push(InventoryDeduction {
-                        org_ingredient_id: ing_id,
-                        quantity:          qty * item_input.quantity as f64,
-                        source:            "addon_base".into(),
+                        org_ingredient_id:         ing_id,
+                        quantity:                  qty * item_input.quantity as f64,
+                        source:                    "addon_base".into(),
+                        replaces_org_ingredient_id: replaces,
                     });
                 }
             }
+        }
+
+        // ── Apply ingredient substitutions (Dynamic Quantity) ────────────────
+        // Map: replaced_id -> substitute_id
+        let mut substitutions = std::collections::HashMap::new();
+        for d in &item_deductions {
+            if let Some(replaced) = d.replaces_org_ingredient_id {
+                if let Some(sub_id) = d.org_ingredient_id {
+                    substitutions.insert(replaced, sub_id);
+                }
+            }
+        }
+
+        if !substitutions.is_empty() {
+            // First pass: sum up the quantity of the replaced base ingredients
+            let mut replaced_quantities = std::collections::HashMap::new();
+            for d in &item_deductions {
+                if d.source == "drink_recipe" {
+                    if let Some(id) = d.org_ingredient_id {
+                        if substitutions.contains_key(&id) {
+                            *replaced_quantities.entry(id).or_insert(0.0) += d.quantity;
+                        }
+                    }
+                }
+            }
+
+            // Second pass: rebuild deductions
+            let mut new_deductions = Vec::new();
+            for mut d in item_deductions {
+                // Remove the replaced base ingredients entirely
+                if d.source == "drink_recipe" {
+                    if let Some(id) = d.org_ingredient_id {
+                        if substitutions.contains_key(&id) {
+                            continue;
+                        }
+                    }
+                }
+
+                // If this is the substituting addon, check if we found a base quantity
+                if let Some(replaced_id) = d.replaces_org_ingredient_id {
+                    if let Some(inherited_qty) = replaced_quantities.get(&replaced_id) {
+                        // Inherit the exact volume from the drink recipe (e.g. 250ml)
+                        // If it doesn't exist, we just keep the addon's fallback quantity (e.g. 30ml)
+                        d.quantity = *inherited_qty;
+                    }
+                }
+
+                new_deductions.push(d);
+            }
+            item_deductions = new_deductions;
         }
 
         let item_line  = unit_price * item_input.quantity;

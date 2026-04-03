@@ -290,14 +290,29 @@ pub async fn create_order(
 
         let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
 
-        let size_for_recipe = item_input.size_label.as_deref().unwrap_or("one_size");
-        let recipe_rows: Vec<(Option<Uuid>, f64)> = sqlx::query_as(
-            "SELECT org_ingredient_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
-        )
-        .bind(item_input.menu_item_id)
-        .bind(size_for_recipe)
-        .fetch_all(pool.get_ref())
-        .await?;
+        let recipe_rows: Vec<(Option<Uuid>, f64)> = if let Some(size) = &item_input.size_label {
+            sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
+            )
+            .bind(item_input.menu_item_id)
+            .bind(size)
+            .fetch_all(pool.get_ref())
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT org_ingredient_id, quantity_used::float8 
+                FROM menu_item_recipes 
+                WHERE menu_item_id = $1 
+                  AND size_label = (
+                      SELECT size_label FROM menu_item_recipes WHERE menu_item_id = $1 LIMIT 1
+                  )
+                "#
+            )
+            .bind(item_input.menu_item_id)
+            .fetch_all(pool.get_ref())
+            .await?
+        };
         
         for (ing_id, qty) in recipe_rows {
             item_deductions.push(InventoryDeduction {

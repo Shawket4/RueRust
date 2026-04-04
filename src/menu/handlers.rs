@@ -890,3 +890,58 @@ pub async fn delete_size(
 
     Ok(HttpResponse::NoContent().finish())
 }
+
+// ── Helpers ───────────────────────────────────────────────────
+
+fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
+    req.extensions()
+        .get::<Claims>()
+        .cloned()
+        .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
+}
+
+async fn fetch_category(pool: &PgPool, id: Uuid) -> Result<Category, AppError> {
+    sqlx::query_as::<_, Category>(
+        r#"
+        SELECT id, org_id, name, image_url, display_order, is_active,
+               created_at, updated_at, deleted_at
+        FROM categories
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Category not found".into()))
+}
+
+async fn fetch_menu_item(pool: &PgPool, id: Uuid) -> Result<MenuItem, AppError> {
+    sqlx::query_as::<_, MenuItem>(
+        r#"
+        SELECT id, org_id, category_id, name, description, image_url,
+               base_price, is_active, display_order,
+               created_at, updated_at, deleted_at
+        FROM menu_items
+        WHERE id = $1 AND deleted_at IS NULL
+        "#
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Menu item not found".into()))
+}
+
+async fn fetch_addon_item(pool: &PgPool, id: Uuid) -> Result<AddonItem, AppError> {
+    sqlx::query_as::<_, AddonItem>(
+        r#"
+        SELECT id, org_id, name, type as addon_type, default_price,
+               is_active, display_order, created_at, updated_at
+        FROM addon_items
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Addon item not found".into()))
+}

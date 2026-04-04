@@ -40,42 +40,6 @@ class OrderItemAddon {
       };
 }
 
-class InventoryDeduction {
-  final String? orgIngredientId;
-  final String ingredientName;
-  final String unit;
-  final double quantity;
-  final String source;
-  final String? replacesOrgIngredientId;
-
-  const InventoryDeduction({
-    this.orgIngredientId,
-    required this.ingredientName,
-    required this.unit,
-    required this.quantity,
-    required this.source,
-    this.replacesOrgIngredientId,
-  });
-
-  factory InventoryDeduction.fromJson(Map<String, dynamic> j) => InventoryDeduction(
-        orgIngredientId: j['org_ingredient_id'] as String?,
-        ingredientName: j['ingredient_name'] ?? '',
-        unit: j['unit'] ?? '',
-        quantity: (j['quantity'] ?? 0).toDouble(),
-        source: j['source'] ?? '',
-        replacesOrgIngredientId: j['replaces_org_ingredient_id'] as String?,
-      );
-
-  Map<String, dynamic> toJson() => {
-        'org_ingredient_id': orgIngredientId,
-        'ingredient_name': ingredientName,
-        'unit': unit,
-        'quantity': quantity,
-        'source': source,
-        'replaces_org_ingredient_id': replacesOrgIngredientId,
-      };
-}
-
 class OrderItem {
   final String id;
   final String itemName;
@@ -84,7 +48,6 @@ class OrderItem {
   final int quantity;
   final int lineTotal;
   final List<OrderItemAddon> addons;
-  final List<InventoryDeduction> deductionsSnapshot;
 
   const OrderItem({
     required this.id,
@@ -94,7 +57,6 @@ class OrderItem {
     required this.quantity,
     required this.lineTotal,
     required this.addons,
-    this.deductionsSnapshot = const [],
   });
 
   factory OrderItem.fromJson(Map<String, dynamic> j) => OrderItem(
@@ -107,9 +69,6 @@ class OrderItem {
         addons: (j['addons'] as List? ?? [])
             .map((a) => OrderItemAddon.fromJson(a))
             .toList(),
-        deductionsSnapshot: (j['deductions_snapshot'] as List? ?? [])
-            .map((d) => InventoryDeduction.fromJson(d))
-            .toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -120,7 +79,6 @@ class OrderItem {
         'quantity': quantity,
         'line_total': lineTotal,
         'addons': addons.map((a) => a.toJson()).toList(),
-        'deductions_snapshot': deductionsSnapshot.map((d) => d.toJson()).toList(),
       };
 }
 

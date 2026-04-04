@@ -941,10 +941,15 @@ class ItemDetailSheet extends ConsumerStatefulWidget {
 
 class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   String? _selectedSize;
-  final Map<String, String> _single = {}; // SlotID -> AddonID
-  final Map<String, Set<String>> _multi = {}; // SlotID -> Set<AddonID>
-  final Set<String> _extras = {}; // Set of AddonIDs from General
   int _qty = 1;
+
+  // Keyed by slot.id → selected addonItem.id (single-select slots)
+  final Map<String, String> _single = {};
+  // Keyed by slot.id → Set of selected addonItem.ids (multi-select slots)
+  final Map<String, Set<String>> _multi = {};
+
+  // Synthetic slot id used for global addon types not covered by any custom slot
+  static const _kExtrasSlotId = '__extras__';
 
   @override
   void initState() {
@@ -954,134 +959,153 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     }
   }
 
+  // ── Derived ───────────────────────────────────────────────
+
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
 
   int get _addonsTotal {
-    final addons = ref.read(menuProvider).addons;
+    final allAddons = ref.read(menuProvider).allAddons;
     int t = 0;
-
-    // From slots
-    for (final sId in _single.keys) {
-      final aId = _single[sId];
-      final a = addons.firstWhere((element) => element.id == aId,
-          orElse: () => const AddonItem(
-              id: '',
-              orgId: '',
-              name: '',
-              addonType: '',
-              defaultPrice: 0,
-              isActive: false,
-              displayOrder: 0));
-      if (a.id.isNotEmpty) t += a.defaultPrice;
+    for (final id in _allSelectedAddonIds) {
+      final matches = allAddons.where((a) => a.id == id);
+      if (matches.isNotEmpty) t += matches.first.defaultPrice;
     }
-    for (final sId in _multi.keys) {
-      for (final aId in _multi[sId]!) {
-        final a = addons.firstWhere((element) => element.id == aId,
-            orElse: () => const AddonItem(
-                id: '',
-                orgId: '',
-                name: '',
-                addonType: '',
-                defaultPrice: 0,
-                isActive: false,
-                displayOrder: 0));
-        if (a.id.isNotEmpty) t += a.defaultPrice;
-      }
-    }
-
-    // From extras
-    for (final aId in _extras) {
-      final a = addons.firstWhere((element) => element.id == aId,
-          orElse: () => const AddonItem(
-              id: '',
-              orgId: '',
-              name: '',
-              addonType: '',
-              defaultPrice: 0,
-              isActive: false,
-              displayOrder: 0));
-      if (a.id.isNotEmpty) t += a.defaultPrice;
-    }
-
     return t;
   }
 
   int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
 
-  bool get _canAdd {
-    for (final s in widget.item.addonSlots) {
-      if (!s.isRequired) continue;
-      final count = s.maxSelections == 1
-          ? (_single.containsKey(s.id) ? 1 : 0)
-          : (_multi[s.id]?.length ?? 0);
-      if (count < s.minSelections) return false;
+  /// Flat set of every selected addon_item_id across all slots.
+  Set<String> get _allSelectedAddonIds {
+    final ids = <String>{};
+    ids.addAll(_single.values);
+    for (final s in _multi.values) {
+      ids.addAll(s);
     }
-    return true;
+    return ids;
   }
 
-  void _toggleSingle(String sId, String aId, bool req) => setState(() {
-        if (_single[sId] == aId) {
-          if (!req) _single.remove(sId);
+  /// Returns the display name of the first required slot whose
+  /// min_selections threshold is not yet met, or null if all satisfied.
+  String? get _firstUnsatisfiedSlot {
+    for (final slot in widget.item.addonSlots) {
+      if (!slot.isRequired) continue;
+      final min = slot.minSelections.clamp(1, 999);
+      final count = _countForSlot(slot);
+      if (count < min) return slot.displayName;
+    }
+    return null;
+  }
+
+  bool get _canAdd => _firstUnsatisfiedSlot == null;
+
+  int _countForSlot(AddonSlot slot) {
+    final isMulti = (slot.maxSelections ?? 2) > 1;
+    return isMulti
+        ? (_multi[slot.id] ?? {}).length
+        : (_single.containsKey(slot.id) ? 1 : 0);
+  }
+
+  // ── Toggle helpers ────────────────────────────────────────
+
+  void _toggleSingle(String slotId, String addonItemId, bool required) =>
+      setState(() {
+        if (_single[slotId] == addonItemId) {
+          if (!required) _single.remove(slotId);
         } else {
-          _single[sId] = aId;
+          _single[slotId] = addonItemId;
         }
       });
 
-  void _toggleMulti(String sId, String aId, int? max) => setState(() {
-        final s = _multi.putIfAbsent(sId, () => {});
-        if (s.contains(aId)) {
-          s.remove(aId);
+  void _toggleMulti(String slotId, String addonItemId, int? maxSel) =>
+      setState(() {
+        final s = _multi.putIfAbsent(slotId, () => {});
+        if (s.contains(addonItemId)) {
+          s.remove(addonItemId);
+          if (s.isEmpty) _multi.remove(slotId);
         } else {
-          if (max == null || s.length < max) {
-            s.add(aId);
-          }
+          if (maxSel != null && s.length >= maxSel) s.clear();
+          s.add(addonItemId);
         }
-        if (s.isEmpty) _multi.remove(sId);
       });
 
-  void _toggleExtra(String aId) => setState(() {
-        _extras.contains(aId) ? _extras.remove(aId) : _extras.add(aId);
-      });
+  // ── Add to cart ───────────────────────────────────────────
 
   void _addToCart() {
-    final addons = <SelectedAddon>[];
-    final globalAddons = ref.read(menuProvider).addons;
+    final allAddons = ref.read(menuProvider).allAddons;
 
-    // Collect from single-slots
-    for (final aId in _single.values) {
-      final a = globalAddons.firstWhere((x) => x.id == aId);
-      addons.add(SelectedAddon(
-          addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
+    // Helper: find addon by id, returns null if not found
+    AddonItem findAddon(String id) {
+      final matches = allAddons.where((a) => a.id == id);
+      return matches.isNotEmpty
+          ? matches.first
+          : AddonItem(
+              id: '',
+              name: '',
+              type: '',
+              defaultPrice: 0,
+              isActive: false,
+              displayOrder: 0);
     }
-    // Collect from multi-slots
-    for (final sIds in _multi.values) {
-      for (final aId in sIds) {
-        final a = globalAddons.firstWhere((x) => x.id == aId);
+
+    final addons = <SelectedAddon>[];
+
+    // Single-select slots
+    _single.forEach((slotId, addonItemId) {
+      final a = findAddon(addonItemId);
+      if (a.id.isNotEmpty) {
         addons.add(SelectedAddon(
-            addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
+          addonItemId: a.id,
+          name: a.name,
+          priceModifier: a.defaultPrice,
+        ));
       }
-    }
-    // Collect from extras
-    for (final aId in _extras) {
-      final a = globalAddons.firstWhere((x) => x.id == aId);
-      addons.add(SelectedAddon(
-          addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
-    }
+    });
+
+    // Multi-select slots (including __extras__)
+    _multi.forEach((slotId, ids) {
+      for (final id in ids) {
+        final a = findAddon(id);
+        if (a.id.isNotEmpty) {
+          addons.add(SelectedAddon(
+            addonItemId: a.id,
+            name: a.name,
+            priceModifier: a.defaultPrice,
+          ));
+        }
+      }
+    });
 
     ref.read(cartProvider.notifier).add(CartItem(
-        menuItemId: widget.item.id,
-        itemName: normaliseName(widget.item.name),
-        sizeLabel: _selectedSize,
-        unitPrice: _unitPrice,
-        quantity: _qty,
-        addons: addons));
+          menuItemId: widget.item.id,
+          itemName: normaliseName(widget.item.name),
+          sizeLabel: _selectedSize,
+          unitPrice: _unitPrice,
+          quantity: _qty,
+          addons: addons,
+        ));
     Navigator.pop(context);
   }
 
+  // ── Build ─────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    final menuState = ref.watch(menuProvider);
+    final byType = menuState.addonsByType;
     final mq = MediaQuery.of(context);
-    final globalAddons = ref.watch(menuProvider).addons;
+
+    // Types covered by custom slots on this drink
+    final slottedTypes = widget.item.addonSlots.map((s) => s.addonType).toSet();
+
+    // Global addon types always shown on every drink
+    const globalTypes = ['milk_type', 'coffee_type', 'extra'];
+
+    // Active addons for global types not already covered by a custom slot
+    final extrasAddons = globalTypes
+        .where((t) => !slottedTypes.contains(t))
+        .expand((t) => byType[t] ?? <AddonItem>[])
+        .toList();
 
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
@@ -1090,6 +1114,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: AppRadius.sheetRadius),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Drag handle
           Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Center(
@@ -1099,6 +1124,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: AppColors.border,
                           borderRadius: BorderRadius.circular(2))))),
+
+          // Header
           Container(
             padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
             decoration: const BoxDecoration(
@@ -1146,11 +1173,14 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               ),
             ]),
           ),
+
+          // Scrollable body
           Flexible(
               child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // Sizes
               if (widget.item.sizes.isNotEmpty) ...[
                 const _SectionLabel('Size'),
                 const SizedBox(height: 10),
@@ -1170,38 +1200,39 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                 const SizedBox(height: 20),
               ],
 
-              // ── Categorized Slots ──
-              for (final s in widget.item.addonSlots) ...[
-                _AddonCard(
-                  title: s.displayName,
-                  isRequired: s.isRequired,
-                  isMulti: (s.maxSelections ?? 99) > 1,
-                  items: globalAddons
-                      .where((a) => a.addonType == s.addonType)
-                      .toList(),
-                  selectedSingle: _single[s.id],
-                  selectedMulti: _multi[s.id] ?? {},
-                  onToggleSingle: (aId) => _toggleSingle(s.id, aId, s.isRequired),
-                  onToggleMulti: (aId) => _toggleMulti(s.id, aId, s.maxSelections),
+              // Custom slot groups (defined in menu_item_addon_slots)
+              for (final slot in widget.item.addonSlots
+                ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder))) ...[
+                _AddonSlotCard(
+                  slotId: slot.id,
+                  displayName: slot.displayName,
+                  isRequired: slot.isRequired,
+                  minSelections: slot.minSelections,
+                  maxSelections: slot.maxSelections,
+                  availableAddons: byType[slot.addonType] ?? [],
+                  selectedSingle: _single[slot.id],
+                  selectedMulti: _multi[slot.id] ?? {},
+                  onToggleSingle: (id) =>
+                      _toggleSingle(slot.id, id, slot.isRequired),
+                  onToggleMulti: (id) =>
+                      _toggleMulti(slot.id, id, slot.maxSelections),
                 ),
                 const SizedBox(height: 12),
               ],
 
-              // ── General Extras ──
-              if (globalAddons.any((a) => !widget.item.addonSlots
-                  .any((s) => s.addonType == a.addonType))) ...[
-                _AddonCard(
-                  title: 'Extras',
+              // Global addon types not covered by any custom slot
+              if (extrasAddons.isNotEmpty) ...[
+                _AddonSlotCard(
+                  slotId: _kExtrasSlotId,
+                  displayName: 'Extras',
                   isRequired: false,
-                  isMulti: true,
-                  items: globalAddons
-                      .where((a) => !widget.item.addonSlots
-                          .any((s) => s.addonType == a.addonType))
-                      .toList(),
+                  minSelections: 0,
+                  maxSelections: null,
+                  availableAddons: extrasAddons,
                   selectedSingle: null,
-                  selectedMulti: _extras,
+                  selectedMulti: _multi[_kExtrasSlotId] ?? {},
                   onToggleSingle: (_) {},
-                  onToggleMulti: (aId) => _toggleExtra(aId),
+                  onToggleMulti: (id) => _toggleMulti(_kExtrasSlotId, id, null),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -1209,6 +1240,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               const SizedBox(height: 6),
             ]),
           )),
+
+          // Footer
           Container(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
             decoration: const BoxDecoration(
@@ -1248,7 +1281,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                   child: AppButton(
                 label: _canAdd
                     ? 'Add  —  ${egp(_lineTotal)}'
-                    : 'Select required options',
+                    : 'Select ${_firstUnsatisfiedSlot ?? "required options"}',
                 height: 50,
                 onTap: _canAdd ? _addToCart : null,
               )),
@@ -1261,23 +1294,28 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ADDON CARD
+//  ADDON SLOT CARD
+//  Replaces _OptionGroupCard. Driven by AddonSlot metadata + AddonItem list.
 // ─────────────────────────────────────────────────────────────────────────────
-class _AddonCard extends StatefulWidget {
-  final String title;
+class _AddonSlotCard extends StatefulWidget {
+  final String slotId;
+  final String displayName;
   final bool isRequired;
-  final bool isMulti;
-  final List<AddonItem> items;
-  final String? selectedSingle;
-  final Set<String> selectedMulti;
+  final int minSelections;
+  final int? maxSelections; // null = unlimited
+  final List<AddonItem> availableAddons;
+  final String? selectedSingle; // addonItemId (single-select only)
+  final Set<String> selectedMulti; // addonItemIds (multi-select)
   final void Function(String) onToggleSingle;
   final void Function(String) onToggleMulti;
 
-  const _AddonCard({
-    required this.title,
+  const _AddonSlotCard({
+    required this.slotId,
+    required this.displayName,
     required this.isRequired,
-    required this.isMulti,
-    required this.items,
+    required this.minSelections,
+    required this.maxSelections,
+    required this.availableAddons,
     required this.selectedSingle,
     required this.selectedMulti,
     required this.onToggleSingle,
@@ -1285,10 +1323,10 @@ class _AddonCard extends StatefulWidget {
   });
 
   @override
-  State<_AddonCard> createState() => _AddonCardState();
+  State<_AddonSlotCard> createState() => _AddonSlotCardState();
 }
 
-class _AddonCardState extends State<_AddonCard> {
+class _AddonSlotCardState extends State<_AddonSlotCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -1305,49 +1343,60 @@ class _AddonCardState extends State<_AddonCard> {
     super.dispose();
   }
 
+  // Multi if maxSelections is null (unlimited) or > 1
+  bool get _isMulti => (widget.maxSelections ?? 2) > 1;
+
+  int get _selCount => _isMulti
+      ? widget.selectedMulti.length
+      : (widget.selectedSingle != null ? 1 : 0);
+
   @override
   Widget build(BuildContext context) {
-    final showSearch = widget.items.length > 5;
+    final allOpts = widget.availableAddons;
+    final showSearch = allOpts.length > 5;
     final opts = _query.isEmpty
-        ? widget.items
-        : widget.items
-            .where((o) => o.name.toLowerCase().contains(_query))
-            .toList();
-    final selCount =
-        widget.isMulti ? widget.selectedMulti.length : (widget.selectedSingle != null ? 1 : 0);
+        ? allOpts
+        : allOpts.where((a) => a.name.toLowerCase().contains(_query)).toList();
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(
-            color: selCount > 0
+            color: _selCount > 0
                 ? AppColors.primary.withOpacity(0.2)
                 : AppColors.border),
         boxShadow: AppShadows.card,
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header row
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
           child: Row(children: [
             Expanded(
-                child: Row(children: [
-              Text(widget.title.toUpperCase(),
-                  style: cairo(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary,
-                      letterSpacing: 0.7)),
-              const SizedBox(width: 6),
-              if (widget.isRequired) const _Pill('Required', AppColors.danger),
-              if (widget.isMulti) ...[
-                const SizedBox(width: 4),
-                const _Pill('Multi', AppColors.primary)
-              ],
-            ])),
-            if (selCount > 0) _CountBadge(count: selCount),
+                child: Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                  Text(widget.displayName.toUpperCase(),
+                      style: cairo(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textSecondary,
+                          letterSpacing: 0.7)),
+                  if (widget.isRequired)
+                    const _Pill('Required', AppColors.danger),
+                  if (_isMulti) const _Pill('Multi', AppColors.primary),
+                  if (widget.maxSelections != null)
+                    _Pill(
+                        'Max ${widget.maxSelections}', AppColors.textSecondary),
+                ])),
+            if (_selCount > 0) _CountBadge(count: _selCount),
           ]),
         ),
+
+        // Search field (only when > 5 options)
         if (showSearch) ...[
           const SizedBox(height: 10),
           Padding(
@@ -1362,7 +1411,7 @@ class _AddonCardState extends State<_AddonCard> {
                     controller: _searchCtrl,
                     style: cairo(fontSize: 13),
                     decoration: InputDecoration(
-                      hintText: 'Search items…',
+                      hintText: 'Search options…',
                       hintStyle:
                           cairo(fontSize: 13, color: AppColors.textMuted),
                       prefixIcon: const Icon(Icons.search_rounded,
@@ -1382,26 +1431,30 @@ class _AddonCardState extends State<_AddonCard> {
                     )),
               )),
         ],
+
+        // Chips
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: opts.isEmpty
-              ? Text('No match for "$_query"',
+              ? Text('No options match "$_query"',
                   style: cairo(fontSize: 12, color: AppColors.textMuted))
               : Wrap(
                   spacing: 7,
                   runSpacing: 7,
-                  children: opts.map((opt) {
-                    final sel = widget.isMulti
-                        ? widget.selectedMulti.contains(opt.id)
-                        : widget.selectedSingle == opt.id;
+                  children: opts.map((addon) {
+                    final sel = _isMulti
+                        ? widget.selectedMulti.contains(addon.id)
+                        : widget.selectedSingle == addon.id;
                     return _Chip(
-                      label: normaliseName(opt.name),
-                      sublabel: opt.defaultPrice > 0 ? '+${egp(opt.defaultPrice)}' : null,
+                      label: normaliseName(addon.name),
+                      sublabel: addon.defaultPrice > 0
+                          ? '+${egp(addon.defaultPrice)}'
+                          : null,
                       selected: sel,
-                      checkbox: widget.isMulti,
-                      onTap: () => widget.isMulti
-                          ? widget.onToggleMulti(opt.id)
-                          : widget.onToggleSingle(opt.id),
+                      checkbox: _isMulti,
+                      onTap: () => _isMulti
+                          ? widget.onToggleMulti(addon.id)
+                          : widget.onToggleSingle(addon.id),
                     );
                   }).toList()),
         ),
@@ -1410,9 +1463,6 @@ class _AddonCardState extends State<_AddonCard> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART PANEL (tablet)
-// ─────────────────────────────────────────────────────────────────────────────
 class _CartPanel extends ConsumerWidget {
   const _CartPanel();
 

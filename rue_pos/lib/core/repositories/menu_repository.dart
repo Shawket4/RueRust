@@ -4,37 +4,32 @@ import '../models/menu.dart';
 import '../storage/storage_service.dart';
 
 class MenuRepository {
-  final MenuApi        _api;
+  final MenuApi _api;
   final StorageService _storage;
   MenuRepository(this._api, this._storage);
 
-  Future<({List<Category> categories, List<MenuItem> items, List<AddonItem> addons, bool fromCache})>
+  Future<({List<Category> categories, List<MenuItem> items, bool fromCache})>
       fetchMenu(String orgId) async {
     try {
-      final results = await Future.wait([
-        _api.categories(orgId),
-        _api.items(orgId),
-        _api.addons(orgId),
-      ]);
-      final cats    = results[0] as List<Category>;
-      final items   = results[1] as List<MenuItem>;
-      final addons  = results[2] as List<AddonItem>;
+      final results =
+          await Future.wait([_api.categories(orgId), _api.items(orgId)]);
+      final cats = results[0] as List<Category>;
+      final items = results[1] as List<MenuItem>;
       await _storage.saveMenu(orgId, {
-        'categories': cats.map((c)  => c.toJson()).toList(),
-        'items':      items.map((i) => i.toJson()).toList(),
-        'addons':     addons.map((a) => a.toJson()).toList(),
+        'categories': cats.map((c) => c.toJson()).toList(),
+        'items': items.map((i) => i.toJson()).toList(),
       });
-      return (categories: cats, items: items, addons: addons, fromCache: false);
+      return (categories: cats, items: items, fromCache: false);
     } catch (_) {
       final cached = _storage.loadMenu(orgId);
       if (cached != null) {
         return (
           categories: (cached['categories'] as List)
-              .map((c) => Category.fromJson(c as Map<String, dynamic>)).toList(),
+              .map((c) => Category.fromJson(c as Map<String, dynamic>))
+              .toList(),
           items: (cached['items'] as List)
-              .map((i) => MenuItem.fromJson(i as Map<String, dynamic>)).toList(),
-          addons: (cached['addons'] as List? ?? [])
-              .map((a) => AddonItem.fromJson(a as Map<String, dynamic>)).toList(),
+              .map((i) => MenuItem.fromJson(i as Map<String, dynamic>))
+              .toList(),
           fromCache: true,
         );
       }
@@ -43,9 +38,19 @@ class MenuRepository {
   }
 
   Future<MenuItem> fetchItem(String id) => _api.item(id);
+
+  /// Fetches all addon items for an org. Falls back to an empty list on error
+  /// so a network failure here doesn't block the whole menu load.
+  Future<List<AddonItem>> fetchAddonItems(String orgId) async {
+    try {
+      return await _api.addonItems(orgId);
+    } catch (_) {
+      return [];
+    }
+  }
 }
 
 final menuRepositoryProvider = Provider<MenuRepository>((ref) => MenuRepository(
-  ref.watch(menuApiProvider),
-  ref.watch(storageServiceProvider),
-));
+      ref.watch(menuApiProvider),
+      ref.watch(storageServiceProvider),
+    ));

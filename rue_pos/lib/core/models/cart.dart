@@ -15,14 +15,15 @@ class SelectedAddon {
   });
 
   SelectedAddon copyWith({int? quantity}) => SelectedAddon(
-    addonItemId: addonItemId,
-    name: name, priceModifier: priceModifier,
-    quantity: quantity ?? this.quantity,
+    addonItemId:   addonItemId,
+    name:          name,
+    priceModifier: priceModifier,
+    quantity:      quantity ?? this.quantity,
   );
 
   Map<String, dynamic> toApiJson() => {
-    'addon_item_id':        addonItemId,
-    'quantity':             quantity,
+    'addon_item_id': addonItemId,
+    'quantity':      quantity,
   };
 
   Map<String, dynamic> toStorageJson() => {
@@ -32,10 +33,10 @@ class SelectedAddon {
   };
 
   factory SelectedAddon.fromStorageJson(Map<String, dynamic> j) => SelectedAddon(
-    addonItemId:       j['addon_item_id']        as String,
-    name:              (j['name']                as String?) ?? '',
-    priceModifier:     (j['price_modifier']      as int?)    ?? 0,
-    quantity:          (j['quantity']            as int?)    ?? 1,
+    addonItemId:   j['addon_item_id']  as String,
+    name:          (j['name']          as String?) ?? '',
+    priceModifier: (j['price_modifier'] as int?)   ?? 0,
+    quantity:      (j['quantity']      as int?)    ?? 1,
   );
 }
 
@@ -61,10 +62,13 @@ class CartItem {
 
   CartItem copyWith({int? quantity, List<SelectedAddon>? addons, String? notes}) =>
       CartItem(
-        menuItemId: menuItemId, itemName: itemName, sizeLabel: sizeLabel,
-        unitPrice: unitPrice, notes: notes ?? this.notes,
-        quantity: quantity ?? this.quantity,
-        addons:   addons   ?? this.addons,
+        menuItemId: menuItemId,
+        itemName:   itemName,
+        sizeLabel:  sizeLabel,
+        unitPrice:  unitPrice,
+        notes:      notes    ?? this.notes,
+        quantity:   quantity ?? this.quantity,
+        addons:     addons   ?? this.addons,
       );
 
   int get addonsPrice => addons.fold(0, (s, a) => s + a.priceModifier * a.quantity);
@@ -87,16 +91,18 @@ class CartItem {
 
   factory CartItem.fromStorageJson(Map<String, dynamic> j) => CartItem(
     menuItemId: j['menu_item_id'] as String,
-    itemName:   (j['item_name']  as String?) ?? '',
-    sizeLabel:  j['size_label']  as String?,
-    unitPrice:  (j['unit_price'] as int?)    ?? 0,
-    quantity:   (j['quantity']   as int?)    ?? 1,
-    notes:      j['notes']       as String?,
+    itemName:   (j['item_name']   as String?) ?? '',
+    sizeLabel:  j['size_label']   as String?,
+    unitPrice:  (j['unit_price']  as int?)    ?? 0,
+    quantity:   (j['quantity']    as int?)    ?? 1,
+    notes:      j['notes']        as String?,
     addons: (j['addons'] as List? ?? [])
         .map((a) => SelectedAddon.fromStorageJson(a as Map<String, dynamic>))
         .toList(),
   );
 
+  // Two cart items match if they have the same set of addon_item_ids
+  // (order-independent). drinkOptionItemId is gone.
   static bool addonsMatch(List<SelectedAddon> a, List<SelectedAddon> b) {
     if (a.length != b.length) return false;
     final aIds = a.map((x) => x.addonItemId).toSet();
@@ -111,7 +117,7 @@ extension DiscountTypeX on DiscountType {
   String get apiValue => name;
 }
 
-// ── Payment split (Item 7) ────────────────────────────────────
+// ── Payment split ─────────────────────────────────────────────
 @immutable
 class PaymentSplit {
   final String method;
@@ -127,20 +133,20 @@ class PaymentSplit {
 
 @immutable
 class CartState {
-  final List<CartItem>    items;
-  final String            payment;
-  final String?           customerName;
-  final String?           notes;
-  final DiscountType?     discountType;
-  final int?              discountValue;
-  final String?           discountId;     // Item 6 — pre-defined discount UUID
-  final int?              amountTendered; // Item 2 — cash tendered
-  final int?              tipAmount;      // Item 2 — tip
-  final List<PaymentSplit>? paymentSplits; // Item 7 — split payments
+  final List<CartItem>      items;
+  final String              payment;
+  final String?             customerName;
+  final String?             notes;
+  final DiscountType?       discountType;
+  final int?                discountValue;
+  final String?             discountId;
+  final int?                amountTendered;
+  final int?                tipAmount;
+  final List<PaymentSplit>? paymentSplits;
 
   const CartState({
-    this.items         = const [],
-    this.payment       = 'cash',
+    this.items          = const [],
+    this.payment        = 'cash',
     this.customerName,
     this.notes,
     this.discountType,
@@ -164,36 +170,34 @@ class CartState {
 
   int get total => subtotal - discountAmount;
 
-  /// Change due back to customer (cash orders only)
   int get changeGiven {
     if (amountTendered == null) return 0;
     return (amountTendered! - total).clamp(0, 999999);
   }
 
-  /// Whether this is a split / mixed payment
   bool get isSplitPayment =>
       paymentSplits != null && paymentSplits!.isNotEmpty;
 
   CartState copyWith({
-    List<CartItem>?     items,
-    String?             payment,
-    String?             customerName,
-    String?             notes,
-    DiscountType?       discountType,
-    int?                discountValue,
-    String?             discountId,
-    int?                amountTendered,
-    int?                tipAmount,
-    List<PaymentSplit>? paymentSplits,
-    bool clearDiscount      = false,
-    bool clearCustomer      = false,
-    bool clearTendered      = false,
-    bool clearSplits        = false,
-    bool clearDiscountId    = false,
+    List<CartItem>?      items,
+    String?              payment,
+    String?              customerName,
+    String?              notes,
+    DiscountType?        discountType,
+    int?                 discountValue,
+    String?              discountId,
+    int?                 amountTendered,
+    int?                 tipAmount,
+    List<PaymentSplit>?  paymentSplits,
+    bool clearDiscount   = false,
+    bool clearCustomer   = false,
+    bool clearTendered   = false,
+    bool clearSplits     = false,
+    bool clearDiscountId = false,
   }) => CartState(
     items:          items          ?? this.items,
     payment:        payment        ?? this.payment,
-    customerName:   clearCustomer   ? null : (customerName ?? this.customerName),
+    customerName:   clearCustomer   ? null : (customerName  ?? this.customerName),
     notes:          notes           ?? this.notes,
     discountType:   clearDiscount   ? null : (discountType  ?? this.discountType),
     discountValue:  clearDiscount   ? null : (discountValue ?? this.discountValue),

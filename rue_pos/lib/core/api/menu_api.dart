@@ -27,10 +27,12 @@ class MenuApi {
     return MenuItem.fromJson(res.data as Map<String, dynamic>);
   }
 
-  Future<List<AddonItem>> addons(String orgId) async {
+  Future<List<AddonItem>> addonItems(String orgId) async {
     final res =
         await _c.dio.get('/addon-items', queryParameters: {'org_id': orgId});
-    return (res.data as List).map((a) => AddonItem.fromJson(a)).toList();
+    return (res.data as List)
+        .map((a) => AddonItem.fromJson(a as Map<String, dynamic>))
+        .toList();
   }
 }
 

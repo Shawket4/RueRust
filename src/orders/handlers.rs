@@ -97,11 +97,12 @@ pub struct PaymentSplitInput {
     pub reference: Option<String>,
 }
 
+// drink_option_item_id removed — addon is now identified solely by addon_item_id
 #[derive(Deserialize)]
 pub struct AddonInput {
     pub addon_item_id: Uuid,
     #[serde(default = "default_addon_qty")]
-    pub quantity:      i32,
+    pub quantity: i32,
 }
 
 fn default_addon_qty() -> i32 { 1 }
@@ -161,6 +162,192 @@ pub struct PaginatedOrders {
     pub page:        i64,
     pub per_page:    i64,
     pub total_pages: i64,
+}
+
+// ── Deduction helpers ─────────────────────────────────────────
+
+// One deduction row — mirrors the snapshot shape stored in order_items.
+#[derive(Serialize, Clone)]
+struct InventoryDeduction {
+    org_ingredient_id:          Option<Uuid>,
+    ingredient_name:            String,
+    unit:                       String,
+    quantity:                   f64,
+    source:                     String,
+    replaces_org_ingredient_id: Option<Uuid>,
+    // Not serialised into the snapshot — used only during the substitution pass.
+    #[serde(skip)]
+    addon_qty: f64,
+}
+
+// One override ingredient row fetched from menu_item_addon_overrides.
+struct OverrideRow {
+    org_ingredient_id:          Option<Uuid>,
+    ingredient_name:            String,
+    ingredient_unit:            String,
+    quantity_used:              f64,
+    replaces_org_ingredient_id: Option<Uuid>,
+    combo_addon_item_id:        Option<Uuid>,
+}
+
+/// Fetch all override rows for a (menu_item, addon_item, size) triple.
+/// Returns both standalone rows and combo rows — the caller filters.
+async fn fetch_override_rows(
+    pool:          &PgPool,
+    menu_item_id:  Uuid,
+    addon_item_id: Uuid,
+    size_label:    Option<&str>,
+) -> Result<Vec<OverrideRow>, AppError> {
+    // Fetch rows that match this size OR are size-wildcards (NULL).
+    // Order: size-specific first so the caller can prefer them.
+    let rows: Vec<(Option<Uuid>, String, String, f64, Option<Uuid>, Option<Uuid>)> =
+        if let Some(size) = size_label {
+            sqlx::query_as(
+                r#"
+                SELECT org_ingredient_id,
+                       ingredient_name,
+                       ingredient_unit,
+                       quantity_used::float8,
+                       replaces_org_ingredient_id,
+                       combo_addon_item_id
+                FROM   menu_item_addon_overrides
+                WHERE  menu_item_id   = $1
+                  AND  addon_item_id  = $2
+                  AND  (size_label = $3::item_size OR size_label IS NULL)
+                ORDER  BY size_label DESC NULLS LAST
+                "#,
+            )
+            .bind(menu_item_id)
+            .bind(addon_item_id)
+            .bind(size)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT org_ingredient_id,
+                       ingredient_name,
+                       ingredient_unit,
+                       quantity_used::float8,
+                       replaces_org_ingredient_id,
+                       combo_addon_item_id
+                FROM   menu_item_addon_overrides
+                WHERE  menu_item_id  = $1
+                  AND  addon_item_id = $2
+                  AND  size_label IS NULL
+                "#,
+            )
+            .bind(menu_item_id)
+            .bind(addon_item_id)
+            .fetch_all(pool)
+            .await?
+        };
+
+    Ok(rows
+        .into_iter()
+        .map(|(oid, name, unit, qty, replaces, combo)| OverrideRow {
+            org_ingredient_id:          oid,
+            ingredient_name:            name,
+            ingredient_unit:            unit,
+            quantity_used:              qty,
+            replaces_org_ingredient_id: replaces,
+            combo_addon_item_id:        combo,
+        })
+        .collect())
+}
+
+/// Resolve the effective ingredient rows for one addon on one order item.
+///
+/// Priority (highest → lowest):
+///   1. Combo override rows where combo_addon_item_id is in selected_addon_ids
+///      (size-specific preferred over size-wildcard)
+///   2. Standalone override rows (combo_addon_item_id IS NULL)
+///      (size-specific preferred over size-wildcard)
+///   3. Global addon_item_ingredients fallback
+///
+/// Each resolved row is scaled by item_qty × addon_qty.
+async fn resolve_addon_deductions(
+    pool:               &PgPool,
+    menu_item_id:       Uuid,
+    addon_item_id:      Uuid,
+    size_label:         Option<&str>,
+    item_qty:           f64,
+    addon_qty:          f64,
+    selected_addon_ids: &[Uuid], // all addons selected on this order item
+) -> Result<Vec<InventoryDeduction>, AppError> {
+    let all_overrides = fetch_override_rows(
+        pool, menu_item_id, addon_item_id, size_label,
+    ).await?;
+
+    // Split into combo rows (matching a currently-selected partner) and standalone.
+    let active_combo: Vec<&OverrideRow> = all_overrides
+        .iter()
+        .filter(|r| {
+            r.combo_addon_item_id
+                .map(|c| selected_addon_ids.contains(&c))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let standalone: Vec<&OverrideRow> = all_overrides
+        .iter()
+        .filter(|r| r.combo_addon_item_id.is_none())
+        .collect();
+
+    // Use combo rows if any fire, otherwise standalone, otherwise global.
+    let effective: Vec<&OverrideRow> = if !active_combo.is_empty() {
+        // De-duplicate by ingredient_name keeping the most specific
+        // (size-specific already comes first due to ORDER BY above).
+        let mut seen = std::collections::HashSet::new();
+        active_combo
+            .into_iter()
+            .filter(|r| seen.insert(r.ingredient_name.clone()))
+            .collect()
+    } else if !standalone.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        standalone
+            .into_iter()
+            .filter(|r| seen.insert(r.ingredient_name.clone()))
+            .collect()
+    } else {
+        // Fall back to global addon_item_ingredients
+        let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
+            sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8,
+                        replaces_org_ingredient_id, ingredient_name, ingredient_unit
+                 FROM   addon_item_ingredients
+                 WHERE  addon_item_id = $1",
+            )
+            .bind(addon_item_id)
+            .fetch_all(pool)
+            .await?;
+
+        return Ok(base_rows
+            .into_iter()
+            .map(|(oid, qty, replaces, name, unit)| InventoryDeduction {
+                org_ingredient_id:          oid,
+                ingredient_name:            name,
+                unit,
+                quantity:                   qty * item_qty * addon_qty,
+                source:                     "addon_base".into(),
+                replaces_org_ingredient_id: replaces,
+                addon_qty,
+            })
+            .collect());
+    };
+
+    Ok(effective
+        .into_iter()
+        .map(|r| InventoryDeduction {
+            org_ingredient_id:          r.org_ingredient_id,
+            ingredient_name:            r.ingredient_name.clone(),
+            unit:                       r.ingredient_unit.clone(),
+            quantity:                   r.quantity_used * item_qty * addon_qty,
+            source:                     "addon_override".into(),
+            replaces_org_ingredient_id: r.replaces_org_ingredient_id,
+            addon_qty,
+        })
+        .collect())
 }
 
 // ── POST /orders ──────────────────────────────────────────────
@@ -250,21 +437,6 @@ pub async fn create_order(
         quantity:      i32,
     }
 
-    // addon_qty tracks the addon's own multiplier separately from the item
-    // quantity so the substitution pass can scale inherited volumes correctly.
-    // serde(skip) keeps it out of the deductions_snapshot JSON.
-    #[derive(Serialize, Clone)]
-    struct InventoryDeduction {
-        org_ingredient_id:          Option<Uuid>,
-        ingredient_name:            String,
-        unit:                       String,
-        quantity:                   f64,
-        source:                     String,
-        replaces_org_ingredient_id: Option<Uuid>,
-        #[serde(skip)]
-        addon_qty:                  f64,
-    }
-
     let mut resolved_items: Vec<ResolvedItem> = Vec::new();
     let mut subtotal: i32 = 0;
 
@@ -306,10 +478,10 @@ pub async fn create_order(
         let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
             if let Some(size) = &item_input.size_label {
                 sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8, \
-                            ingredient_name, ingredient_unit \
-                     FROM menu_item_recipes \
-                     WHERE menu_item_id = $1 AND size_label = $2::item_size",
+                    "SELECT org_ingredient_id, quantity_used::float8,
+                            ingredient_name, ingredient_unit
+                     FROM   menu_item_recipes
+                     WHERE  menu_item_id = $1 AND size_label = $2::item_size",
                 )
                 .bind(item_input.menu_item_id)
                 .bind(size)
@@ -319,11 +491,11 @@ pub async fn create_order(
                 sqlx::query_as(
                     r#"SELECT org_ingredient_id, quantity_used::float8,
                               ingredient_name, ingredient_unit
-                       FROM menu_item_recipes
-                       WHERE menu_item_id = $1
-                         AND size_label = (
+                       FROM   menu_item_recipes
+                       WHERE  menu_item_id = $1
+                         AND  size_label = (
                              SELECT size_label FROM menu_item_recipes
-                             WHERE menu_item_id = $1 LIMIT 1
+                             WHERE  menu_item_id = $1 LIMIT 1
                          )"#,
                 )
                 .bind(item_input.menu_item_id)
@@ -336,15 +508,20 @@ pub async fn create_order(
                 org_ingredient_id:          ing_id,
                 ingredient_name:            name,
                 unit,
-                // Base recipe: scaled by item quantity only.
                 quantity:                   qty * item_input.quantity as f64,
                 source:                     "drink_recipe".into(),
                 replaces_org_ingredient_id: None,
-                addon_qty:                  1.0, // not an addon row
+                addon_qty:                  1.0,
             });
         }
 
         // ── Addons ────────────────────────────────────────────
+        // Collect all selected addon_item_ids upfront for combo rule evaluation.
+        let selected_addon_ids: Vec<Uuid> = item_input.addons
+            .iter()
+            .map(|a| a.addon_item_id)
+            .collect();
+
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
         for addon_input in &item_input.addons {
@@ -363,68 +540,27 @@ pub async fn create_order(
             resolved_addons.push(ResolvedAddon {
                 addon_item_id: addon_input.addon_item_id,
                 addon_name:    addon_name.clone(),
-                unit_price:    default_price, // Use global addon default price
+                unit_price:    default_price,
                 quantity:      addon_input.quantity.max(1),
             });
 
-            let size_label = item_input.size_label.as_deref();
+            // Resolve deductions using the new override matrix + combo logic.
+            let addon_deductions = resolve_addon_deductions(
+                pool.get_ref(),
+                item_input.menu_item_id,
+                addon_input.addon_item_id,
+                item_input.size_label.as_deref(),
+                item_input.quantity as f64,
+                addon_qty,
+                &selected_addon_ids,
+            )
+            .await?;
 
-            let override_qty: Option<f64> = if let Some(size) = size_label {
-                sqlx::query_scalar(
-                    r#"SELECT quantity_used::float8
-                       FROM menu_item_addon_overrides
-                       WHERE menu_item_id = $1 AND addon_item_id = $2
-                         AND (size_label = $3::item_size OR size_label IS NULL)
-                       ORDER BY size_label DESC NULLS LAST LIMIT 1"#
-                )
-                .bind(item_input.menu_item_id)
-                .bind(addon_input.addon_item_id)
-                .bind(size)
-                .fetch_optional(pool.get_ref())
-                .await?
-            } else {
-                sqlx::query_scalar(
-                    "SELECT quantity_used::float8 \
-                     FROM menu_item_addon_overrides \
-                     WHERE menu_item_id = $1 AND addon_item_id = $2 AND size_label IS NULL"
-                )
-                .bind(item_input.menu_item_id)
-                .bind(addon_input.addon_item_id)
-                .fetch_optional(pool.get_ref())
-                .await?
-            };
-
-            let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
-                sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8, \
-                            replaces_org_ingredient_id, ingredient_name, ingredient_unit \
-                     FROM addon_item_ingredients WHERE addon_item_id = $1",
-                )
-                .bind(addon_input.addon_item_id)
-                .fetch_all(pool.get_ref())
-                .await?;
-
-            for (ing_id, mut qty, replaces, name, unit) in base_rows {
-                if let Some(target_override) = override_qty {
-                    qty = target_override;
-                }
-                
-                item_deductions.push(InventoryDeduction {
-                    org_ingredient_id:          ing_id,
-                    ingredient_name:            name,
-                    unit,
-                    quantity:                   qty
-                        * item_input.quantity as f64
-                        * addon_qty,
-                    source:                     if override_qty.is_some() { "addon_override".into() } else { "addon_base".into() },
-                    replaces_org_ingredient_id: replaces,
-                    addon_qty,
-                });
-            }
+            item_deductions.extend(addon_deductions);
         }
 
         // ── Substitution pass ─────────────────────────────────
-        // Collect the set of base-recipe ingredient IDs being replaced.
+        // Collect base ingredients being replaced by any addon deduction.
         let mut substitutions = std::collections::HashSet::new();
         for d in &item_deductions {
             if let Some(replaced) = d.replaces_org_ingredient_id {
@@ -433,18 +569,13 @@ pub async fn create_order(
         }
 
         if !substitutions.is_empty() {
-            // First pass: capture the per-unit base quantity for each replaced
-            // ingredient (i.e. already scaled by item_quantity from above).
-            // We store it per-unit so the substitution addon can scale by its
-            // own addon_qty independently.
+            // Build per-unit base quantities for replaced ingredients.
             let mut replaced_qty_per_item: std::collections::HashMap<Uuid, f64> =
                 std::collections::HashMap::new();
             for d in &item_deductions {
                 if d.source == "drink_recipe" {
                     if let Some(id) = d.org_ingredient_id {
                         if substitutions.contains(&id) {
-                            // d.quantity = recipe_qty * item_input.quantity
-                            // Divide back out so we have the per-item-unit value.
                             let per_unit = d.quantity / item_input.quantity as f64;
                             *replaced_qty_per_item.entry(id).or_insert(0.0) += per_unit;
                         }
@@ -452,11 +583,9 @@ pub async fn create_order(
                 }
             }
 
-            // Second pass: rebuild, dropping replaced base rows and fixing up
-            // substituting addon rows.
             let mut new_deductions: Vec<InventoryDeduction> = Vec::new();
             for mut d in item_deductions {
-                // Drop the base-recipe row that is being substituted.
+                // Drop the base-recipe row being substituted.
                 if d.source == "drink_recipe" {
                     if let Some(id) = d.org_ingredient_id {
                         if substitutions.contains(&id) {
@@ -464,15 +593,12 @@ pub async fn create_order(
                         }
                     }
                 }
-
-                // FIX: the substituting addon inherits the base volume
-                // scaled by BOTH item_quantity AND the addon's own quantity.
+                // Fix substituting addon quantity to inherit base volume × quantities.
                 if let Some(replaced_id) = d.replaces_org_ingredient_id {
                     if let Some(&per_unit) = replaced_qty_per_item.get(&replaced_id) {
                         d.quantity = per_unit * item_input.quantity as f64 * d.addon_qty;
                     }
                 }
-
                 new_deductions.push(d);
             }
             item_deductions = new_deductions;
@@ -652,12 +778,14 @@ pub async fn create_order(
             addon_rows.push(row);
         }
 
+        // Apply inventory deductions
         for deduction in &resolved.deductions {
             let Some(ing_id) = deduction.org_ingredient_id else {
                 tracing::warn!(
                     branch_id = %body.branch_id,
                     source    = %deduction.source,
-                    "Deduction skipped — recipe has no org_ingredient_id linked"
+                    ingredient = %deduction.ingredient_name,
+                    "Deduction skipped — no org_ingredient_id linked"
                 );
                 continue;
             };
@@ -900,10 +1028,8 @@ pub async fn void_order(
 #[derive(Deserialize)]
 pub struct PreviewRecipeAddonInput {
     pub addon_item_id: Uuid,
-    // Mirrors AddonInput.quantity so preview quantities match what
-    // create_order would actually deduct.
     #[serde(default = "default_addon_qty")]
-    pub quantity:      i32,
+    pub quantity: i32,
 }
 
 #[derive(Deserialize)]
@@ -929,29 +1055,16 @@ pub async fn preview_recipe(
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "create").await?;
 
-    // Internal deduction type — mirrors create_order's local struct exactly,
-    // including the addon_qty field needed for the substitution fix.
-    #[derive(Clone)]
-    struct Deduction {
-        org_ingredient_id:          Option<Uuid>,
-        ingredient_name:            String,
-        unit:                       String,
-        quantity:                   f64,
-        source:                     String,
-        replaces_org_ingredient_id: Option<Uuid>,
-        addon_qty:                  f64,
-    }
-
-    let mut deductions: Vec<Deduction> = Vec::new();
+    let mut deductions: Vec<InventoryDeduction> = Vec::new();
 
     // ── Base recipe (item_quantity = 1 for preview) ───────────
     let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
         if let Some(size) = &body.size_label {
             sqlx::query_as(
-                "SELECT org_ingredient_id, quantity_used::float8, \
-                        ingredient_name, ingredient_unit \
-                 FROM menu_item_recipes \
-                 WHERE menu_item_id = $1 AND size_label = $2::item_size",
+                "SELECT org_ingredient_id, quantity_used::float8,
+                        ingredient_name, ingredient_unit
+                 FROM   menu_item_recipes
+                 WHERE  menu_item_id = $1 AND size_label = $2::item_size",
             )
             .bind(body.menu_item_id)
             .bind(size)
@@ -961,11 +1074,11 @@ pub async fn preview_recipe(
             sqlx::query_as(
                 r#"SELECT org_ingredient_id, quantity_used::float8,
                           ingredient_name, ingredient_unit
-                   FROM menu_item_recipes
-                   WHERE menu_item_id = $1
-                     AND size_label = (
+                   FROM   menu_item_recipes
+                   WHERE  menu_item_id = $1
+                     AND  size_label = (
                          SELECT size_label FROM menu_item_recipes
-                         WHERE menu_item_id = $1 LIMIT 1
+                         WHERE  menu_item_id = $1 LIMIT 1
                      )"#,
             )
             .bind(body.menu_item_id)
@@ -974,73 +1087,36 @@ pub async fn preview_recipe(
         };
 
     for (ing_id, qty, name, unit) in recipe_rows {
-        deductions.push(Deduction {
+        deductions.push(InventoryDeduction {
             org_ingredient_id:          ing_id,
             ingredient_name:            name,
             unit,
-            quantity:                   qty, // item_qty = 1
+            quantity:                   qty,
             source:                     "drink_recipe".into(),
             replaces_org_ingredient_id: None,
             addon_qty:                  1.0,
         });
     }
 
-    // ── Addon contributions ───────────────────────────────────
+    // ── Addon contributions (item_qty = 1 for preview) ────────
+    let selected_addon_ids: Vec<Uuid> = body.addons
+        .iter()
+        .map(|a| a.addon_item_id)
+        .collect();
+
     for addon in &body.addons {
         let addon_qty = addon.quantity.max(1) as f64;
-        let size_label = body.size_label.as_deref();
-
-        let override_qty: Option<f64> = if let Some(size) = size_label {
-            sqlx::query_scalar(
-                r#"SELECT quantity_used::float8
-                   FROM menu_item_addon_overrides
-                   WHERE menu_item_id = $1 AND addon_item_id = $2
-                     AND (size_label = $3::item_size OR size_label IS NULL)
-                   ORDER BY size_label DESC NULLS LAST LIMIT 1"#
-            )
-            .bind(body.menu_item_id)
-            .bind(addon.addon_item_id)
-            .bind(size)
-            .fetch_optional(pool.get_ref())
-            .await?
-        } else {
-            sqlx::query_scalar(
-                "SELECT quantity_used::float8 \
-                 FROM menu_item_addon_overrides \
-                 WHERE menu_item_id = $1 AND addon_item_id = $2 AND size_label IS NULL"
-            )
-            .bind(body.menu_item_id)
-            .bind(addon.addon_item_id)
-            .fetch_optional(pool.get_ref())
-            .await?
-        };
-
-        let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
-            sqlx::query_as(
-                "SELECT org_ingredient_id, quantity_used::float8, \
-                        replaces_org_ingredient_id, ingredient_name, ingredient_unit \
-                 FROM addon_item_ingredients WHERE addon_item_id = $1",
-            )
-            .bind(addon.addon_item_id)
-            .fetch_all(pool.get_ref())
-            .await?;
-
-        for (ing_id, mut qty, replaces, name, unit) in base_rows {
-            if let Some(target_override) = override_qty {
-                qty = target_override;
-            }
-
-            deductions.push(Deduction {
-                org_ingredient_id:          ing_id,
-                ingredient_name:            name,
-                unit,
-                // FIX: scale by addon_qty (item_qty = 1 for preview)
-                quantity:                   qty * addon_qty,
-                source:                     if override_qty.is_some() { "addon_override".into() } else { "addon_base".into() },
-                replaces_org_ingredient_id: replaces,
-                addon_qty,
-            });
-        }
+        let addon_deductions = resolve_addon_deductions(
+            pool.get_ref(),
+            body.menu_item_id,
+            addon.addon_item_id,
+            body.size_label.as_deref(),
+            1.0, // item_qty = 1 for preview
+            addon_qty,
+            &selected_addon_ids,
+        )
+        .await?;
+        deductions.extend(addon_deductions);
     }
 
     // ── Substitution pass ─────────────────────────────────────
@@ -1062,8 +1138,6 @@ pub async fn preview_recipe(
             })
             .collect()
     } else {
-        // Capture per-unit base quantities (item_qty = 1 in preview,
-        // so d.quantity is already the per-unit value).
         let mut replaced_qty_per_item: std::collections::HashMap<Uuid, f64> =
             std::collections::HashMap::new();
         for d in &deductions {
@@ -1080,13 +1154,9 @@ pub async fn preview_recipe(
         for mut d in deductions {
             if d.source == "drink_recipe" {
                 if let Some(id) = d.org_ingredient_id {
-                    if substitutions.contains(&id) {
-                        continue;
-                    }
+                    if substitutions.contains(&id) { continue; }
                 }
             }
-            // FIX: inherited base qty × addon's own multiplier
-            // (item_qty = 1, so no extra factor needed here)
             if let Some(replaced_id) = d.replaces_org_ingredient_id {
                 if let Some(&per_unit) = replaced_qty_per_item.get(&replaced_id) {
                     d.quantity = per_unit * d.addon_qty;

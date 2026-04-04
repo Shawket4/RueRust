@@ -52,12 +52,33 @@ pub struct ItemSize {
     pub is_active:      bool,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct MenuItemAddonSlot {
+    pub id:             Uuid,
+    pub menu_item_id:   Uuid,
+    pub addon_type:     String,
+    pub is_required:    bool,
+    pub min_selections: i32,
+    pub max_selections: Option<i32>,
+    pub display_order:  i32,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct MenuItemAddonOverride {
+    pub id:             Uuid,
+    pub menu_item_id:   Uuid,
+    pub addon_item_id:  Uuid,
+    pub size_label:     Option<String>,
+    pub quantity_used:  sqlx::types::BigDecimal,
+}
+
 #[derive(Debug, Serialize)]
 pub struct MenuItemFull {
     #[serde(flatten)]
-    pub item:          MenuItem,
-    pub sizes:         Vec<ItemSize>,
-    pub option_groups: Vec<DrinkOptionGroupFull>,
+    pub item:            MenuItem,
+    pub sizes:           Vec<ItemSize>,
+    pub addon_slots:     Vec<MenuItemAddonSlot>,
+    pub addon_overrides: Vec<MenuItemAddonOverride>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -73,42 +94,35 @@ pub struct AddonItem {
     pub updated_at:    DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct DrinkOptionGroup {
-    pub id:             Uuid,
-    pub menu_item_id:   Uuid,
-    pub group_type:     String,
-    pub selection_type: String,
-    pub is_required:    bool,
-    pub min_selections: i32,
-    pub display_order:  i32,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DrinkOptionGroupFull {
-    #[serde(flatten)]
-    pub group: DrinkOptionGroup,
-    pub items: Vec<DrinkOptionItemFull>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct DrinkOptionItemFull {
-    pub id:             Uuid,
-    pub group_id:       Uuid,
-    pub addon_item_id:  Uuid,
-    pub price_override: Option<i32>,
-    pub display_order:  i32,
-    pub is_active:      bool,
-    pub name:           String,
-    pub default_price:  i32,
-    pub addon_type:     String,
-}
-
 #[derive(Deserialize)]
 pub struct UpsertSizeRequest {
     pub label:          String,
     pub price_override: i32,
     pub display_order:  Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateAddonSlotRequest {
+    pub addon_type:     String,
+    pub is_required:    Option<bool>,
+    pub min_selections: Option<i32>,
+    pub max_selections: Option<i32>,
+    pub display_order:  Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAddonSlotRequest {
+    pub is_required:    Option<bool>,
+    pub min_selections: Option<i32>,
+    pub max_selections: Option<i32>,
+    pub display_order:  Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct UpsertAddonOverrideRequest {
+    pub addon_item_id: Uuid,
+    pub size_label:    Option<String>,
+    pub quantity_used: f64,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -187,36 +201,7 @@ pub struct UpdateAddonItemRequest {
     pub is_active:     Option<bool>,
 }
 
-#[derive(Deserialize)]
-pub struct CreateDrinkOptionGroupRequest {
-    pub group_type:     String,
-    pub selection_type: Option<String>,
-    pub is_required:    Option<bool>,
-    pub min_selections: Option<i32>,
-    pub display_order:  Option<i32>,
-}
 
-#[derive(Deserialize)]
-pub struct UpdateDrinkOptionGroupRequest {
-    pub selection_type: Option<String>,
-    pub is_required:    Option<bool>,
-    pub min_selections: Option<i32>,
-    pub display_order:  Option<i32>,
-}
-
-#[derive(Deserialize)]
-pub struct AddDrinkOptionItemRequest {
-    pub addon_item_id:  Uuid,
-    pub price_override: Option<i32>,
-    pub display_order:  Option<i32>,
-}
-
-#[derive(Deserialize)]
-pub struct UpdateDrinkOptionItemRequest {
-    pub price_override: Option<i32>,
-    pub display_order:  Option<i32>,
-    pub is_active:      Option<bool>,
-}
 
 // ── Categories ────────────────────────────────────────────────
 
@@ -388,10 +373,31 @@ pub async fn list_menu_items(
             .fetch_all(pool.get_ref())
             .await?;
 
-            let option_groups =
-                fetch_option_groups_full(pool.get_ref(), item.id).await?;
+            let addon_slots = sqlx::query_as::<_, MenuItemAddonSlot>(
+                r#"
+                SELECT id, menu_item_id, addon_type, is_required,
+                       min_selections, max_selections, display_order
+                FROM menu_item_addon_slots
+                WHERE menu_item_id = $1
+                ORDER BY display_order ASC
+                "#,
+            )
+            .bind(item.id)
+            .fetch_all(pool.get_ref())
+            .await?;
 
-            result.push(MenuItemFull { item, sizes, option_groups });
+            let addon_overrides = sqlx::query_as::<_, MenuItemAddonOverride>(
+                r#"
+                SELECT id, menu_item_id, addon_item_id, size_label::text, quantity_used
+                FROM menu_item_addon_overrides
+                WHERE menu_item_id = $1
+                "#,
+            )
+            .bind(item.id)
+            .fetch_all(pool.get_ref())
+            .await?;
+
+            result.push(MenuItemFull { item, sizes, addon_slots, addon_overrides });
         }
         return Ok(HttpResponse::Ok().json(result));
     }
@@ -422,9 +428,31 @@ pub async fn get_menu_item(
     .fetch_all(pool.get_ref())
     .await?;
 
-    let option_groups = fetch_option_groups_full(pool.get_ref(), *id).await?;
+    let addon_slots = sqlx::query_as::<_, MenuItemAddonSlot>(
+        r#"
+        SELECT id, menu_item_id, addon_type, is_required,
+               min_selections, max_selections, display_order
+        FROM menu_item_addon_slots
+        WHERE menu_item_id = $1
+        ORDER BY display_order ASC
+        "#,
+    )
+    .bind(*id)
+    .fetch_all(pool.get_ref())
+    .await?;
 
-    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, option_groups }))
+    let addon_overrides = sqlx::query_as::<_, MenuItemAddonOverride>(
+        r#"
+        SELECT id, menu_item_id, addon_item_id, size_label::text, quantity_used
+        FROM menu_item_addon_overrides
+        WHERE menu_item_id = $1
+        "#,
+    )
+    .bind(*id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, addon_slots, addon_overrides }))
 }
 
 pub async fn create_menu_item(
@@ -457,108 +485,9 @@ pub async fn create_menu_item(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Auto-attach milk types
-    let milk_addons = sqlx::query!(
-        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'milk_type' AND is_active = true",
-        body.org_id
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-
-    if !milk_addons.is_empty() {
-        let group_id: Uuid = sqlx::query!(
-            r#"
-            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
-            VALUES ($1, 'milk_type', 'single', false, 0)
-            RETURNING id
-            "#,
-            item.id
-        )
-        .fetch_one(&mut *tx)
-        .await?
-        .id;
-
-        for addon in milk_addons {
-            sqlx::query!(
-                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
-                group_id,
-                addon.id,
-                addon.display_order
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-
-    // Auto-attach coffee types
-    let coffee_addons = sqlx::query!(
-        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'coffee_type' AND is_active = true",
-        body.org_id
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-
-    if !coffee_addons.is_empty() {
-        let group_id: Uuid = sqlx::query!(
-            r#"
-            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
-            VALUES ($1, 'coffee_type', 'single', false, 0)
-            RETURNING id
-            "#,
-            item.id
-        )
-        .fetch_one(&mut *tx)
-        .await?
-        .id;
-
-        for addon in coffee_addons {
-            sqlx::query!(
-                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
-                group_id,
-                addon.id,
-                addon.display_order
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-
-    // Auto-attach extra types
-    let extra_addons = sqlx::query!(
-        "SELECT id, display_order FROM addon_items WHERE org_id = $1 AND type = 'extra' AND is_active = true",
-        body.org_id
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-
-    if !extra_addons.is_empty() {
-        let group_id: Uuid = sqlx::query!(
-            r#"
-            INSERT INTO drink_option_groups (menu_item_id, type, selection_type, is_required, min_selections)
-            VALUES ($1, 'extra', 'multi', false, 0)
-            RETURNING id
-            "#,
-            item.id
-        )
-        .fetch_one(&mut *tx)
-        .await?
-        .id;
-
-        for addon in extra_addons {
-            sqlx::query!(
-                "INSERT INTO drink_option_items (group_id, addon_item_id, display_order) VALUES ($1, $2, $3)",
-                group_id,
-                addon.id,
-                addon.display_order
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-    }
-
     tx.commit().await?;
 
-    Ok(HttpResponse::Created().json(MenuItemFull { item, sizes: vec![], option_groups: vec![] }))
+    Ok(HttpResponse::Created().json(MenuItemFull { item, sizes: vec![], addon_slots: vec![], addon_overrides: vec![] }))
 }
 
 pub async fn update_menu_item(
@@ -753,28 +682,13 @@ pub async fn delete_addon_item(
     Ok(HttpResponse::NoContent().finish())
 }
 
-// ── Drink Option Groups ───────────────────────────────────────
+// ── Addon Slots ───────────────────────────────────────────────
 
-pub async fn list_option_groups(
+pub async fn create_addon_slot(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
     id:   web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "menu_items", "read").await?;
-
-    let item = fetch_menu_item(pool.get_ref(), *id).await?;
-    require_same_org(&claims, Some(item.org_id))?;
-
-    let groups = fetch_option_groups_full(pool.get_ref(), *id).await?;
-    Ok(HttpResponse::Ok().json(groups))
-}
-
-pub async fn create_option_group(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    id:   web::Path<Uuid>,
-    body: web::Json<CreateDrinkOptionGroupRequest>,
+    body: web::Json<CreateAddonSlotRequest>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
@@ -782,117 +696,23 @@ pub async fn create_option_group(
     let item = fetch_menu_item(pool.get_ref(), *id).await?;
     require_same_org(&claims, Some(item.org_id))?;
 
-    let row = sqlx::query_as::<_, DrinkOptionGroup>(
-       r#"
-INSERT INTO drink_option_groups
-    (menu_item_id, type, selection_type, is_required, min_selections, display_order)
-VALUES ($1, $2, $3::text::addon_selection, $4, $5, $6)
-RETURNING id, menu_item_id, type as group_type, selection_type::text,
-          is_required, min_selections, display_order
-"#,
+    let row = sqlx::query_as::<_, MenuItemAddonSlot>(
+        r#"
+        INSERT INTO menu_item_addon_slots (menu_item_id, addon_type, is_required, min_selections, max_selections, display_order)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (menu_item_id, addon_type) DO UPDATE SET
+            is_required    = EXCLUDED.is_required,
+            min_selections = EXCLUDED.min_selections,
+            max_selections = EXCLUDED.max_selections,
+            display_order  = EXCLUDED.display_order
+        RETURNING id, menu_item_id, addon_type, is_required, min_selections, max_selections, display_order
+        "#,
     )
     .bind(*id)
-    .bind(&body.group_type)
-    .bind(body.selection_type.as_deref().unwrap_or("multi"))
+    .bind(&body.addon_type)
     .bind(body.is_required.unwrap_or(false))
     .bind(body.min_selections.unwrap_or(0))
-    .bind(body.display_order.unwrap_or(0))
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Created().json(DrinkOptionGroupFull { group: row, items: vec![] }))
-}
-
-pub async fn update_option_group(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid)>,
-    body: web::Json<UpdateDrinkOptionGroupRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims              = extract_claims(&req)?;
-    let (item_id, group_id) = path.into_inner();
-    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
-
-    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
-    require_same_org(&claims, Some(item.org_id))?;
-
-    let row = sqlx::query_as::<_, DrinkOptionGroup>(
-        r#"
-        UPDATE drink_option_groups SET
-            selection_type = COALESCE($3::text::addon_selection, selection_type),
-            is_required    = COALESCE($4, is_required),
-            min_selections = COALESCE($5, min_selections),
-            display_order  = COALESCE($6, display_order)
-        WHERE id = $1 AND menu_item_id = $2
-        RETURNING id, menu_item_id, type as group_type, selection_type::text,
-                  is_required, min_selections, display_order
-        "#,
-    )
-    .bind(group_id)
-    .bind(item_id)
-    .bind(&body.selection_type)
-    .bind(body.is_required)
-    .bind(body.min_selections)
-    .bind(body.display_order)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .ok_or_else(|| AppError::NotFound("Option group not found".into()))?;
-
-    Ok(HttpResponse::Ok().json(row))
-}
-
-pub async fn delete_option_group(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid)>,
-) -> Result<HttpResponse, AppError> {
-    let claims              = extract_claims(&req)?;
-    let (item_id, group_id) = path.into_inner();
-    check_permission(pool.get_ref(), &claims, "menu_items", "delete").await?;
-
-    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
-    require_same_org(&claims, Some(item.org_id))?;
-
-    sqlx::query(
-        "DELETE FROM drink_option_groups WHERE id = $1 AND menu_item_id = $2"
-    )
-    .bind(group_id)
-    .bind(item_id)
-    .execute(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::NoContent().finish())
-}
-
-// ── Drink Option Items ────────────────────────────────────────
-
-pub async fn add_option_item(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid)>,
-    body: web::Json<AddDrinkOptionItemRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims              = extract_claims(&req)?;
-    let (item_id, group_id) = path.into_inner();
-    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
-
-    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
-    require_same_org(&claims, Some(item.org_id))?;
-
-    let row = sqlx::query_as::<_, DrinkOptionItemFull>(
-        r#"
-        INSERT INTO drink_option_items (group_id, addon_item_id, price_override, display_order)
-        VALUES ($1, $2, $3, $4)
-        RETURNING
-            id, group_id, addon_item_id, price_override, display_order, is_active,
-            (SELECT name         FROM addon_items WHERE id = $2) as name,
-            (SELECT default_price FROM addon_items WHERE id = $2) as default_price,
-            (SELECT type          FROM addon_items WHERE id = $2) as addon_type
-        "#,
-    )
-    .bind(group_id)
-    .bind(body.addon_item_id)
-    .bind(body.price_override)
+    .bind(body.max_selections)
     .bind(body.display_order.unwrap_or(0))
     .fetch_one(pool.get_ref())
     .await?;
@@ -900,162 +720,121 @@ pub async fn add_option_item(
     Ok(HttpResponse::Created().json(row))
 }
 
-pub async fn update_option_item(
+pub async fn update_addon_slot(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid, Uuid)>,
-    body: web::Json<UpdateDrinkOptionItemRequest>,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UpdateAddonSlotRequest>,
 ) -> Result<HttpResponse, AppError> {
-    let claims                     = extract_claims(&req)?;
-    let (item_id, group_id, oi_id) = path.into_inner();
+    let claims = extract_claims(&req)?;
+    let (item_id, slot_id) = path.into_inner();
     check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
 
     let item = fetch_menu_item(pool.get_ref(), item_id).await?;
     require_same_org(&claims, Some(item.org_id))?;
 
-    let row = sqlx::query_as::<_, DrinkOptionItemFull>(
+    let row = sqlx::query_as::<_, MenuItemAddonSlot>(
         r#"
-        UPDATE drink_option_items SET
-            price_override = COALESCE($3, price_override),
-            display_order  = COALESCE($4, display_order),
-            is_active      = COALESCE($5, is_active)
-        WHERE id = $1 AND group_id = $2
-        RETURNING
-            id, group_id, addon_item_id, price_override, display_order, is_active,
-            (SELECT name          FROM addon_items WHERE id = addon_item_id) as name,
-            (SELECT default_price FROM addon_items WHERE id = addon_item_id) as default_price,
-            (SELECT type          FROM addon_items WHERE id = addon_item_id) as addon_type
+        UPDATE menu_item_addon_slots SET
+            is_required    = COALESCE($3, is_required),
+            min_selections = COALESCE($4, min_selections),
+            max_selections = COALESCE($5, max_selections),
+            display_order  = COALESCE($6, display_order)
+        WHERE id = $1 AND menu_item_id = $2
+        RETURNING id, menu_item_id, addon_type, is_required, min_selections, max_selections, display_order
         "#,
     )
-    .bind(oi_id)
-    .bind(group_id)
-    .bind(body.price_override)
+    .bind(slot_id)
+    .bind(item_id)
+    .bind(body.is_required)
+    .bind(body.min_selections)
+    .bind(body.max_selections)
     .bind(body.display_order)
-    .bind(body.is_active)
     .fetch_optional(pool.get_ref())
     .await?
-    .ok_or_else(|| AppError::NotFound("Option item not found".into()))?;
+    .ok_or_else(|| AppError::NotFound("Addon slot not found".into()))?;
 
     Ok(HttpResponse::Ok().json(row))
 }
 
-pub async fn delete_option_item(
+pub async fn delete_addon_slot(
     req:  HttpRequest,
     pool: web::Data<PgPool>,
-    path: web::Path<(Uuid, Uuid, Uuid)>,
+    path: web::Path<(Uuid, Uuid)>,
 ) -> Result<HttpResponse, AppError> {
-    let claims                     = extract_claims(&req)?;
-    let (item_id, group_id, oi_id) = path.into_inner();
-    check_permission(pool.get_ref(), &claims, "menu_items", "delete").await?;
+    let claims = extract_claims(&req)?;
+    let (item_id, slot_id) = path.into_inner();
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
 
     let item = fetch_menu_item(pool.get_ref(), item_id).await?;
     require_same_org(&claims, Some(item.org_id))?;
 
-    sqlx::query(
-        "DELETE FROM drink_option_items WHERE id = $1 AND group_id = $2"
-    )
-    .bind(oi_id)
-    .bind(group_id)
-    .execute(pool.get_ref())
-    .await?;
+    sqlx::query("DELETE FROM menu_item_addon_slots WHERE id = $1 AND menu_item_id = $2")
+        .bind(slot_id)
+        .bind(item_id)
+        .execute(pool.get_ref())
+        .await?;
 
     Ok(HttpResponse::NoContent().finish())
 }
 
-// ── Helpers ───────────────────────────────────────────────────
+// ── Addon Overrides ───────────────────────────────────────────
 
-fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
-    req.extensions()
-        .get::<Claims>()
-        .cloned()
-        .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
-}
+pub async fn upsert_addon_override(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<UpsertAddonOverrideRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
 
-async fn fetch_category(pool: &PgPool, id: Uuid) -> Result<Category, AppError> {
-    sqlx::query_as::<_, Category>(
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    let qty = sqlx::types::BigDecimal::try_from(body.quantity_used)
+        .map_err(|_| AppError::BadRequest("Invalid quantity".into()))?;
+
+    // If size_label is missing (NULL), handled by unique constraints.
+    // PostgreSQL treats multiple NULLs as unique if not careful, but the override relies on size.
+    let row = sqlx::query_as::<_, MenuItemAddonOverride>(
         r#"
-        SELECT id, org_id, name, image_url, display_order, is_active,
-               created_at, updated_at, deleted_at
-        FROM categories
-        WHERE id = $1 AND deleted_at IS NULL
+        INSERT INTO menu_item_addon_overrides (menu_item_id, addon_item_id, size_label, quantity_used)
+        VALUES ($1, $2, $3::item_size, $4)
+        ON CONFLICT (menu_item_id, addon_item_id, size_label) DO UPDATE SET
+            quantity_used = EXCLUDED.quantity_used
+        RETURNING id, menu_item_id, addon_item_id, size_label::text, quantity_used
         "#,
     )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Category not found".into()))
-}
-
-async fn fetch_menu_item(pool: &PgPool, id: Uuid) -> Result<MenuItem, AppError> {
-    sqlx::query_as::<_, MenuItem>(
-        r#"
-        SELECT id, org_id, category_id, name, description, image_url,
-               base_price, is_active, display_order,
-               created_at, updated_at, deleted_at
-        FROM menu_items
-        WHERE id = $1 AND deleted_at IS NULL
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Menu item not found".into()))
-}
-
-async fn fetch_addon_item(pool: &PgPool, id: Uuid) -> Result<AddonItem, AppError> {
-    sqlx::query_as::<_, AddonItem>(
-        r#"
-        SELECT id, org_id, name, type as addon_type, default_price,
-               is_active, display_order, created_at, updated_at
-        FROM addon_items
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Addon item not found".into()))
-}
-
-async fn fetch_option_groups_full(
-    pool:    &PgPool,
-    item_id: Uuid,
-) -> Result<Vec<DrinkOptionGroupFull>, AppError> {
-    let groups = sqlx::query_as::<_, DrinkOptionGroup>(
-        r#"
-        SELECT id, menu_item_id, type as group_type, selection_type::text,
-               is_required, min_selections, display_order
-        FROM drink_option_groups
-        WHERE menu_item_id = $1
-        ORDER BY display_order ASC
-        "#,
-    )
-    .bind(item_id)
-    .fetch_all(pool)
+    .bind(*id)
+    .bind(body.addon_item_id)
+    .bind(&body.size_label)
+    .bind(qty)
+    .fetch_one(pool.get_ref())
     .await?;
 
-    let mut result = vec![];
-    for g in groups {
-        let items = sqlx::query_as::<_, DrinkOptionItemFull>(
-            r#"
-            SELECT doi.id, doi.group_id, doi.addon_item_id,
-                   doi.price_override, doi.display_order, doi.is_active,
-                   ai.name, ai.default_price,
-                   ai.type as addon_type
-            FROM drink_option_items doi
-            JOIN addon_items ai ON ai.id = doi.addon_item_id
-            WHERE doi.group_id = $1
-            ORDER BY doi.display_order ASC
-            "#,
-        )
-        .bind(g.id)
-        .fetch_all(pool)
+    Ok(HttpResponse::Ok().json(row))
+}
+
+pub async fn delete_addon_override(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    let (item_id, override_id) = path.into_inner();
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    sqlx::query("DELETE FROM menu_item_addon_overrides WHERE id = $1 AND menu_item_id = $2")
+        .bind(override_id)
+        .bind(item_id)
+        .execute(pool.get_ref())
         .await?;
 
-        result.push(DrinkOptionGroupFull { group: g, items });
-    }
-
-    Ok(result)
+    Ok(HttpResponse::NoContent().finish())
 }
 
 pub async fn upsert_size(

@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
 import 'package:rue_pos/core/api/client.dart';
-import 'package:rue_pos/core/api/recipe_api.dart';
 import 'package:rue_pos/core/models/pending_action.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/order_api.dart';
@@ -926,7 +925,6 @@ class _CardBg extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 //  ITEM DETAIL SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-
 class ItemDetailSheet extends ConsumerStatefulWidget {
   final MenuItem item;
   const ItemDetailSheet({super.key, required this.item});
@@ -943,144 +941,148 @@ class ItemDetailSheet extends ConsumerStatefulWidget {
 
 class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   String? _selectedSize;
-
-  // Single-select: groupId → optionItemId
-  final Map<String, String> _single = {};
-
-  // Multi-select: groupId → { optionItemId → quantity }
-  final Map<String, Map<String, int>> _multi = {};
-
+  final Map<String, String> _single = {}; // SlotID -> AddonID
+  final Map<String, Set<String>> _multi = {}; // SlotID -> Set<AddonID>
+  final Set<String> _extras = {}; // Set of AddonIDs from General
   int _qty = 1;
 
   @override
   void initState() {
     super.initState();
-    if (widget.item.sizes.isNotEmpty)
+    if (widget.item.sizes.isNotEmpty) {
       _selectedSize = widget.item.sizes.first.label;
+    }
   }
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
 
   int get _addonsTotal {
+    final addons = ref.read(menuProvider).addons;
     int t = 0;
-    for (final g in widget.item.optionGroups) {
-      if (g.isMultiSelect) {
-        for (final o in g.items) {
-          final qty = (_multi[g.id] ?? {})[o.id] ?? 0;
-          t += o.price * qty;
-        }
-      } else {
-        for (final o in g.items) {
-          if (o.id == _single[g.id]) {
-            t += o.price;
-            break;
-          }
-        }
+
+    // From slots
+    for (final sId in _single.keys) {
+      final aId = _single[sId];
+      final a = addons.firstWhere((element) => element.id == aId,
+          orElse: () => const AddonItem(
+              id: '',
+              orgId: '',
+              name: '',
+              addonType: '',
+              defaultPrice: 0,
+              isActive: false,
+              displayOrder: 0));
+      if (a.id.isNotEmpty) t += a.defaultPrice;
+    }
+    for (final sId in _multi.keys) {
+      for (final aId in _multi[sId]!) {
+        final a = addons.firstWhere((element) => element.id == aId,
+            orElse: () => const AddonItem(
+                id: '',
+                orgId: '',
+                name: '',
+                addonType: '',
+                defaultPrice: 0,
+                isActive: false,
+                displayOrder: 0));
+        if (a.id.isNotEmpty) t += a.defaultPrice;
       }
     }
+
+    // From extras
+    for (final aId in _extras) {
+      final a = addons.firstWhere((element) => element.id == aId,
+          orElse: () => const AddonItem(
+              id: '',
+              orgId: '',
+              name: '',
+              addonType: '',
+              defaultPrice: 0,
+              isActive: false,
+              displayOrder: 0));
+      if (a.id.isNotEmpty) t += a.defaultPrice;
+    }
+
     return t;
   }
 
   int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
 
   bool get _canAdd {
-    for (final g in widget.item.optionGroups) {
-      if (!g.isRequired) continue;
-      if (g.isMultiSelect) {
-        final total = (_multi[g.id] ?? {}).values.fold(0, (s, q) => s + q);
-        if (total == 0) return false;
-      } else {
-        if (!_single.containsKey(g.id)) return false;
-      }
+    for (final s in widget.item.addonSlots) {
+      if (!s.isRequired) continue;
+      final count = s.maxSelections == 1
+          ? (_single.containsKey(s.id) ? 1 : 0)
+          : (_multi[s.id]?.length ?? 0);
+      if (count < s.minSelections) return false;
     }
     return true;
   }
 
-  void _toggleSingle(String gId, String oId, bool req) => setState(() {
-        if (_single[gId] == oId) {
-          if (!req) _single.remove(gId);
+  void _toggleSingle(String sId, String aId, bool req) => setState(() {
+        if (_single[sId] == aId) {
+          if (!req) _single.remove(sId);
         } else {
-          _single[gId] = oId;
+          _single[sId] = aId;
         }
       });
 
-  // Multi: increment on first tap, stepper handles inc/dec/remove
-  void _incrementMulti(String gId, String oId) => setState(() {
-        final map = _multi.putIfAbsent(gId, () => {});
-        map[oId] = (map[oId] ?? 0) + 1;
-      });
-
-  void _decrementMulti(String gId, String oId) => setState(() {
-        final map = _multi[gId];
-        if (map == null) return;
-        final cur = map[oId] ?? 0;
-        if (cur <= 1) {
-          map.remove(oId);
-          if (map.isEmpty) _multi.remove(gId);
+  void _toggleMulti(String sId, String aId, int? max) => setState(() {
+        final s = _multi.putIfAbsent(sId, () => {});
+        if (s.contains(aId)) {
+          s.remove(aId);
         } else {
-          map[oId] = cur - 1;
-        }
-      });
-
-  List<SelectedAddon> get _selectedAddons {
-    final addons = <SelectedAddon>[];
-    for (final g in widget.item.optionGroups) {
-      if (g.isMultiSelect) {
-        for (final o in g.items) {
-          final qty = (_multi[g.id] ?? {})[o.id] ?? 0;
-          for (var i = 0; i < qty; i++) {
-            addons.add(SelectedAddon(
-              addonItemId: o.addonItemId,
-              drinkOptionItemId: o.id,
-              name: o.name,
-              priceModifier: o.price,
-            ));
+          if (max == null || s.length < max) {
+            s.add(aId);
           }
         }
-      } else {
-        final sId = _single[g.id];
-        if (sId == null) continue;
-        for (final o in g.items) {
-          if (o.id == sId) {
-            addons.add(SelectedAddon(
-              addonItemId: o.addonItemId,
-              drinkOptionItemId: o.id,
-              name: o.name,
-              priceModifier: o.price,
-            ));
-            break;
-          }
-        }
-      }
-    }
-    return addons;
-  }
+        if (s.isEmpty) _multi.remove(sId);
+      });
+
+  void _toggleExtra(String aId) => setState(() {
+        _extras.contains(aId) ? _extras.remove(aId) : _extras.add(aId);
+      });
 
   void _addToCart() {
-    ref.read(cartProvider.notifier).add(CartItem(
-          menuItemId: widget.item.id,
-          itemName: normaliseName(widget.item.name),
-          sizeLabel: _selectedSize,
-          unitPrice: _unitPrice,
-          quantity: _qty,
-          addons: _selectedAddons,
-        ));
-    Navigator.pop(context);
-  }
+    final addons = <SelectedAddon>[];
+    final globalAddons = ref.read(menuProvider).addons;
 
-  void _showRecipe() {
-    _RecipeSheet.show(
-      context,
-      menuItemId: widget.item.id,
-      itemName: normaliseName(widget.item.name),
-      sizeLabel: _selectedSize,
-      addons: _selectedAddons,
-    );
+    // Collect from single-slots
+    for (final aId in _single.values) {
+      final a = globalAddons.firstWhere((x) => x.id == aId);
+      addons.add(SelectedAddon(
+          addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
+    }
+    // Collect from multi-slots
+    for (final sIds in _multi.values) {
+      for (final aId in sIds) {
+        final a = globalAddons.firstWhere((x) => x.id == aId);
+        addons.add(SelectedAddon(
+            addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
+      }
+    }
+    // Collect from extras
+    for (final aId in _extras) {
+      final a = globalAddons.firstWhere((x) => x.id == aId);
+      addons.add(SelectedAddon(
+          addonItemId: a.id, name: a.name, priceModifier: a.defaultPrice));
+    }
+
+    ref.read(cartProvider.notifier).add(CartItem(
+        menuItemId: widget.item.id,
+        itemName: normaliseName(widget.item.name),
+        sizeLabel: _selectedSize,
+        unitPrice: _unitPrice,
+        quantity: _qty,
+        addons: addons));
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
+    final globalAddons = ref.watch(menuProvider).addons;
+
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
       child: Container(
@@ -1088,7 +1090,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: AppRadius.sheetRadius),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // drag handle
           Padding(
               padding: const EdgeInsets.only(top: 12, bottom: 4),
               child: Center(
@@ -1098,8 +1099,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                       decoration: BoxDecoration(
                           color: AppColors.border,
                           borderRadius: BorderRadius.circular(2))))),
-
-          // header
           Container(
             padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
             decoration: const BoxDecoration(
@@ -1147,8 +1146,6 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               ),
             ]),
           ),
-
-          // scrollable body
           Flexible(
               child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
@@ -1172,97 +1169,90 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                         .toList()),
                 const SizedBox(height: 20),
               ],
-              for (final g in widget.item.optionGroups) ...[
-                _OptionGroupCard(
-                  group: g,
-                  selectedSingle: _single[g.id],
-                  selectedMulti: _multi[g.id] ?? {},
-                  onToggleSingle: (oId) =>
-                      _toggleSingle(g.id, oId, g.isRequired),
-                  onIncrementMulti: (oId) => _incrementMulti(g.id, oId),
-                  onDecrementMulti: (oId) => _decrementMulti(g.id, oId),
+
+              // ── Categorized Slots ──
+              for (final s in widget.item.addonSlots) ...[
+                _AddonCard(
+                  title: s.displayName,
+                  isRequired: s.isRequired,
+                  isMulti: (s.maxSelections ?? 99) > 1,
+                  items: globalAddons
+                      .where((a) => a.addonType == s.addonType)
+                      .toList(),
+                  selectedSingle: _single[s.id],
+                  selectedMulti: _multi[s.id] ?? {},
+                  onToggleSingle: (aId) => _toggleSingle(s.id, aId, s.isRequired),
+                  onToggleMulti: (aId) => _toggleMulti(s.id, aId, s.maxSelections),
                 ),
                 const SizedBox(height: 12),
               ],
+
+              // ── General Extras ──
+              if (globalAddons.any((a) => !widget.item.addonSlots
+                  .any((s) => s.addonType == a.addonType))) ...[
+                _AddonCard(
+                  title: 'Extras',
+                  isRequired: false,
+                  isMulti: true,
+                  items: globalAddons
+                      .where((a) => !widget.item.addonSlots
+                          .any((s) => s.addonType == a.addonType))
+                      .toList(),
+                  selectedSingle: null,
+                  selectedMulti: _extras,
+                  onToggleSingle: (_) {},
+                  onToggleMulti: (aId) => _toggleExtra(aId),
+                ),
+                const SizedBox(height: 12),
+              ],
+
               const SizedBox(height: 6),
             ]),
           )),
-
-          // footer
           Container(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
             decoration: const BoxDecoration(
                 color: Colors.white,
                 border: Border(top: BorderSide(color: AppColors.border))),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Recipe link — only when all required options are filled
-                if (_canAdd) ...[
-                  GestureDetector(
-                    onTap: _showRecipe,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.science_outlined,
-                                size: 13, color: AppColors.textMuted),
-                            const SizedBox(width: 5),
-                            Text('View recipe',
-                                style: cairo(
-                                  fontSize: 12,
-                                  color: AppColors.textMuted,
-                                  fontWeight: FontWeight.w600,
-                                  decoration: TextDecoration.underline,
-                                )),
-                          ]),
-                    ),
-                  ),
-                ],
-                Row(children: [
-                  // Qty stepper
-                  Container(
-                    decoration: BoxDecoration(
-                        color: AppColors.bg,
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
-                        border: Border.all(color: AppColors.border)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      _QtyBtn(
-                          icon: Icons.remove,
-                          onTap: () =>
-                              setState(() => _qty = (_qty - 1).clamp(1, 99))),
-                      SizedBox(
-                          width: 40,
-                          child: Center(
-                              child: AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 150),
-                                  transitionBuilder: (child, anim) =>
-                                      ScaleTransition(
-                                          scale: anim, child: child),
-                                  child: Text('$_qty',
-                                      key: ValueKey(_qty),
-                                      style: cairo(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w800))))),
-                      _QtyBtn(
-                          icon: Icons.add,
-                          onTap: () =>
-                              setState(() => _qty = (_qty + 1).clamp(1, 99))),
-                    ]),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                      child: AppButton(
-                    label: _canAdd
-                        ? 'Add  —  ${egp(_lineTotal)}'
-                        : 'Select required options',
-                    height: 50,
-                    onTap: _canAdd ? _addToCart : null,
-                  )),
+            child: Row(children: [
+              Container(
+                decoration: BoxDecoration(
+                    color: AppColors.bg,
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(color: AppColors.border)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  _QtyBtn(
+                      icon: Icons.remove,
+                      onTap: () =>
+                          setState(() => _qty = (_qty - 1).clamp(1, 99))),
+                  SizedBox(
+                      width: 40,
+                      child: Center(
+                          child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 150),
+                              transitionBuilder: (child, anim) =>
+                                  ScaleTransition(scale: anim, child: child),
+                              child: Text('$_qty',
+                                  key: ValueKey(_qty),
+                                  style: cairo(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800))))),
+                  _QtyBtn(
+                      icon: Icons.add,
+                      onTap: () =>
+                          setState(() => _qty = (_qty + 1).clamp(1, 99))),
                 ]),
-              ],
-            ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: AppButton(
+                label: _canAdd
+                    ? 'Add  —  ${egp(_lineTotal)}'
+                    : 'Select required options',
+                height: 50,
+                onTap: _canAdd ? _addToCart : null,
+              )),
+            ]),
           ),
         ]),
       ),
@@ -1271,33 +1261,34 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  OPTION GROUP CARD
+//  ADDON CARD
 // ─────────────────────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────────────────────
-//  OPTION GROUP CARD (updated — multi-select now has per-option stepper)
-// ─────────────────────────────────────────────────────────────────────────────
-class _OptionGroupCard extends StatefulWidget {
-  final DrinkOptionGroup group;
+class _AddonCard extends StatefulWidget {
+  final String title;
+  final bool isRequired;
+  final bool isMulti;
+  final List<AddonItem> items;
   final String? selectedSingle;
-  final Map<String, int> selectedMulti; // optionItemId → qty
+  final Set<String> selectedMulti;
   final void Function(String) onToggleSingle;
-  final void Function(String) onIncrementMulti;
-  final void Function(String) onDecrementMulti;
+  final void Function(String) onToggleMulti;
 
-  const _OptionGroupCard({
-    required this.group,
+  const _AddonCard({
+    required this.title,
+    required this.isRequired,
+    required this.isMulti,
+    required this.items,
     required this.selectedSingle,
     required this.selectedMulti,
     required this.onToggleSingle,
-    required this.onIncrementMulti,
-    required this.onDecrementMulti,
+    required this.onToggleMulti,
   });
 
   @override
-  State<_OptionGroupCard> createState() => _OptionGroupCardState();
+  State<_AddonCard> createState() => _AddonCardState();
 }
 
-class _OptionGroupCardState extends State<_OptionGroupCard> {
+class _AddonCardState extends State<_AddonCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -1316,16 +1307,14 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
 
   @override
   Widget build(BuildContext context) {
-    final g = widget.group;
-    final allOpts = g.items;
-    final showSearch = allOpts.length > 5;
+    final showSearch = widget.items.length > 5;
     final opts = _query.isEmpty
-        ? allOpts
-        : allOpts.where((o) => o.name.toLowerCase().contains(_query)).toList();
-
-    final selCount = g.isMultiSelect
-        ? widget.selectedMulti.values.fold(0, (s, q) => s + q)
-        : (widget.selectedSingle != null ? 1 : 0);
+        ? widget.items
+        : widget.items
+            .where((o) => o.name.toLowerCase().contains(_query))
+            .toList();
+    final selCount =
+        widget.isMulti ? widget.selectedMulti.length : (widget.selectedSingle != null ? 1 : 0);
 
     return Container(
       decoration: BoxDecoration(
@@ -1343,17 +1332,17 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
           child: Row(children: [
             Expanded(
                 child: Row(children: [
-              Text(g.displayName.toUpperCase(),
+              Text(widget.title.toUpperCase(),
                   style: cairo(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       color: AppColors.textSecondary,
                       letterSpacing: 0.7)),
               const SizedBox(width: 6),
-              if (g.isRequired) const _Pill('Required', AppColors.danger),
-              if (g.isMultiSelect) ...[
+              if (widget.isRequired) const _Pill('Required', AppColors.danger),
+              if (widget.isMulti) ...[
                 const SizedBox(width: 4),
-                const _Pill('Multi', AppColors.primary),
+                const _Pill('Multi', AppColors.primary)
               ],
             ])),
             if (selCount > 0) _CountBadge(count: selCount),
@@ -1373,7 +1362,7 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
                     controller: _searchCtrl,
                     style: cairo(fontSize: 13),
                     decoration: InputDecoration(
-                      hintText: 'Search options…',
+                      hintText: 'Search items…',
                       hintStyle:
                           cairo(fontSize: 13, color: AppColors.textMuted),
                       prefixIcon: const Icon(Icons.search_rounded,
@@ -1396,419 +1385,29 @@ class _OptionGroupCardState extends State<_OptionGroupCard> {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: opts.isEmpty
-              ? Text('No options match "$_query"',
+              ? Text('No match for "$_query"',
                   style: cairo(fontSize: 12, color: AppColors.textMuted))
-              : g.isMultiSelect
-                  ? _MultiOptionList(
-                      opts: opts,
-                      selectedQty: widget.selectedMulti,
-                      onIncrement: widget.onIncrementMulti,
-                      onDecrement: widget.onDecrementMulti,
-                    )
-                  : Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
-                      children: opts.map((opt) {
-                        final sel = widget.selectedSingle == opt.id;
-                        return _Chip(
-                          label: normaliseName(opt.name),
-                          sublabel: opt.price > 0 ? '+${egp(opt.price)}' : null,
-                          selected: sel,
-                          checkbox: false,
-                          onTap: () => widget.onToggleSingle(opt.id),
-                        );
-                      }).toList()),
+              : Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: opts.map((opt) {
+                    final sel = widget.isMulti
+                        ? widget.selectedMulti.contains(opt.id)
+                        : widget.selectedSingle == opt.id;
+                    return _Chip(
+                      label: normaliseName(opt.name),
+                      sublabel: opt.defaultPrice > 0 ? '+${egp(opt.defaultPrice)}' : null,
+                      selected: sel,
+                      checkbox: widget.isMulti,
+                      onTap: () => widget.isMulti
+                          ? widget.onToggleMulti(opt.id)
+                          : widget.onToggleSingle(opt.id),
+                    );
+                  }).toList()),
         ),
       ]),
     );
   }
-}
-
-// Multi-option list with per-row qty stepper
-class _MultiOptionList extends StatelessWidget {
-  final List<DrinkOptionItem> opts;
-  final Map<String, int> selectedQty;
-  final void Function(String) onIncrement;
-  final void Function(String) onDecrement;
-
-  const _MultiOptionList({
-    required this.opts,
-    required this.selectedQty,
-    required this.onIncrement,
-    required this.onDecrement,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: opts.map((opt) {
-        final qty = selectedQty[opt.id] ?? 0;
-        final selected = qty > 0;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              color:
-                  selected ? AppColors.primary.withOpacity(0.05) : AppColors.bg,
-              borderRadius: BorderRadius.circular(AppRadius.xs),
-              border: Border.all(
-                  color: selected
-                      ? AppColors.primary.withOpacity(0.3)
-                      : AppColors.border,
-                  width: selected ? 1.5 : 1),
-            ),
-            child: Row(children: [
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(normaliseName(opt.name),
-                        style: cairo(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: selected
-                                ? AppColors.textPrimary
-                                : AppColors.textPrimary)),
-                    if (opt.price > 0)
-                      Text('+${egp(opt.price)}',
-                          style: cairo(
-                              fontSize: 11,
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w600)),
-                  ])),
-              // Stepper
-              if (selected) ...[
-                _InlineBtn(
-                    icon: Icons.remove, onTap: () => onDecrement(opt.id)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 120),
-                    transitionBuilder: (child, anim) =>
-                        ScaleTransition(scale: anim, child: child),
-                    child: Text('$qty',
-                        key: ValueKey(qty),
-                        style: cairo(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.primary)),
-                  ),
-                ),
-                _InlineBtn(icon: Icons.add, onTap: () => onIncrement(opt.id)),
-              ] else ...[
-                GestureDetector(
-                  onTap: () => onIncrement(opt.id),
-                  child: Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                        color: AppColors.primary.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(AppRadius.xs)),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.add,
-                        size: 16, color: AppColors.primary),
-                  ),
-                ),
-              ],
-            ]),
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  RECIPE SHEET
-// ─────────────────────────────────────────────────────────────────────────────
-class _RecipeSheet extends ConsumerStatefulWidget {
-  final String menuItemId;
-  final String itemName;
-  final String? sizeLabel;
-  final List<SelectedAddon> addons;
-
-  const _RecipeSheet({
-    required this.menuItemId,
-    required this.itemName,
-    required this.sizeLabel,
-    required this.addons,
-  });
-
-  static void show(
-    BuildContext ctx, {
-    required String menuItemId,
-    required String itemName,
-    String? sizeLabel,
-    required List<SelectedAddon> addons,
-  }) =>
-      showModalBottomSheet(
-        context: ctx,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _RecipeSheet(
-          menuItemId: menuItemId,
-          itemName: itemName,
-          sizeLabel: sizeLabel,
-          addons: addons,
-        ),
-      );
-
-  @override
-  ConsumerState<_RecipeSheet> createState() => _RecipeSheetState();
-}
-
-class _RecipeSheetState extends ConsumerState<_RecipeSheet> {
-  List<RecipeIngredient>? _ingredients;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final result = await ref.read(recipeApiProvider).preview(
-            menuItemId: widget.menuItemId,
-            sizeLabel: widget.sizeLabel,
-            addons: widget.addons,
-          );
-      if (mounted) setState(() => _ingredients = result);
-    } catch (e) {
-      if (mounted) setState(() => _error = friendlyError(e));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final base = _ingredients?.where((i) => i.isBase).toList() ?? [];
-    final extras = _ingredients?.where((i) => !i.isBase).toList() ?? [];
-    final hasData = _ingredients != null;
-
-    return Container(
-      constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: AppRadius.sheetRadius),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        // drag handle
-        Padding(
-          padding: const EdgeInsets.only(top: 12, bottom: 4),
-          child: Center(
-              child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                      color: AppColors.border,
-                      borderRadius: BorderRadius.circular(2)))),
-        ),
-
-        // header
-        Padding(
-          padding: const EdgeInsets.fromLTRB(22, 10, 22, 14),
-          child: Row(children: [
-            const Icon(Icons.science_outlined,
-                size: 18, color: AppColors.textSecondary),
-            const SizedBox(width: 8),
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text('Recipe',
-                      style: cairo(fontSize: 17, fontWeight: FontWeight.w800)),
-                  Text(
-                      widget.itemName +
-                          (widget.sizeLabel != null
-                              ? ' · ${normaliseName(widget.sizeLabel!)}'
-                              : ''),
-                      style:
-                          cairo(fontSize: 12, color: AppColors.textSecondary)),
-                ])),
-          ]),
-        ),
-        Container(height: 1, color: AppColors.border),
-
-        // body
-        Flexible(
-          child: _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.error_outline_rounded,
-                          size: 32, color: AppColors.border),
-                      const SizedBox(height: 10),
-                      Text(_error!,
-                          style: cairo(
-                              fontSize: 13, color: AppColors.textSecondary),
-                          textAlign: TextAlign.center),
-                      const SizedBox(height: 14),
-                      TextButton(
-                          onPressed: () {
-                            setState(() => _error = null);
-                            _fetch();
-                          },
-                          child: const Text('Retry')),
-                    ]),
-                  ),
-                )
-              : !hasData
-                  ? _RecipeSkeleton()
-                  : (_ingredients!.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(32),
-                            child: Text('No recipe data for this item.',
-                                style: cairo(color: AppColors.textMuted)),
-                          ),
-                        )
-                      : ListView(
-                          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-                          children: [
-                            if (base.isNotEmpty) ...[
-                              _RecipeSectionHeader('Base Recipe'),
-                              const SizedBox(height: 8),
-                              ...base.map((i) => _IngredientRow(i)),
-                            ],
-                            if (extras.isNotEmpty) ...[
-                              const SizedBox(height: 16),
-                              _RecipeSectionHeader('From Selections'),
-                              const SizedBox(height: 8),
-                              ...extras.map((i) => _IngredientRow(i)),
-                            ],
-                          ],
-                        )),
-        ),
-      ]),
-    );
-  }
-}
-
-class _RecipeSectionHeader extends StatelessWidget {
-  final String text;
-  const _RecipeSectionHeader(this.text);
-  @override
-  Widget build(BuildContext context) => Text(text.toUpperCase(),
-      style: cairo(
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          color: AppColors.textMuted,
-          letterSpacing: 1.1));
-}
-
-class _IngredientRow extends StatelessWidget {
-  final RecipeIngredient ingredient;
-  const _IngredientRow(this.ingredient);
-
-  String _formatQty(double q) {
-    if (q == q.roundToDouble()) return q.toInt().toString();
-    // trim trailing zeros up to 2 dp
-    return q
-        .toStringAsFixed(2)
-        .replaceAll(RegExp(r'0+$'), '')
-        .replaceAll(RegExp(r'\.$'), '');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isOverride = ingredient.source == 'addon_override';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 7),
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-      decoration: BoxDecoration(
-        color: AppColors.bg,
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(children: [
-        Container(
-          width: 4,
-          height: 28,
-          decoration: BoxDecoration(
-              color: ingredient.isBase
-                  ? AppColors.primary.withOpacity(0.5)
-                  : AppColors.success.withOpacity(0.6),
-              borderRadius: BorderRadius.circular(2)),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-            child: Text(normaliseName(ingredient.name),
-                style: cairo(fontSize: 13, fontWeight: FontWeight.w600))),
-        if (isOverride)
-          Container(
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-                color: AppColors.success.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(AppRadius.xs)),
-            child: Text('override',
-                style: cairo(
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.success,
-                    letterSpacing: 0.3)),
-          ),
-        Text(
-          '${_formatQty(ingredient.quantity)} ${ingredient.unit}',
-          style: cairo(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textSecondary),
-        ),
-      ]),
-    );
-  }
-}
-
-class _RecipeSkeleton extends StatefulWidget {
-  @override
-  State<_RecipeSkeleton> createState() => _RecipeSkeletonState();
-}
-
-class _RecipeSkeletonState extends State<_RecipeSkeleton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _anim;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1100))
-      ..repeat(reverse: true);
-    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _anim,
-        builder: (_, __) {
-          final c = Color.lerp(_skeletonBase, _skeletonHighlight, _anim.value)!;
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-            child: Column(
-                children: List.generate(
-              4,
-              (i) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                height: 46,
-                decoration: BoxDecoration(
-                    color: c,
-                    borderRadius: BorderRadius.circular(AppRadius.sm)),
-              ),
-            )),
-          );
-        },
-      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

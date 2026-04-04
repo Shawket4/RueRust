@@ -34,57 +34,90 @@ class ItemSize {
       {'id': id, 'label': label, 'price_override': price};
 }
 
-class DrinkOptionItem {
+class AddonItem {
   final String id;
-  final String addonItemId;
+  final String orgId;
   final String name;
-  final int    price;
-  const DrinkOptionItem({
-    required this.id, required this.addonItemId,
-    required this.name, required this.price,
+  final String addonType;
+  final int    defaultPrice;
+  final bool   isActive;
+  final int    displayOrder;
+
+  const AddonItem({
+    required this.id, required this.orgId, required this.name,
+    required this.addonType, required this.defaultPrice,
+    required this.isActive, required this.displayOrder,
   });
 
-  factory DrinkOptionItem.fromJson(Map<String, dynamic> j) => DrinkOptionItem(
-    id: j['id'], addonItemId: j['addon_item_id'], name: j['name'],
-    price: (j['price_override'] ?? j['default_price'] ?? 0) as int,
+  factory AddonItem.fromJson(Map<String, dynamic> j) => AddonItem(
+    id: j['id'], orgId: j['org_id'], name: j['name'],
+    addonType: j['addon_type'] ?? '', defaultPrice: j['default_price'] ?? 0,
+    isActive: j['is_active'] ?? true, displayOrder: j['display_order'] ?? 0,
   );
 
   Map<String, dynamic> toJson() => {
-    'id': id, 'addon_item_id': addonItemId, 'name': name,
-    'price_override': price, 'default_price': price,
+    'id': id, 'org_id': orgId, 'name': name, 'addon_type': addonType,
+    'default_price': defaultPrice, 'is_active': isActive, 'display_order': displayOrder,
   };
 }
 
-class DrinkOptionGroup {
-  final String                id;
-  final String                groupType;
-  final bool                  isRequired;
-  final bool                  isMultiSelect;
-  final List<DrinkOptionItem> items;
+class MenuItemAddonSlot {
+  final String  id;
+  final String  itemId;
+  final String  addonType;
+  final bool    isRequired;
+  final int     minSelections;
+  final int?    maxSelections;
+  final int     displayOrder;
 
-  String get displayName => groupType
+  String get displayName => addonType
       .replaceAll('_', ' ')
       .split(' ')
       .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
       .join(' ');
 
-  const DrinkOptionGroup({
-    required this.id, required this.groupType, required this.isRequired,
-    required this.isMultiSelect, required this.items,
+  const MenuItemAddonSlot({
+    required this.id, required this.itemId, required this.addonType,
+    required this.isRequired, required this.minSelections, this.maxSelections,
+    required this.displayOrder,
   });
 
-  factory DrinkOptionGroup.fromJson(Map<String, dynamic> j) => DrinkOptionGroup(
-    id: j['id'], groupType: j['group_type'] ?? '',
-    isRequired:   (j['is_required'] ?? false) as bool,
-    isMultiSelect: (j['selection_type'] ?? 'single') == 'multi',
-    items: (j['items'] as List? ?? [])
-        .map((i) => DrinkOptionItem.fromJson(i)).toList(),
+  factory MenuItemAddonSlot.fromJson(Map<String, dynamic> j) => MenuItemAddonSlot(
+    id: j['id'], itemId: j['menu_item_id'], addonType: j['addon_type'] ?? '',
+    isRequired: j['is_required'] ?? false,
+    minSelections: j['min_selections'] ?? 0,
+    maxSelections: j['max_selections'],
+    displayOrder: j['display_order'] ?? 0,
   );
 
   Map<String, dynamic> toJson() => {
-    'id': id, 'group_type': groupType, 'is_required': isRequired,
-    'selection_type': isMultiSelect ? 'multi' : 'single',
-    'items': items.map((i) => i.toJson()).toList(),
+    'id': id, 'menu_item_id': itemId, 'addon_type': addonType,
+    'is_required': isRequired, 'min_selections': minSelections,
+    'max_selections': maxSelections, 'display_order': displayOrder,
+  };
+}
+
+class MenuItemAddonOverride {
+  final String  id;
+  final String  itemId;
+  final String  addonItemId;
+  final String? sizeLabel;
+  final double  quantityUsed;
+
+  const MenuItemAddonOverride({
+    required this.id, required this.itemId, required this.addonItemId,
+    this.sizeLabel, required this.quantityUsed,
+  });
+
+  factory MenuItemAddonOverride.fromJson(Map<String, dynamic> j) => MenuItemAddonOverride(
+    id: j['id'], itemId: j['menu_item_id'], addonItemId: j['addon_item_id'],
+    sizeLabel: j['size_label'],
+    quantityUsed: (j['quantity_used'] ?? 0).toDouble(),
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'menu_item_id': itemId, 'addon_item_id': addonItemId,
+    'size_label': sizeLabel, 'quantity_used': quantityUsed,
   };
 }
 
@@ -99,13 +132,14 @@ class MenuItem {
   final bool                  isActive;
   final int                   displayOrder;
   final List<ItemSize>        sizes;
-  final List<DrinkOptionGroup> optionGroups;
+  final List<MenuItemAddonSlot> addonSlots;
+  final List<MenuItemAddonOverride> addonOverrides;
 
   const MenuItem({
     required this.id, required this.orgId, this.categoryId,
     required this.name, this.description, this.imageUrl,
     required this.basePrice, required this.isActive, required this.displayOrder,
-    this.sizes = const [], this.optionGroups = const [],
+    this.sizes = const [], this.addonSlots = const [], this.addonOverrides = const [],
   });
 
   int priceForSize(String? label) {
@@ -120,8 +154,10 @@ class MenuItem {
     basePrice: j['base_price'], isActive: j['is_active'],
     displayOrder: j['display_order'],
     sizes: (j['sizes'] as List? ?? []).map((s) => ItemSize.fromJson(s)).toList(),
-    optionGroups: (j['option_groups'] as List? ?? [])
-        .map((g) => DrinkOptionGroup.fromJson(g)).toList(),
+    addonSlots: (j['addon_slots'] as List? ?? [])
+        .map((g) => MenuItemAddonSlot.fromJson(g)).toList(),
+    addonOverrides: (j['addon_overrides'] as List? ?? [])
+        .map((o) => MenuItemAddonOverride.fromJson(o)).toList(),
   );
 
   Map<String, dynamic> toJson() => {
@@ -129,6 +165,7 @@ class MenuItem {
     'description': description, 'image_url': imageUrl,
     'base_price': basePrice, 'is_active': isActive, 'display_order': displayOrder,
     'sizes': sizes.map((s) => s.toJson()).toList(),
-    'option_groups': optionGroups.map((g) => g.toJson()).toList(),
+    'addon_slots': addonSlots.map((g) => g.toJson()).toList(),
+    'addon_overrides': addonOverrides.map((o) => o.toJson()).toList(),
   };
 }

@@ -153,9 +153,28 @@ export interface MenuItem {
   updated_at: string;
 }
 
+export interface MenuItemAddonSlot {
+  id: string;
+  menu_item_id: string;
+  addon_type: string;
+  is_required: boolean;
+  min_selections: number;
+  max_selections: number | null;
+  display_order: number;
+}
+
+export interface MenuItemAddonOverride {
+  id: string;
+  menu_item_id: string;
+  addon_item_id: string;
+  size_label: string | null;
+  quantity_used: number;
+}
+
 export interface MenuItemFull extends MenuItem {
   sizes: ItemSize[];
-  option_groups: DrinkOptionGroupFull[];
+  addon_slots: MenuItemAddonSlot[];
+  addon_overrides: MenuItemAddonOverride[];
 }
 
 // ── Recipes ───────────────────────────────────────────────────────────────────
@@ -177,16 +196,7 @@ export interface AddonIngredient {
   replaces_org_ingredient_id?: string | null;
 }
 
-export interface DrinkOptionOverride {
-  id: string;
-  drink_option_item_id: string;
-  size_label: string | null;
-  inventory_item_id: string;
-  inventory_item_name: string;
-  unit: string;
-  quantity_used: number;
-  replaces_org_ingredient_id?: string | null;
-}
+
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
 export type InventoryUnit = "g" | "kg" | "ml" | "l" | "pcs";

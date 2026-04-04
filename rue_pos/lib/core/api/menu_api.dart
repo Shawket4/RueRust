@@ -26,6 +26,12 @@ class MenuApi {
     final res = await _c.dio.get('/menu-items/$id');
     return MenuItem.fromJson(res.data as Map<String, dynamic>);
   }
+
+  Future<List<AddonItem>> addons(String orgId) async {
+    final res =
+        await _c.dio.get('/addon-items', queryParameters: {'org_id': orgId});
+    return (res.data as List).map((a) => AddonItem.fromJson(a)).toList();
+  }
 }
 
 final menuApiProvider =

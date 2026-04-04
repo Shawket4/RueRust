@@ -610,7 +610,7 @@ pub async fn close_shift(
 
         let actual = sqlx::types::BigDecimal::try_from(count.actual_stock)
             .map_err(|_| AppError::BadRequest("Invalid actual_stock value".into()))?;
-        let is_suspicious = actual > expected;
+        let is_suspicious = actual < expected;
 
         let row = sqlx::query_as::<_, InventoryCountRow>(
             r#"

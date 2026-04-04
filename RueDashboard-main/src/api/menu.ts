@@ -1,5 +1,5 @@
 import client from "@/lib/client";
-import type { Category, MenuItem, MenuItemFull, AddonItem, DrinkOptionGroupFull, ItemSize } from "@/types";
+import type { Category, MenuItem, MenuItemFull, AddonItem, ItemSize, MenuItemAddonSlot, MenuItemAddonOverride } from "@/types";
 
 // Categories
 export const getCategories  = (orgId: string)          => client.get<Category[]>("/categories", { params: { org_id: orgId } });
@@ -29,16 +29,19 @@ export const createAddonItem = (data: Record<string, unknown>) => client.post<Ad
 export const updateAddonItem = (id: string, data: Record<string, unknown>) => client.patch<AddonItem>(`/addon-items/${id}`, data);
 export const deleteAddonItem = (id: string) => client.delete(`/addon-items/${id}`);
 
-// Option groups
-export const getOptionGroups   = (itemId: string)                             => client.get<DrinkOptionGroupFull[]>(`/menu-items/${itemId}/option-groups`);
-export const createOptionGroup = (itemId: string, data: Record<string, unknown>) => client.post(`/menu-items/${itemId}/option-groups`, data);
-export const updateOptionGroup = (itemId: string, gid: string, data: Record<string, unknown>) => client.patch(`/menu-items/${itemId}/option-groups/${gid}`, data);
-export const deleteOptionGroup = (itemId: string, gid: string)                => client.delete(`/menu-items/${itemId}/option-groups/${gid}`);
+// Addon Slots
+export const createAddonSlot = (itemId: string, data: Record<string, unknown>) =>
+  client.post<MenuItemAddonSlot>(`/menu-items/${itemId}/addon-slots`, data);
+export const updateAddonSlot = (itemId: string, slotId: string, data: Record<string, unknown>) =>
+  client.patch<MenuItemAddonSlot>(`/menu-items/${itemId}/addon-slots/${slotId}`, data);
+export const deleteAddonSlot = (itemId: string, slotId: string) =>
+  client.delete(`/menu-items/${itemId}/addon-slots/${slotId}`);
 
-// Option items
-export const addOptionItem    = (itemId: string, gid: string, data: Record<string, unknown>) => client.post(`/menu-items/${itemId}/option-groups/${gid}/items`, data);
-export const updateOptionItem = (itemId: string, gid: string, oid: string, data: Record<string, unknown>) => client.patch(`/menu-items/${itemId}/option-groups/${gid}/items/${oid}`, data);
-export const deleteOptionItem = (itemId: string, gid: string, oid: string)   => client.delete(`/menu-items/${itemId}/option-groups/${gid}/items/${oid}`);
+// Addon Overrides
+export const upsertAddonOverride = (itemId: string, data: Record<string, unknown>) =>
+  client.post<MenuItemAddonOverride>(`/menu-items/${itemId}/addon-overrides`, data);
+export const deleteAddonOverride = (itemId: string, oid: string) =>
+  client.delete(`/menu-items/${itemId}/addon-overrides/${oid}`);
 
 // Sizes
 export const upsertSize = (itemId: string, data: { label: string; price_override: number; display_order?: number }) =>

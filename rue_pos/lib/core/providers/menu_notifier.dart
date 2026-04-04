@@ -4,8 +4,7 @@ import '../repositories/menu_repository.dart';
 import '../storage/storage_service.dart';
 
 class MenuState {
-  final List<Category> categories;
-  final List<MenuItem> items;
+  final List<AddonItem> addons;
   final String?        selectedCategoryId;
   final bool           isLoading;
   final bool           fromCache;
@@ -16,6 +15,7 @@ class MenuState {
   const MenuState({
     this.categories        = const [],
     this.items             = const [],
+    this.addons            = const [],
     this.selectedCategoryId,
     this.isLoading         = false,
     this.fromCache         = false,
@@ -31,6 +31,7 @@ class MenuState {
   MenuState copyWith({
     List<Category>? categories,
     List<MenuItem>? items,
+    List<AddonItem>? addons,
     String?         selectedCategoryId,
     bool?           isLoading,
     bool?           fromCache,
@@ -41,6 +42,7 @@ class MenuState {
   }) => MenuState(
     categories:         categories         ?? this.categories,
     items:              items              ?? this.items,
+    addons:             addons             ?? this.addons,
     selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
     isLoading:          isLoading          ?? this.isLoading,
     fromCache:          fromCache          ?? this.fromCache,
@@ -68,6 +70,7 @@ class MenuNotifier extends Notifier<MenuState> {
         isLoading:          false,
         categories:         result.categories,
         items:              result.items,
+        addons:             result.addons,
         fromCache:          result.fromCache,
         loadedOrgId:        orgId,
         cachedAt:           cachedAt,

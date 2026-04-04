@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict if3dmUN7qWpS2XzIcd9zxRcNU2mre2DrVyu7uugj1dROYG7f8TFqFevZTdDtSJx
+\restrict ucOGpbHfaZfKsWsTvQLpGdJeaTHJGvxmzRPhf21z16qkEfzNkE483LhR2Vy046o
 
 -- Dumped from database version 17.9 (Debian 17.9-0+deb13u1)
 -- Dumped by pg_dump version 17.9 (Debian 17.9-0+deb13u1)
@@ -290,7 +290,9 @@ CREATE TABLE public.addon_item_ingredients (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     ingredient_name text NOT NULL,
-    ingredient_unit text NOT NULL
+    ingredient_unit text NOT NULL,
+    org_ingredient_id uuid,
+    replaces_org_ingredient_id uuid
 );
 
 
@@ -309,6 +311,56 @@ CREATE TABLE public.addon_items (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT addon_items_type_check CHECK ((type = ANY (ARRAY['coffee_type'::text, 'milk_type'::text, 'extra'::text])))
+);
+
+
+--
+-- Name: branch_inventory; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.branch_inventory (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    org_ingredient_id uuid NOT NULL,
+    current_stock numeric(12,3) DEFAULT 0 NOT NULL,
+    reorder_threshold numeric(12,3) DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: branch_inventory_adjustments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.branch_inventory_adjustments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    branch_id uuid NOT NULL,
+    branch_inventory_id uuid NOT NULL,
+    type public.inventory_adjustment_type NOT NULL,
+    quantity numeric(12,3) NOT NULL,
+    note text NOT NULL,
+    transfer_id uuid,
+    adjusted_by uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: branch_inventory_transfers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.branch_inventory_transfers (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    source_branch_id uuid NOT NULL,
+    destination_branch_id uuid NOT NULL,
+    org_ingredient_id uuid NOT NULL,
+    quantity numeric(12,3) NOT NULL,
+    note text,
+    initiated_by uuid NOT NULL,
+    initiated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_transfer_branches CHECK ((source_branch_id <> destination_branch_id))
 );
 
 
@@ -408,7 +460,9 @@ CREATE TABLE public.drink_option_ingredient_overrides (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     ingredient_name text NOT NULL,
-    ingredient_unit text NOT NULL
+    ingredient_unit text NOT NULL,
+    org_ingredient_id uuid,
+    replaces_org_ingredient_id uuid
 );
 
 
@@ -423,80 +477,6 @@ CREATE TABLE public.drink_option_items (
     price_override integer,
     display_order integer DEFAULT 0 NOT NULL,
     is_active boolean DEFAULT true NOT NULL
-);
-
-
---
--- Name: inventory_adjustments; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.inventory_adjustments (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    branch_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
-    type public.inventory_adjustment_type NOT NULL,
-    quantity numeric(12,3) NOT NULL,
-    note text,
-    transfer_id uuid,
-    adjusted_by uuid NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: inventory_deduction_logs; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.inventory_deduction_logs (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    branch_id uuid NOT NULL,
-    order_id uuid NOT NULL,
-    order_item_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
-    quantity_deducted numeric(12,3) NOT NULL,
-    source text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: inventory_items; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.inventory_items (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    branch_id uuid NOT NULL,
-    name text NOT NULL,
-    unit public.inventory_unit NOT NULL,
-    current_stock numeric(12,3) DEFAULT 0 NOT NULL,
-    reorder_threshold numeric(12,3) DEFAULT 0 NOT NULL,
-    cost_per_unit integer DEFAULT 0 NOT NULL,
-    is_active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    deleted_at timestamp with time zone
-);
-
-
---
--- Name: inventory_transfers; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.inventory_transfers (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    source_branch_id uuid NOT NULL,
-    destination_branch_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
-    quantity_sent numeric(12,3) NOT NULL,
-    quantity_confirmed numeric(12,3),
-    status public.transfer_status DEFAULT 'pending'::public.transfer_status NOT NULL,
-    note text,
-    initiated_by uuid NOT NULL,
-    confirmed_by uuid,
-    initiated_at timestamp with time zone DEFAULT now() NOT NULL,
-    confirmed_at timestamp with time zone,
-    rejection_reason text,
-    CONSTRAINT chk_transfer_different_branches CHECK ((source_branch_id <> destination_branch_id))
 );
 
 
@@ -527,7 +507,8 @@ CREATE TABLE public.menu_item_recipes (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     ingredient_name text NOT NULL,
-    ingredient_unit text NOT NULL
+    ingredient_unit text NOT NULL,
+    org_ingredient_id uuid
 );
 
 
@@ -633,6 +614,24 @@ CREATE TABLE public.orders (
 
 
 --
+-- Name: org_ingredients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.org_ingredients (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    org_id uuid NOT NULL,
+    name text NOT NULL,
+    unit public.inventory_unit NOT NULL,
+    description text,
+    cost_per_unit integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone
+);
+
+
+--
 -- Name: organizations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -698,7 +697,7 @@ CREATE TABLE public.shift_cash_movements (
 CREATE TABLE public.shift_inventory_counts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     shift_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
+    branch_inventory_id uuid NOT NULL,
     expected_stock numeric(12,3) NOT NULL,
     actual_stock numeric(12,3) NOT NULL,
     discrepancy numeric(12,3) GENERATED ALWAYS AS ((expected_stock - actual_stock)) STORED,
@@ -706,18 +705,6 @@ CREATE TABLE public.shift_inventory_counts (
     note text,
     counted_by uuid NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
--- Name: shift_inventory_snapshots; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shift_inventory_snapshots (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    shift_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
-    stock_at_open numeric(12,3) NOT NULL
 );
 
 
@@ -746,51 +733,6 @@ CREATE TABLE public.shifts (
     force_closed_by uuid,
     force_closed_at timestamp with time zone,
     force_close_reason text
-);
-
-
---
--- Name: soft_serve_batch_ingredients; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.soft_serve_batch_ingredients (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    batch_id uuid NOT NULL,
-    inventory_item_id uuid NOT NULL,
-    quantity_used numeric(12,3) NOT NULL
-);
-
-
---
--- Name: soft_serve_batches; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.soft_serve_batches (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    branch_id uuid NOT NULL,
-    menu_item_id uuid NOT NULL,
-    small_serves integer NOT NULL,
-    large_serves integer NOT NULL,
-    logged_by uuid NOT NULL,
-    notes text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    large_ratio numeric DEFAULT 1.5 NOT NULL,
-    total_units numeric DEFAULT 0 NOT NULL
-);
-
-
---
--- Name: soft_serve_serve_pools; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.soft_serve_serve_pools (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    branch_id uuid NOT NULL,
-    menu_item_id uuid NOT NULL,
-    low_stock_flag boolean DEFAULT false NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    total_units numeric DEFAULT 0 NOT NULL,
-    large_ratio numeric DEFAULT 1.5 NOT NULL
 );
 
 
@@ -859,6 +801,38 @@ ALTER TABLE ONLY public.addon_items
 
 ALTER TABLE ONLY public.addon_items
     ADD CONSTRAINT addon_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_adjustments
+    ADD CONSTRAINT branch_inventory_adjustments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: branch_inventory branch_inventory_branch_id_org_ingredient_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory
+    ADD CONSTRAINT branch_inventory_branch_id_org_ingredient_id_key UNIQUE (branch_id, org_ingredient_id);
+
+
+--
+-- Name: branch_inventory branch_inventory_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory
+    ADD CONSTRAINT branch_inventory_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_pkey PRIMARY KEY (id);
 
 
 --
@@ -958,38 +932,6 @@ ALTER TABLE ONLY public.drink_option_ingredient_overrides
 
 
 --
--- Name: inventory_adjustments inventory_adjustments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_adjustments
-    ADD CONSTRAINT inventory_adjustments_pkey PRIMARY KEY (id);
-
-
---
--- Name: inventory_deduction_logs inventory_deduction_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_deduction_logs
-    ADD CONSTRAINT inventory_deduction_logs_pkey PRIMARY KEY (id);
-
-
---
--- Name: inventory_items inventory_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_items
-    ADD CONSTRAINT inventory_items_pkey PRIMARY KEY (id);
-
-
---
--- Name: inventory_transfers inventory_transfers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_pkey PRIMARY KEY (id);
-
-
---
 -- Name: item_sizes item_sizes_menu_item_id_label_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1070,6 +1012,22 @@ ALTER TABLE ONLY public.orders
 
 
 --
+-- Name: org_ingredients org_ingredients_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.org_ingredients
+    ADD CONSTRAINT org_ingredients_org_id_name_key UNIQUE (org_id, name);
+
+
+--
+-- Name: org_ingredients org_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.org_ingredients
+    ADD CONSTRAINT org_ingredients_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: organizations organizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1126,27 +1084,11 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_shift_id_inventory_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_shift_id_branch_inventory_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
-    ADD CONSTRAINT shift_inventory_counts_shift_id_inventory_item_id_key UNIQUE (shift_id, inventory_item_id);
-
-
---
--- Name: shift_inventory_snapshots shift_inventory_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shift_inventory_snapshots
-    ADD CONSTRAINT shift_inventory_snapshots_pkey PRIMARY KEY (id);
-
-
---
--- Name: shift_inventory_snapshots shift_inventory_snapshots_shift_id_inventory_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shift_inventory_snapshots
-    ADD CONSTRAINT shift_inventory_snapshots_shift_id_inventory_item_id_key UNIQUE (shift_id, inventory_item_id);
+    ADD CONSTRAINT shift_inventory_counts_shift_id_branch_inventory_id_key UNIQUE (shift_id, branch_inventory_id);
 
 
 --
@@ -1155,38 +1097,6 @@ ALTER TABLE ONLY public.shift_inventory_snapshots
 
 ALTER TABLE ONLY public.shifts
     ADD CONSTRAINT shifts_pkey PRIMARY KEY (id);
-
-
---
--- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batch_ingredients
-    ADD CONSTRAINT soft_serve_batch_ingredients_pkey PRIMARY KEY (id);
-
-
---
--- Name: soft_serve_batches soft_serve_batches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batches
-    ADD CONSTRAINT soft_serve_batches_pkey PRIMARY KEY (id);
-
-
---
--- Name: soft_serve_serve_pools soft_serve_serve_pools_branch_id_menu_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_serve_pools
-    ADD CONSTRAINT soft_serve_serve_pools_branch_id_menu_item_id_key UNIQUE (branch_id, menu_item_id);
-
-
---
--- Name: soft_serve_serve_pools soft_serve_serve_pools_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_serve_pools
-    ADD CONSTRAINT soft_serve_serve_pools_pkey PRIMARY KEY (id);
 
 
 --
@@ -1214,6 +1124,55 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: idx_bia_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bia_branch ON public.branch_inventory_adjustments USING btree (branch_id);
+
+
+--
+-- Name: idx_bia_inv; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bia_inv ON public.branch_inventory_adjustments USING btree (branch_inventory_id);
+
+
+--
+-- Name: idx_bit_dest; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bit_dest ON public.branch_inventory_transfers USING btree (destination_branch_id);
+
+
+--
+-- Name: idx_bit_ingredient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bit_ingredient ON public.branch_inventory_transfers USING btree (org_ingredient_id);
+
+
+--
+-- Name: idx_bit_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bit_source ON public.branch_inventory_transfers USING btree (source_branch_id);
+
+
+--
+-- Name: idx_branch_inventory_branch; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_branch_inventory_branch ON public.branch_inventory USING btree (branch_id);
+
+
+--
+-- Name: idx_branch_inventory_ingredient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_branch_inventory_ingredient ON public.branch_inventory USING btree (org_ingredient_id);
+
+
+--
 -- Name: idx_branches_org; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1225,69 +1184,6 @@ CREATE INDEX idx_branches_org ON public.branches USING btree (org_id);
 --
 
 CREATE INDEX idx_discounts_org_id ON public.discounts USING btree (org_id);
-
-
---
--- Name: idx_inventory_adjustments_branch; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_adjustments_branch ON public.inventory_adjustments USING btree (branch_id);
-
-
---
--- Name: idx_inventory_adjustments_item; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_adjustments_item ON public.inventory_adjustments USING btree (inventory_item_id);
-
-
---
--- Name: idx_inventory_deduction_logs_branch; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_deduction_logs_branch ON public.inventory_deduction_logs USING btree (branch_id);
-
-
---
--- Name: idx_inventory_deduction_logs_item; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_deduction_logs_item ON public.inventory_deduction_logs USING btree (inventory_item_id);
-
-
---
--- Name: idx_inventory_deduction_logs_order; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_deduction_logs_order ON public.inventory_deduction_logs USING btree (order_id);
-
-
---
--- Name: idx_inventory_items_branch; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_items_branch ON public.inventory_items USING btree (branch_id);
-
-
---
--- Name: idx_inventory_transfers_destination; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_transfers_destination ON public.inventory_transfers USING btree (destination_branch_id);
-
-
---
--- Name: idx_inventory_transfers_source; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_transfers_source ON public.inventory_transfers USING btree (source_branch_id);
-
-
---
--- Name: idx_inventory_transfers_status; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_inventory_transfers_status ON public.inventory_transfers USING btree (status);
 
 
 --
@@ -1396,6 +1292,13 @@ CREATE INDEX idx_orders_teller ON public.orders USING btree (teller_id);
 
 
 --
+-- Name: idx_org_ingredients_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_org_ingredients_org ON public.org_ingredients USING btree (org_id);
+
+
+--
 -- Name: idx_permissions_user; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1407,20 +1310,6 @@ CREATE INDEX idx_permissions_user ON public.permissions USING btree (user_id);
 --
 
 CREATE INDEX idx_shift_cash_movements_shift ON public.shift_cash_movements USING btree (shift_id);
-
-
---
--- Name: idx_shift_inventory_counts_shift; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_shift_inventory_counts_shift ON public.shift_inventory_counts USING btree (shift_id);
-
-
---
--- Name: idx_shift_inventory_snapshots_shift; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_shift_inventory_snapshots_shift ON public.shift_inventory_snapshots USING btree (shift_id);
 
 
 --
@@ -1452,10 +1341,10 @@ CREATE INDEX idx_shifts_teller ON public.shifts USING btree (teller_id);
 
 
 --
--- Name: idx_soft_serve_batches_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sic_shift; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_soft_serve_batches_branch ON public.soft_serve_batches USING btree (branch_id);
+CREATE INDEX idx_sic_shift ON public.shift_inventory_counts USING btree (shift_id);
 
 
 --
@@ -1501,6 +1390,13 @@ CREATE TRIGGER trg_addon_items_updated_at BEFORE UPDATE ON public.addon_items FO
 
 
 --
+-- Name: branch_inventory trg_branch_inventory_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_branch_inventory_updated_at BEFORE UPDATE ON public.branch_inventory FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
 -- Name: branches trg_branches_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1519,13 +1415,6 @@ CREATE TRIGGER trg_categories_updated_at BEFORE UPDATE ON public.categories FOR 
 --
 
 CREATE TRIGGER trg_drink_option_ingredient_overrides_updated_at BEFORE UPDATE ON public.drink_option_ingredient_overrides FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-
-
---
--- Name: inventory_items trg_inventory_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_inventory_items_updated_at BEFORE UPDATE ON public.inventory_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
@@ -1550,6 +1439,13 @@ CREATE TRIGGER trg_orders_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW
 
 
 --
+-- Name: org_ingredients trg_org_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_org_ingredients_updated_at BEFORE UPDATE ON public.org_ingredients FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
 -- Name: organizations trg_organizations_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1561,13 +1457,6 @@ CREATE TRIGGER trg_organizations_updated_at BEFORE UPDATE ON public.organization
 --
 
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON public.shifts FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-
-
---
--- Name: soft_serve_serve_pools trg_soft_serve_serve_pools_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_soft_serve_serve_pools_updated_at BEFORE UPDATE ON public.soft_serve_serve_pools FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
@@ -1586,11 +1475,107 @@ ALTER TABLE ONLY public.addon_item_ingredients
 
 
 --
+-- Name: addon_item_ingredients addon_item_ingredients_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_item_ingredients
+    ADD CONSTRAINT addon_item_ingredients_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: addon_item_ingredients addon_item_ingredients_replaces_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.addon_item_ingredients
+    ADD CONSTRAINT addon_item_ingredients_replaces_org_ingredient_id_fkey FOREIGN KEY (replaces_org_ingredient_id) REFERENCES public.org_ingredients(id);
+
+
+--
 -- Name: addon_items addon_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.addon_items
     ADD CONSTRAINT addon_items_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_adjusted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_adjustments
+    ADD CONSTRAINT branch_inventory_adjustments_adjusted_by_fkey FOREIGN KEY (adjusted_by) REFERENCES public.users(id);
+
+
+--
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_adjustments
+    ADD CONSTRAINT branch_inventory_adjustments_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_adjustments
+    ADD CONSTRAINT branch_inventory_adjustments_branch_inventory_id_fkey FOREIGN KEY (branch_inventory_id) REFERENCES public.branch_inventory(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: branch_inventory branch_inventory_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory
+    ADD CONSTRAINT branch_inventory_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: branch_inventory branch_inventory_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory
+    ADD CONSTRAINT branch_inventory_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_destination_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_destination_branch_id_fkey FOREIGN KEY (destination_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_initiated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_initiated_by_fkey FOREIGN KEY (initiated_by) REFERENCES public.users(id);
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: branch_inventory_transfers branch_inventory_transfers_source_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.branch_inventory_transfers
+    ADD CONSTRAINT branch_inventory_transfers_source_branch_id_fkey FOREIGN KEY (source_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
 
 
 --
@@ -1642,11 +1627,27 @@ ALTER TABLE ONLY public.drink_option_groups
 
 
 --
+-- Name: drink_option_ingredient_overrides drink_option_ingredient_overrid_replaces_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_ingredient_overrides
+    ADD CONSTRAINT drink_option_ingredient_overrid_replaces_org_ingredient_id_fkey FOREIGN KEY (replaces_org_ingredient_id) REFERENCES public.org_ingredients(id);
+
+
+--
 -- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_drink_option_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.drink_option_ingredient_overrides
     ADD CONSTRAINT drink_option_ingredient_overrides_drink_option_item_id_fkey FOREIGN KEY (drink_option_item_id) REFERENCES public.drink_option_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.drink_option_ingredient_overrides
+    ADD CONSTRAINT drink_option_ingredient_overrides_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
 
 
 --
@@ -1666,115 +1667,11 @@ ALTER TABLE ONLY public.drink_option_items
 
 
 --
--- Name: inventory_adjustments fk_inventory_adjustments_transfer; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments fk_bia_transfer; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.inventory_adjustments
-    ADD CONSTRAINT fk_inventory_adjustments_transfer FOREIGN KEY (transfer_id) REFERENCES public.inventory_transfers(id) ON DELETE SET NULL;
-
-
---
--- Name: inventory_adjustments inventory_adjustments_adjusted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_adjustments
-    ADD CONSTRAINT inventory_adjustments_adjusted_by_fkey FOREIGN KEY (adjusted_by) REFERENCES public.users(id);
-
-
---
--- Name: inventory_adjustments inventory_adjustments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_adjustments
-    ADD CONSTRAINT inventory_adjustments_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
-
-
---
--- Name: inventory_adjustments inventory_adjustments_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_adjustments
-    ADD CONSTRAINT inventory_adjustments_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: inventory_deduction_logs inventory_deduction_logs_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_deduction_logs
-    ADD CONSTRAINT inventory_deduction_logs_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
-
-
---
--- Name: inventory_deduction_logs inventory_deduction_logs_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_deduction_logs
-    ADD CONSTRAINT inventory_deduction_logs_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: inventory_deduction_logs inventory_deduction_logs_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_deduction_logs
-    ADD CONSTRAINT inventory_deduction_logs_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
-
-
---
--- Name: inventory_deduction_logs inventory_deduction_logs_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_deduction_logs
-    ADD CONSTRAINT inventory_deduction_logs_order_item_id_fkey FOREIGN KEY (order_item_id) REFERENCES public.order_items(id) ON DELETE CASCADE;
-
-
---
--- Name: inventory_items inventory_items_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_items
-    ADD CONSTRAINT inventory_items_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
-
-
---
--- Name: inventory_transfers inventory_transfers_confirmed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_confirmed_by_fkey FOREIGN KEY (confirmed_by) REFERENCES public.users(id);
-
-
---
--- Name: inventory_transfers inventory_transfers_destination_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_destination_branch_id_fkey FOREIGN KEY (destination_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
-
-
---
--- Name: inventory_transfers inventory_transfers_initiated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_initiated_by_fkey FOREIGN KEY (initiated_by) REFERENCES public.users(id);
-
-
---
--- Name: inventory_transfers inventory_transfers_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: inventory_transfers inventory_transfers_source_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.inventory_transfers
-    ADD CONSTRAINT inventory_transfers_source_branch_id_fkey FOREIGN KEY (source_branch_id) REFERENCES public.branches(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY public.branch_inventory_adjustments
+    ADD CONSTRAINT fk_bia_transfer FOREIGN KEY (transfer_id) REFERENCES public.branch_inventory_transfers(id) ON DELETE SET NULL;
 
 
 --
@@ -1791,6 +1688,14 @@ ALTER TABLE ONLY public.item_sizes
 
 ALTER TABLE ONLY public.menu_item_recipes
     ADD CONSTRAINT menu_item_recipes_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.menu_item_recipes
+    ADD CONSTRAINT menu_item_recipes_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
 
 
 --
@@ -1890,6 +1795,14 @@ ALTER TABLE ONLY public.orders
 
 
 --
+-- Name: org_ingredients org_ingredients_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.org_ingredients
+    ADD CONSTRAINT org_ingredients_org_id_fkey FOREIGN KEY (org_id) REFERENCES public.organizations(id);
+
+
+--
 -- Name: permissions permissions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1914,6 +1827,14 @@ ALTER TABLE ONLY public.shift_cash_movements
 
 
 --
+-- Name: shift_inventory_counts shift_inventory_counts_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_inventory_counts
+    ADD CONSTRAINT shift_inventory_counts_branch_inventory_id_fkey FOREIGN KEY (branch_inventory_id) REFERENCES public.branch_inventory(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: shift_inventory_counts shift_inventory_counts_counted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1922,35 +1843,11 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shift_inventory_counts
-    ADD CONSTRAINT shift_inventory_counts_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
 -- Name: shift_inventory_counts shift_inventory_counts_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
     ADD CONSTRAINT shift_inventory_counts_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
-
-
---
--- Name: shift_inventory_snapshots shift_inventory_snapshots_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shift_inventory_snapshots
-    ADD CONSTRAINT shift_inventory_snapshots_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: shift_inventory_snapshots shift_inventory_snapshots_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shift_inventory_snapshots
-    ADD CONSTRAINT shift_inventory_snapshots_shift_id_fkey FOREIGN KEY (shift_id) REFERENCES public.shifts(id) ON DELETE CASCADE;
 
 
 --
@@ -1983,62 +1880,6 @@ ALTER TABLE ONLY public.shifts
 
 ALTER TABLE ONLY public.shifts
     ADD CONSTRAINT shifts_teller_id_fkey FOREIGN KEY (teller_id) REFERENCES public.users(id);
-
-
---
--- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batch_ingredients
-    ADD CONSTRAINT soft_serve_batch_ingredients_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.soft_serve_batches(id) ON DELETE CASCADE;
-
-
---
--- Name: soft_serve_batch_ingredients soft_serve_batch_ingredients_inventory_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batch_ingredients
-    ADD CONSTRAINT soft_serve_batch_ingredients_inventory_item_id_fkey FOREIGN KEY (inventory_item_id) REFERENCES public.inventory_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: soft_serve_batches soft_serve_batches_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batches
-    ADD CONSTRAINT soft_serve_batches_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
-
-
---
--- Name: soft_serve_batches soft_serve_batches_logged_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batches
-    ADD CONSTRAINT soft_serve_batches_logged_by_fkey FOREIGN KEY (logged_by) REFERENCES public.users(id);
-
-
---
--- Name: soft_serve_batches soft_serve_batches_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_batches
-    ADD CONSTRAINT soft_serve_batches_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE RESTRICT;
-
-
---
--- Name: soft_serve_serve_pools soft_serve_serve_pools_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_serve_pools
-    ADD CONSTRAINT soft_serve_serve_pools_branch_id_fkey FOREIGN KEY (branch_id) REFERENCES public.branches(id) ON DELETE CASCADE;
-
-
---
--- Name: soft_serve_serve_pools soft_serve_serve_pools_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.soft_serve_serve_pools
-    ADD CONSTRAINT soft_serve_serve_pools_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
 
 
 --
@@ -2077,5 +1918,5 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict if3dmUN7qWpS2XzIcd9zxRcNU2mre2DrVyu7uugj1dROYG7f8TFqFevZTdDtSJx
+\unrestrict ucOGpbHfaZfKsWsTvQLpGdJeaTHJGvxmzRPhf21z16qkEfzNkE483LhR2Vy046o
 

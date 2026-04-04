@@ -3,28 +3,25 @@ import 'package:flutter/foundation.dart';
 @immutable
 class SelectedAddon {
   final String addonItemId;
-  final String drinkOptionItemId;
   final String name;
   final int    priceModifier;
   final int    quantity;
 
   const SelectedAddon({
     required this.addonItemId,
-    required this.drinkOptionItemId,
     required this.name,
     required this.priceModifier,
     this.quantity = 1,
   });
 
   SelectedAddon copyWith({int? quantity}) => SelectedAddon(
-    addonItemId: addonItemId, drinkOptionItemId: drinkOptionItemId,
+    addonItemId: addonItemId,
     name: name, priceModifier: priceModifier,
     quantity: quantity ?? this.quantity,
   );
 
   Map<String, dynamic> toApiJson() => {
     'addon_item_id':        addonItemId,
-    'drink_option_item_id': drinkOptionItemId,
     'quantity':             quantity,
   };
 
@@ -36,7 +33,6 @@ class SelectedAddon {
 
   factory SelectedAddon.fromStorageJson(Map<String, dynamic> j) => SelectedAddon(
     addonItemId:       j['addon_item_id']        as String,
-    drinkOptionItemId: (j['drink_option_item_id'] as String?) ?? '',
     name:              (j['name']                as String?) ?? '',
     priceModifier:     (j['price_modifier']      as int?)    ?? 0,
     quantity:          (j['quantity']            as int?)    ?? 1,
@@ -103,8 +99,8 @@ class CartItem {
 
   static bool addonsMatch(List<SelectedAddon> a, List<SelectedAddon> b) {
     if (a.length != b.length) return false;
-    final aIds = a.map((x) => x.drinkOptionItemId).toSet();
-    final bIds = b.map((x) => x.drinkOptionItemId).toSet();
+    final aIds = a.map((x) => x.addonItemId).toSet();
+    final bIds = b.map((x) => x.addonItemId).toSet();
     return aIds.containsAll(bIds) && bIds.containsAll(aIds);
   }
 }

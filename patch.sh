@@ -1,39 +1,72 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Rue POS — Rust backend patch (all 7 features)
-# Run from the root of the Rust project (where Cargo.toml lives)
-# =============================================================================
+# =============================================================
+# patch_backend_v6.sh
+# Applies v6 changes to the Rue POS Rust backend:
+#   - Removes override/substitution logic from orders
+#   - Simplifies addon deduction to flat addon_item_ingredients
+#   - Adds optional fields CRUD to menu handler
+#   - Adds order_item_optionals deduction in create_order
+#   - Fixes /preview-recipe route ordering bug
+#   - Cleans up recipes handler (removes override endpoints)
+# Run from the rust project root: bash patch_backend_v6.sh
+# =============================================================
 set -e
 
-echo "=== Rue POS — Rust backend patch ==="
+echo "=== Rue POS Backend v6 Patch ==="
 
-# ── 1. New module: discounts ──────────────────────────────────────────────────
-mkdir -p src/discounts
-
-cat > src/discounts/mod.rs << 'EOF'
-pub mod handlers;
-pub mod routes;
-EOF
-
-cat > src/discounts/routes.rs << 'EOF'
+# ─── orders/routes.rs — fix preview-recipe route ordering ────
+cat > src/orders/routes.rs << 'RUST'
 use actix_web::web;
-use crate::{auth::middleware::JwtMiddleware, discounts::handlers};
+use crate::{auth::middleware::JwtMiddleware, orders::handlers};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("/discounts")
+        web::scope("/orders")
             .wrap(JwtMiddleware)
-            .route("",      web::get().to(handlers::list_discounts))
-            .route("",      web::post().to(handlers::create_discount))
-            .route("/{id}", web::patch().to(handlers::update_discount))
-            .route("/{id}", web::delete().to(handlers::delete_discount)),
+            .route("", web::post().to(handlers::create_order))
+            .route("", web::get().to(handlers::list_orders))
+            // IMPORTANT: static routes must come before /{id}
+            .route("/preview-recipe", web::post().to(handlers::preview_recipe))
+            .route("/{id}", web::get().to(handlers::get_order))
+            .route("/{id}/void", web::post().to(handlers::void_order)),
     );
 }
-EOF
+RUST
+echo "✓ orders/routes.rs"
 
-cat > src/discounts/handlers.rs << 'EOF'
+# ─── recipes/routes.rs — remove override endpoints ───────────
+cat > src/recipes/routes.rs << 'RUST'
+use actix_web::web;
+use crate::{auth::middleware::JwtMiddleware, recipes::handlers};
+
+pub fn configure(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/recipes")
+            .wrap(JwtMiddleware)
+
+            // ── Drink recipes (per item + size) ───────────────────────
+            .route("/drinks/{menu_item_id}",
+                web::get().to(handlers::list_drink_recipes))
+            .route("/drinks/{menu_item_id}",
+                web::post().to(handlers::upsert_drink_recipe))
+            .route("/drinks/{menu_item_id}/{size}",
+                web::delete().to(handlers::delete_drink_recipe))
+
+            // ── Addon base ingredients ────────────────────────────────
+            .route("/addons/{addon_item_id}",
+                web::get().to(handlers::list_addon_ingredients))
+            .route("/addons/{addon_item_id}",
+                web::post().to(handlers::upsert_addon_ingredient))
+            .route("/addons/{addon_item_id}",
+                web::delete().to(handlers::delete_addon_ingredient)),
+    );
+}
+RUST
+echo "✓ recipes/routes.rs"
+
+# ─── recipes/handlers.rs — remove override endpoints + replaces field ──
+cat > src/recipes/handlers.rs << 'RUST'
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -41,147 +74,262 @@ use uuid::Uuid;
 use crate::{
     auth::jwt::Claims,
     errors::AppError,
-    models::UserRole,
+    permissions::checker::check_permission,
 };
 
+// ── Models ────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct Discount {
-    pub id:         Uuid,
-    pub org_id:     Uuid,
-    pub name:       String,
-    pub dtype:      String,
-    pub value:      i32,
-    pub is_active:  bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+pub struct DrinkRecipe {
+    pub id:               Uuid,
+    pub menu_item_id:     Uuid,
+    pub size_label:       String,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:  String,
+    pub unit:             String,
+    pub quantity_used:    sqlx::types::BigDecimal,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct AddonIngredient {
+    pub id:                Uuid,
+    pub addon_item_id:     Uuid,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   String,
+    pub unit:              String,
+    pub quantity_used:     sqlx::types::BigDecimal,
+}
+
+// ── Request types ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct UpsertDrinkRecipeRequest {
+    pub size_label:        String,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   String,
+    pub ingredient_unit:   String,
+    pub quantity_used:     f64,
 }
 
 #[derive(Deserialize)]
-pub struct ListQuery {
-    pub org_id: Uuid,
+pub struct UpsertAddonIngredientRequest {
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   String,
+    pub ingredient_unit:   String,
+    pub quantity_used:     f64,
 }
 
 #[derive(Deserialize)]
-pub struct CreateDiscountRequest {
-    pub org_id:    Uuid,
-    pub name:      String,
-    pub dtype:     String,
-    pub value:     i32,
-    pub is_active: Option<bool>,
+pub struct DeleteRecipeQuery {
+    pub ingredient_name: String,
 }
 
-#[derive(Deserialize)]
-pub struct UpdateDiscountRequest {
-    pub name:      Option<String>,
-    pub dtype:     Option<String>,
-    pub value:     Option<i32>,
-    pub is_active: Option<bool>,
-}
+// ── GET /recipes/drinks/:menu_item_id ─────────────────────────
 
-pub async fn list_discounts(
-    req:   HttpRequest,
-    pool:  web::Data<PgPool>,
-    query: web::Query<ListQuery>,
+pub async fn list_drink_recipes(
+    req:          HttpRequest,
+    pool:         web::Data<PgPool>,
+    menu_item_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    require_org_access(&claims, query.org_id)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "read").await?;
+    require_menu_item_org(pool.get_ref(), &claims, *menu_item_id).await?;
 
-    let rows = sqlx::query_as::<_, Discount>(
+    let rows = sqlx::query_as::<_, DrinkRecipe>(
         r#"
-        SELECT id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
-        FROM discounts
-        WHERE org_id = $1
-        ORDER BY name
+        SELECT id, menu_item_id, size_label::text,
+               org_ingredient_id,
+               ingredient_name,
+               ingredient_unit AS unit,
+               quantity_used
+        FROM menu_item_recipes
+        WHERE menu_item_id = $1
+        ORDER BY size_label, ingredient_name
         "#,
     )
-    .bind(query.org_id)
+    .bind(*menu_item_id)
     .fetch_all(pool.get_ref())
     .await?;
 
     Ok(HttpResponse::Ok().json(rows))
 }
 
-pub async fn create_discount(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    body: web::Json<CreateDiscountRequest>,
+// ── POST /recipes/drinks/:menu_item_id ────────────────────────
+
+pub async fn upsert_drink_recipe(
+    req:          HttpRequest,
+    pool:         web::Data<PgPool>,
+    menu_item_id: web::Path<Uuid>,
+    body:         web::Json<UpsertDrinkRecipeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    require_org_access(&claims, body.org_id)?;
-    validate_dtype(&body.dtype)?;
-    validate_value(body.value, &body.dtype)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "create").await?;
+    require_menu_item_org(pool.get_ref(), &claims, *menu_item_id).await?;
 
-    let row = sqlx::query_as::<_, Discount>(
+    if body.quantity_used <= 0.0 {
+        return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
+    }
+
+    let row = sqlx::query_as::<_, DrinkRecipe>(
         r#"
-        INSERT INTO discounts (org_id, name, type, value, is_active)
-        VALUES ($1, $2, $3::discount_type, $4, $5)
-        RETURNING id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
+        INSERT INTO menu_item_recipes
+            (menu_item_id, size_label, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2::item_size, $3, $4, $5, $6)
+        ON CONFLICT (menu_item_id, size_label, ingredient_name)
+        DO UPDATE SET
+            org_ingredient_id = EXCLUDED.org_ingredient_id,
+            ingredient_unit   = EXCLUDED.ingredient_unit,
+            quantity_used     = EXCLUDED.quantity_used
+        RETURNING id, menu_item_id, size_label::text,
+                  org_ingredient_id,
+                  ingredient_name,
+                  ingredient_unit AS unit,
+                  quantity_used
         "#,
     )
-    .bind(body.org_id)
-    .bind(&body.name)
-    .bind(&body.dtype)
-    .bind(body.value)
-    .bind(body.is_active.unwrap_or(true))
+    .bind(*menu_item_id)
+    .bind(&body.size_label)
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
     .fetch_one(pool.get_ref())
     .await?;
-
-    Ok(HttpResponse::Created().json(row))
-}
-
-pub async fn update_discount(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    id:   web::Path<Uuid>,
-    body: web::Json<UpdateDiscountRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    let existing = fetch_or_404(pool.get_ref(), *id).await?;
-    require_org_access(&claims, existing.org_id)?;
-
-    if let Some(ref dt) = body.dtype { validate_dtype(dt)?; }
-    if let (Some(v), Some(dt)) = (body.value, &body.dtype) { validate_value(v, dt)?; }
-
-    let row = sqlx::query_as::<_, Discount>(
-        r#"
-        UPDATE discounts SET
-            name       = COALESCE($2, name),
-            type       = COALESCE($3::discount_type, type),
-            value      = COALESCE($4, value),
-            is_active  = COALESCE($5, is_active),
-            updated_at = NOW()
-        WHERE id = $1
-        RETURNING id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
-        "#,
-    )
-    .bind(*id)
-    .bind(&body.name)
-    .bind(&body.dtype)
-    .bind(body.value)
-    .bind(body.is_active)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .ok_or_else(|| AppError::NotFound("Discount not found".into()))?;
 
     Ok(HttpResponse::Ok().json(row))
 }
 
-pub async fn delete_discount(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    id:   web::Path<Uuid>,
+// ── DELETE /recipes/drinks/:menu_item_id/:size ────────────────
+
+pub async fn delete_drink_recipe(
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    path:  web::Path<(Uuid, String)>,
+    query: web::Query<DeleteRecipeQuery>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    let existing = fetch_or_404(pool.get_ref(), *id).await?;
-    require_org_access(&claims, existing.org_id)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
 
-    sqlx::query("DELETE FROM discounts WHERE id = $1")
-        .bind(*id)
-        .execute(pool.get_ref())
-        .await?;
+    let (menu_item_id, size_label) = path.into_inner();
+    require_menu_item_org(pool.get_ref(), &claims, menu_item_id).await?;
+
+    sqlx::query(
+        r#"
+        DELETE FROM menu_item_recipes
+        WHERE menu_item_id    = $1
+          AND size_label      = $2::item_size
+          AND ingredient_name = $3
+        "#,
+    )
+    .bind(menu_item_id)
+    .bind(&size_label)
+    .bind(&query.ingredient_name)
+    .execute(pool.get_ref())
+    .await?;
 
     Ok(HttpResponse::NoContent().finish())
 }
+
+// ── GET /recipes/addons/:addon_item_id ────────────────────────
+
+pub async fn list_addon_ingredients(
+    req:           HttpRequest,
+    pool:          web::Data<PgPool>,
+    addon_item_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "read").await?;
+    require_addon_org(pool.get_ref(), &claims, *addon_item_id).await?;
+
+    let rows = sqlx::query_as::<_, AddonIngredient>(
+        r#"
+        SELECT id, addon_item_id,
+               org_ingredient_id,
+               ingredient_name,
+               ingredient_unit AS unit,
+               quantity_used
+        FROM addon_item_ingredients
+        WHERE addon_item_id = $1
+        ORDER BY ingredient_name
+        "#,
+    )
+    .bind(*addon_item_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
+}
+
+// ── POST /recipes/addons/:addon_item_id ───────────────────────
+
+pub async fn upsert_addon_ingredient(
+    req:           HttpRequest,
+    pool:          web::Data<PgPool>,
+    addon_item_id: web::Path<Uuid>,
+    body:          web::Json<UpsertAddonIngredientRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "create").await?;
+    require_addon_org(pool.get_ref(), &claims, *addon_item_id).await?;
+
+    if body.quantity_used <= 0.0 {
+        return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
+    }
+
+    let row = sqlx::query_as::<_, AddonIngredient>(
+        r#"
+        INSERT INTO addon_item_ingredients
+            (addon_item_id, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (addon_item_id, ingredient_name)
+        DO UPDATE SET
+            org_ingredient_id = EXCLUDED.org_ingredient_id,
+            ingredient_unit   = EXCLUDED.ingredient_unit,
+            quantity_used     = EXCLUDED.quantity_used
+        RETURNING id, addon_item_id,
+                  org_ingredient_id,
+                  ingredient_name,
+                  ingredient_unit AS unit,
+                  quantity_used
+        "#,
+    )
+    .bind(*addon_item_id)
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+// ── DELETE /recipes/addons/:addon_item_id ─────────────────────
+
+pub async fn delete_addon_ingredient(
+    req:   HttpRequest,
+    pool:  web::Data<PgPool>,
+    path:  web::Path<Uuid>,
+    query: web::Query<DeleteRecipeQuery>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
+
+    let addon_item_id = path.into_inner();
+    require_addon_org(pool.get_ref(), &claims, addon_item_id).await?;
+
+    sqlx::query(
+        "DELETE FROM addon_item_ingredients WHERE addon_item_id = $1 AND ingredient_name = $2"
+    )
+    .bind(addon_item_id)
+    .bind(&query.ingredient_name)
+    .execute(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
+// ── Helpers ───────────────────────────────────────────────────
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
     req.extensions()
@@ -190,47 +338,113 @@ fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
 
-async fn fetch_or_404(pool: &PgPool, id: Uuid) -> Result<Discount, AppError> {
-    sqlx::query_as::<_, Discount>(
-        "SELECT id, org_id, name, type::text AS dtype, value, is_active, created_at, updated_at
-         FROM discounts WHERE id = $1",
+async fn require_menu_item_org(
+    pool:         &PgPool,
+    claims:       &Claims,
+    menu_item_id: Uuid,
+) -> Result<(), AppError> {
+    use crate::models::UserRole;
+    if claims.role == UserRole::SuperAdmin { return Ok(()); }
+
+    let item_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM menu_items WHERE id = $1 AND deleted_at IS NULL"
     )
-    .bind(id)
+    .bind(menu_item_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound("Discount not found".into()))
+    .flatten();
+
+    let item_org = item_org.ok_or_else(|| AppError::NotFound("Menu item not found".into()))?;
+    if claims.org_id() != Some(item_org) {
+        return Err(AppError::Forbidden("Menu item belongs to a different org".into()));
+    }
+    Ok(())
 }
 
-fn require_org_access(claims: &Claims, org_id: Uuid) -> Result<(), AppError> {
+async fn require_addon_org(
+    pool:          &PgPool,
+    claims:        &Claims,
+    addon_item_id: Uuid,
+) -> Result<(), AppError> {
+    use crate::models::UserRole;
     if claims.role == UserRole::SuperAdmin { return Ok(()); }
-    if claims.org_id() != Some(org_id) {
-        return Err(AppError::Forbidden("Not your org".into()));
+
+    let addon_org: Option<Uuid> = sqlx::query_scalar(
+        "SELECT org_id FROM addon_items WHERE id = $1"
+    )
+    .bind(addon_item_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    let addon_org = addon_org.ok_or_else(|| AppError::NotFound("Addon item not found".into()))?;
+    if claims.org_id() != Some(addon_org) {
+        return Err(AppError::Forbidden("Addon item belongs to a different org".into()));
     }
     Ok(())
 }
+RUST
+echo "✓ recipes/handlers.rs"
 
-fn validate_dtype(dt: &str) -> Result<(), AppError> {
-    match dt {
-        "percentage" | "fixed" => Ok(()),
-        _ => Err(AppError::BadRequest("type must be 'percentage' or 'fixed'".into())),
-    }
+# ─── menu/routes.rs — add optional fields endpoints ──────────
+cat > src/menu/routes.rs << 'RUST'
+use actix_web::web;
+use crate::{auth::middleware::JwtMiddleware, menu::handlers::*};
+
+pub fn configure(cfg: &mut web::ServiceConfig) {
+    cfg
+        // ── Categories ────────────────────────────────────────────────────────
+        .service(
+            web::scope("/categories")
+                .wrap(JwtMiddleware)
+                .route("",      web::get().to(list_categories))
+                .route("",      web::post().to(create_category))
+                .route("/{id}", web::patch().to(update_category))
+                .route("/{id}", web::delete().to(delete_category)),
+        )
+
+        // ── Menu items ────────────────────────────────────────────────────────
+        .service(
+            web::scope("/menu-items")
+                .wrap(JwtMiddleware)
+                .route("",      web::get().to(list_menu_items))
+                .route("",      web::post().to(create_menu_item))
+                .route("/{id}", web::get().to(get_menu_item))
+                .route("/{id}", web::patch().to(update_menu_item))
+                .route("/{id}", web::delete().to(delete_menu_item))
+
+                // Sizes
+                .route("/{id}/sizes",       web::post().to(upsert_size))
+                .route("/{id}/sizes/{sid}", web::delete().to(delete_size))
+
+                // Addon slots
+                .route("/{id}/addon-slots",           web::get().to(list_addon_slots))
+                .route("/{id}/addon-slots",           web::post().to(create_addon_slot))
+                .route("/{id}/addon-slots/{slot_id}", web::patch().to(update_addon_slot))
+                .route("/{id}/addon-slots/{slot_id}", web::delete().to(delete_addon_slot))
+
+                // Optional fields
+                .route("/{id}/optionals",              web::get().to(list_optional_fields))
+                .route("/{id}/optionals",              web::post().to(create_optional_field))
+                .route("/{id}/optionals/{field_id}",   web::patch().to(update_optional_field))
+                .route("/{id}/optionals/{field_id}",   web::delete().to(delete_optional_field)),
+        )
+
+        // ── Addon items ───────────────────────────────────────────────────────
+        .service(
+            web::scope("/addon-items")
+                .wrap(JwtMiddleware)
+                .route("",      web::get().to(list_addon_items))
+                .route("",      web::post().to(create_addon_item))
+                .route("/{id}", web::patch().to(update_addon_item))
+                .route("/{id}", web::delete().to(delete_addon_item)),
+        );
 }
+RUST
+echo "✓ menu/routes.rs"
 
-fn validate_value(value: i32, dtype: &str) -> Result<(), AppError> {
-    if value < 0 {
-        return Err(AppError::BadRequest("value must be >= 0".into()));
-    }
-    if dtype == "percentage" && value > 100 {
-        return Err(AppError::BadRequest("percentage value must be 0-100".into()));
-    }
-    Ok(())
-}
-EOF
-
-echo "✓ src/discounts/"
-
-# ── 2. Rewrite orders/handlers.rs ────────────────────────────────────────────
-cat > src/orders/handlers.rs << 'EOF'
+# ─── orders/handlers.rs — simplified deduction + optionals ───
+cat > src/orders/handlers.rs << 'RUST'
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -243,47 +457,59 @@ use crate::{
     permissions::checker::check_permission,
 };
 
+// ── Shared SELECT fragment ────────────────────────────────────
+const ORDER_SELECT: &str =
+    "SELECT o.id, o.branch_id, o.shift_id, o.teller_id, u.name AS teller_name,
+     o.order_number, o.status::text, o.payment_method::text,
+     o.subtotal, o.discount_type::text, o.discount_value,
+     o.discount_amount, o.tax_amount, o.total_amount,
+     o.amount_tendered, o.change_given, o.tip_amount, o.tip_payment_method, o.discount_id,
+     o.customer_name, o.notes, o.voided_at, o.void_reason::text, o.voided_by, o.created_at
+     FROM orders o JOIN users u ON u.id = o.teller_id ";
+
 // ── Models ────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Order {
-    pub id:              Uuid,
-    pub branch_id:       Uuid,
-    pub shift_id:        Uuid,
-    pub teller_id:       Uuid,
-    pub teller_name:     String,
-    pub order_number:    i32,
-    pub status:          String,
-    pub payment_method:  String,
-    pub subtotal:        i32,
-    pub discount_type:   Option<String>,
-    pub discount_value:  i32,
-    pub discount_amount: i32,
-    pub tax_amount:      i32,
-    pub total_amount:    i32,
-    pub amount_tendered: Option<i32>,
-    pub change_given:    Option<i32>,
-    pub tip_amount:      Option<i32>,
-    pub discount_id:     Option<Uuid>,
-    pub customer_name:   Option<String>,
-    pub notes:           Option<String>,
-    pub voided_at:       Option<chrono::DateTime<chrono::Utc>>,
-    pub void_reason:     Option<String>,
-    pub voided_by:       Option<Uuid>,
-    pub created_at:      chrono::DateTime<chrono::Utc>,
+    pub id:                 Uuid,
+    pub branch_id:          Uuid,
+    pub shift_id:           Uuid,
+    pub teller_id:          Uuid,
+    pub teller_name:        String,
+    pub order_number:       i32,
+    pub status:             String,
+    pub payment_method:     String,
+    pub subtotal:           i32,
+    pub discount_type:      Option<String>,
+    pub discount_value:     i32,
+    pub discount_amount:    i32,
+    pub tax_amount:         i32,
+    pub total_amount:       i32,
+    pub amount_tendered:    Option<i32>,
+    pub change_given:       Option<i32>,
+    pub tip_amount:         Option<i32>,
+    pub tip_payment_method: Option<String>,
+    pub discount_id:        Option<Uuid>,
+    pub customer_name:      Option<String>,
+    pub notes:              Option<String>,
+    pub voided_at:          Option<chrono::DateTime<chrono::Utc>>,
+    pub void_reason:        Option<String>,
+    pub voided_by:          Option<Uuid>,
+    pub created_at:         chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct OrderItem {
-    pub id:           Uuid,
-    pub order_id:     Uuid,
-    pub menu_item_id: Uuid,
-    pub item_name:    String,
-    pub size_label:   Option<String>,
-    pub unit_price:   i32,
-    pub quantity:     i32,
-    pub line_total:   i32,
-    pub notes:        Option<String>,
+    pub id:                  Uuid,
+    pub order_id:            Uuid,
+    pub menu_item_id:        Uuid,
+    pub item_name:           String,
+    pub size_label:          Option<String>,
+    pub unit_price:          i32,
+    pub quantity:            i32,
+    pub line_total:          i32,
+    pub notes:               Option<String>,
+    pub deductions_snapshot: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -297,6 +523,19 @@ pub struct OrderItemAddon {
     pub line_total:    i32,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OrderItemOptional {
+    pub id:               Uuid,
+    pub order_item_id:    Uuid,
+    pub optional_field_id: Option<Uuid>,
+    pub field_name:       String,
+    pub price:            i32,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:  Option<String>,
+    pub ingredient_unit:  Option<String>,
+    pub quantity_deducted: Option<sqlx::types::BigDecimal>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct OrderFull {
     #[serde(flatten)]
@@ -307,8 +546,9 @@ pub struct OrderFull {
 #[derive(Debug, Serialize)]
 pub struct OrderItemFull {
     #[serde(flatten)]
-    pub item:   OrderItem,
-    pub addons: Vec<OrderItemAddon>,
+    pub item:      OrderItem,
+    pub addons:    Vec<OrderItemAddon>,
+    pub optionals: Vec<OrderItemOptional>,
 }
 
 #[derive(Deserialize)]
@@ -320,52 +560,80 @@ pub struct PaymentSplitInput {
 
 #[derive(Deserialize)]
 pub struct AddonInput {
-    pub addon_item_id:        Uuid,
-    pub drink_option_item_id: Uuid,
-    #[serde(default = "default_addon_qty")]
+    pub addon_item_id: Uuid,
+    #[serde(default = "default_qty")]
     pub quantity: i32,
 }
 
-fn default_addon_qty() -> i32 { 1 }
-
 #[derive(Deserialize)]
 pub struct OrderItemInput {
-    pub menu_item_id: Uuid,
-    pub size_label:   Option<String>,
-    pub quantity:     i32,
-    pub addons:       Vec<AddonInput>,
-    pub notes:        Option<String>,
+    pub menu_item_id:      Uuid,
+    pub size_label:        Option<String>,
+    pub quantity:          i32,
+    pub addons:            Vec<AddonInput>,
+    pub optional_field_ids: Vec<Uuid>,
+    pub notes:             Option<String>,
 }
+
+fn default_qty() -> i32 { 1 }
 
 #[derive(Deserialize)]
 pub struct CreateOrderRequest {
-    pub branch_id:       Uuid,
-    pub shift_id:        Uuid,
-    pub payment_method:  String,
-    pub customer_name:   Option<String>,
-    pub notes:           Option<String>,
-    pub discount_type:   Option<String>,
-    pub discount_value:  Option<i32>,
-    pub discount_id:     Option<Uuid>,
-    pub amount_tendered: Option<i32>,
-    pub tip_amount:      Option<i32>,
-    pub payment_splits:  Option<Vec<PaymentSplitInput>>,
-    pub items:           Vec<OrderItemInput>,
-    pub created_at:      Option<chrono::DateTime<chrono::Utc>>,
+    pub branch_id:          Uuid,
+    pub shift_id:           Uuid,
+    pub payment_method:     String,
+    pub customer_name:      Option<String>,
+    pub notes:              Option<String>,
+    pub discount_type:      Option<String>,
+    pub discount_value:     Option<i32>,
+    pub discount_id:        Option<Uuid>,
+    pub amount_tendered:    Option<i32>,
+    pub tip_amount:         Option<i32>,
+    pub tip_payment_method: Option<String>,
+    pub payment_splits:     Option<Vec<PaymentSplitInput>>,
+    pub items:              Vec<OrderItemInput>,
+    pub created_at:         Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
 pub struct VoidOrderRequest {
     pub reason:            String,
-    pub restore_inventory: Option<bool>,
     pub voided_at:         Option<chrono::DateTime<chrono::Utc>>,
+    pub restore_inventory: Option<bool>,
 }
 
 #[derive(Deserialize)]
 pub struct ListOrdersQuery {
-    pub branch_id:     Option<Uuid>,
-    pub shift_id:      Option<Uuid>,
-    pub updated_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub branch_id:      Option<Uuid>,
+    pub shift_id:       Option<Uuid>,
+    pub updated_after:  Option<chrono::DateTime<chrono::Utc>>,
+    pub page:           Option<i64>,
+    pub per_page:       Option<i64>,
+    pub teller_name:    Option<String>,
+    pub payment_method: Option<String>,
+    pub status:         Option<String>,
+    pub from:           Option<chrono::DateTime<chrono::Utc>>,
+    pub to:             Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Serialize)]
+pub struct PaginatedOrders {
+    pub data:        Vec<Order>,
+    pub total:       i64,
+    pub page:        i64,
+    pub per_page:    i64,
+    pub total_pages: i64,
+}
+
+// ── Deduction helper ──────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+struct InventoryDeduction {
+    org_ingredient_id: Option<Uuid>,
+    ingredient_name:   String,
+    unit:              String,
+    quantity:          f64,
+    source:            String, // "drink_recipe" | "addon" | "optional"
 }
 
 // ── POST /orders ──────────────────────────────────────────────
@@ -411,9 +679,9 @@ pub async fn create_order(
     }
 
     validate_payment_method(&body.payment_method)?;
-    if let Some(dt) = &body.discount_type { validate_discount_type(dt)?; }
+    if let Some(dt)  = &body.discount_type      { validate_discount_type(dt)?; }
+    if let Some(tpm) = &body.tip_payment_method { validate_payment_method(tpm)?; }
 
-    // Resolve discount_id -> inline discount fields
     let (resolved_discount_type, resolved_discount_value) =
         if let Some(disc_id) = body.discount_id {
             let row: Option<(String, i32)> = sqlx::query_as(
@@ -422,7 +690,6 @@ pub async fn create_order(
             .bind(disc_id)
             .fetch_optional(pool.get_ref())
             .await?;
-
             match row {
                 Some((dtype, dvalue)) => (Some(dtype), dvalue),
                 None => return Err(AppError::BadRequest("Discount not found or inactive".into())),
@@ -438,6 +705,17 @@ pub async fn create_order(
     .fetch_one(pool.get_ref())
     .await?;
 
+    // ── Local types ───────────────────────────────────────────
+    struct ResolvedOptional {
+        optional_field_id: Uuid,
+        field_name:        String,
+        price:             i32,
+        org_ingredient_id: Option<Uuid>,
+        ingredient_name:   Option<String>,
+        ingredient_unit:   Option<String>,
+        quantity_used:     Option<f64>,
+    }
+
     struct ResolvedItem {
         menu_item_id: Uuid,
         item_name:    String,
@@ -446,18 +724,15 @@ pub async fn create_order(
         quantity:     i32,
         notes:        Option<String>,
         addons:       Vec<ResolvedAddon>,
+        optionals:    Vec<ResolvedOptional>,
         deductions:   Vec<InventoryDeduction>,
     }
+
     struct ResolvedAddon {
         addon_item_id: Uuid,
         addon_name:    String,
         unit_price:    i32,
         quantity:      i32,
-    }
-    struct InventoryDeduction {
-        inventory_item_id: Uuid,
-        quantity:          f64,
-        source:            String,
     }
 
     let mut resolved_items: Vec<ResolvedItem> = Vec::new();
@@ -465,144 +740,200 @@ pub async fn create_order(
 
     for item_input in &body.items {
         if item_input.quantity <= 0 {
-            return Err(AppError::BadRequest("Item quantity must be greater than 0".into()));
+            return Err(AppError::BadRequest("Item quantity must be > 0".into()));
         }
 
         let (item_name, base_price): (String, i32) = sqlx::query_as(
-            "SELECT m.name, m.base_price FROM menu_items m WHERE m.id = $1 AND m.deleted_at IS NULL",
+            "SELECT name, base_price FROM menu_items WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(item_input.menu_item_id)
         .fetch_optional(pool.get_ref())
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Menu item {} not found", item_input.menu_item_id)))?;
+        .ok_or_else(|| AppError::NotFound(
+            format!("Menu item {} not found", item_input.menu_item_id)
+        ))?;
 
         let unit_price: i32 = match &item_input.size_label {
             Some(size) => {
-                let size_price: Option<i32> = sqlx::query_scalar(
-                    "SELECT price_override FROM item_sizes WHERE menu_item_id = $1 AND label = $2::item_size AND is_active = true"
+                let p: Option<i32> = sqlx::query_scalar(
+                    "SELECT price_override FROM item_sizes \
+                     WHERE menu_item_id = $1 AND label = $2::item_size AND is_active = true"
                 )
                 .bind(item_input.menu_item_id)
                 .bind(size)
                 .fetch_optional(pool.get_ref())
                 .await?
                 .flatten();
-                size_price.unwrap_or(base_price)
+                p.unwrap_or(base_price)
             }
             None => base_price,
         };
 
-        let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
+        let mut deductions: Vec<InventoryDeduction> = Vec::new();
 
-        let size_for_recipe = item_input.size_label.as_deref().unwrap_or("one_size");
-        let recipe_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-            "SELECT inventory_item_id, quantity_used::float8 FROM menu_item_recipes WHERE menu_item_id = $1 AND size_label = $2::item_size",
-        )
-        .bind(item_input.menu_item_id)
-        .bind(size_for_recipe)
-        .fetch_all(pool.get_ref())
-        .await?;
+        // ── 1. Base drink recipe ──────────────────────────────
+        let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
+            if let Some(size) = &item_input.size_label {
+                sqlx::query_as(
+                    "SELECT org_ingredient_id, quantity_used::float8,
+                            ingredient_name, ingredient_unit
+                     FROM   menu_item_recipes
+                     WHERE  menu_item_id = $1 AND size_label = $2::item_size",
+                )
+                .bind(item_input.menu_item_id)
+                .bind(size)
+                .fetch_all(pool.get_ref())
+                .await?
+            } else {
+                sqlx::query_as(
+                    r#"SELECT org_ingredient_id, quantity_used::float8,
+                              ingredient_name, ingredient_unit
+                       FROM   menu_item_recipes
+                       WHERE  menu_item_id = $1
+                         AND  size_label = (
+                             SELECT size_label FROM menu_item_recipes
+                             WHERE  menu_item_id = $1 LIMIT 1
+                         )"#,
+                )
+                .bind(item_input.menu_item_id)
+                .fetch_all(pool.get_ref())
+                .await?
+            };
 
-        for (inv_id, qty) in recipe_rows {
-            item_deductions.push(InventoryDeduction {
-                inventory_item_id: inv_id,
+        for (ing_id, qty, name, unit) in recipe_rows {
+            deductions.push(InventoryDeduction {
+                org_ingredient_id: ing_id,
+                ingredient_name:   name,
+                unit,
                 quantity:          qty * item_input.quantity as f64,
                 source:            "drink_recipe".into(),
             });
         }
 
+        // ── 2. Addon ingredients (flat — no overrides) ────────
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
         for addon_input in &item_input.addons {
+            let addon_qty = addon_input.quantity.max(1) as f64;
+
             let (addon_name, default_price): (String, i32) = sqlx::query_as(
                 "SELECT name, default_price FROM addon_items WHERE id = $1"
             )
             .bind(addon_input.addon_item_id)
             .fetch_optional(pool.get_ref())
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("Addon {} not found", addon_input.addon_item_id)))?;
-
-            let price_override: Option<i32> = sqlx::query_scalar(
-                "SELECT price_override FROM drink_option_items WHERE id = $1"
-            )
-            .bind(addon_input.drink_option_item_id)
-            .fetch_optional(pool.get_ref())
-            .await?
-            .flatten();
-
-            let addon_price = price_override.unwrap_or(default_price);
+            .ok_or_else(|| AppError::NotFound(
+                format!("Addon {} not found", addon_input.addon_item_id)
+            ))?;
 
             resolved_addons.push(ResolvedAddon {
                 addon_item_id: addon_input.addon_item_id,
                 addon_name,
-                unit_price: addon_price,
-                quantity:   addon_input.quantity.max(1),
+                unit_price:    default_price,
+                quantity:      addon_input.quantity.max(1),
             });
 
-            let size_label = item_input.size_label.as_deref();
-            let override_rows: Vec<(Uuid, f64)> = if let Some(size) = size_label {
-                sqlx::query_as(
-                    r#"
-                    SELECT inventory_item_id, quantity_used::float8
-                    FROM drink_option_ingredient_overrides
-                    WHERE drink_option_item_id = $1
-                      AND (size_label = $2::item_size OR size_label IS NULL)
-                    ORDER BY size_label DESC NULLS LAST
-                    "#,
-                )
-                .bind(addon_input.drink_option_item_id)
-                .bind(size)
-                .fetch_all(pool.get_ref())
-                .await?
-            } else {
-                sqlx::query_as(
-                    "SELECT inventory_item_id, quantity_used::float8 FROM drink_option_ingredient_overrides WHERE drink_option_item_id = $1 AND size_label IS NULL",
-                )
-                .bind(addon_input.drink_option_item_id)
-                .fetch_all(pool.get_ref())
-                .await?
-            };
+            let addon_rows: Vec<(Option<Uuid>, f64, String, String)> = sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8,
+                        ingredient_name, ingredient_unit
+                 FROM   addon_item_ingredients
+                 WHERE  addon_item_id = $1",
+            )
+            .bind(addon_input.addon_item_id)
+            .fetch_all(pool.get_ref())
+            .await?;
 
-            if !override_rows.is_empty() {
-                let mut seen = std::collections::HashSet::new();
-                for (inv_id, qty) in override_rows {
-                    if seen.insert(inv_id) {
-                        item_deductions.push(InventoryDeduction {
-                            inventory_item_id: inv_id,
-                            quantity: qty * item_input.quantity as f64,
-                            source: "addon_override".into(),
-                        });
-                    }
-                }
-            } else {
-                let base_rows: Vec<(Uuid, f64)> = sqlx::query_as(
-                    "SELECT inventory_item_id, quantity_used::float8 FROM addon_item_ingredients WHERE addon_item_id = $1"
-                )
-                .bind(addon_input.addon_item_id)
-                .fetch_all(pool.get_ref())
-                .await?;
-                for (inv_id, qty) in base_rows {
-                    item_deductions.push(InventoryDeduction {
-                        inventory_item_id: inv_id,
-                        quantity: qty * item_input.quantity as f64,
-                        source: "addon_base".into(),
-                    });
-                }
+            for (ing_id, qty, name, unit) in addon_rows {
+                deductions.push(InventoryDeduction {
+                    org_ingredient_id: ing_id,
+                    ingredient_name:   name,
+                    unit,
+                    quantity:          qty * item_input.quantity as f64 * addon_qty,
+                    source:            "addon".into(),
+                });
             }
         }
 
-        let item_line  = unit_price * item_input.quantity;
-        let addon_line: i32 = resolved_addons.iter().map(|a| a.unit_price * a.quantity).sum::<i32>() * item_input.quantity;
-        subtotal += item_line + addon_line;
+        // ── 3. Optional fields ────────────────────────────────
+        let mut resolved_optionals: Vec<ResolvedOptional> = Vec::new();
+
+        for &field_id in &item_input.optional_field_ids {
+            let row: Option<(String, i32, Option<Uuid>, Option<String>, Option<String>, Option<f64>, Option<String>)> =
+                sqlx::query_as(
+                    r#"SELECT name, price, org_ingredient_id,
+                              ingredient_name, ingredient_unit,
+                              quantity_used::float8, size_label::text
+                       FROM menu_item_optional_fields
+                       WHERE id = $1 AND menu_item_id = $2 AND is_active = true"#,
+                )
+                .bind(field_id)
+                .bind(item_input.menu_item_id)
+                .fetch_optional(pool.get_ref())
+                .await?
+                .flatten();
+
+            // Skip silently if field not found or not for this item
+            let Some((fname, fprice, ing_id, ing_name, ing_unit, qty_used, field_size)) = row else {
+                tracing::warn!(field_id = %field_id, "Optional field not found or inactive — skipping");
+                continue;
+            };
+
+            // If field is size-restricted, check it matches
+            if let Some(fs) = &field_size {
+                if item_input.size_label.as_deref() != Some(fs.as_str()) {
+                    tracing::warn!(field_id = %field_id, "Optional field size mismatch — skipping");
+                    continue;
+                }
+            }
+
+            // Add ingredient deduction if configured
+            if let (Some(ref name), Some(ref unit), Some(qty)) =
+                (ing_name.clone(), ing_unit.clone(), qty_used)
+            {
+                deductions.push(InventoryDeduction {
+                    org_ingredient_id: ing_id,
+                    ingredient_name:   name.clone(),
+                    unit:              unit.clone(),
+                    quantity:          qty * item_input.quantity as f64,
+                    source:            "optional".into(),
+                });
+            }
+
+            resolved_optionals.push(ResolvedOptional {
+                optional_field_id: field_id,
+                field_name:        fname,
+                price:             fprice,
+                org_ingredient_id: ing_id,
+                ingredient_name:   ing_name,
+                ingredient_unit:   ing_unit,
+                quantity_used:     qty_used,
+            });
+        }
+
+        let item_line      = unit_price * item_input.quantity;
+        let addon_line: i32 = resolved_addons
+            .iter()
+            .map(|a| a.unit_price * a.quantity)
+            .sum::<i32>()
+            * item_input.quantity;
+        let optional_line: i32 = resolved_optionals
+            .iter()
+            .map(|o| o.price)
+            .sum::<i32>()
+            * item_input.quantity;
+
+        subtotal += item_line + addon_line + optional_line;
 
         resolved_items.push(ResolvedItem {
             menu_item_id: item_input.menu_item_id,
             item_name,
-            size_label: item_input.size_label.clone(),
+            size_label:   item_input.size_label.clone(),
             unit_price,
-            quantity: item_input.quantity,
-            notes: item_input.notes.clone(),
-            addons: resolved_addons,
-            deductions: item_deductions,
+            quantity:     item_input.quantity,
+            notes:        item_input.notes.clone(),
+            addons:       resolved_addons,
+            optionals:    resolved_optionals,
+            deductions,
         });
     }
 
@@ -640,21 +971,19 @@ pub async fn create_order(
             (branch_id, shift_id, teller_id, order_number,
              payment_method, subtotal, discount_type, discount_value,
              discount_amount, tax_amount, total_amount,
-             amount_tendered, change_given, tip_amount,
+             amount_tendered, change_given, tip_amount, tip_payment_method,
              discount_id, customer_name, notes, status,
              idempotency_key, created_at)
         VALUES ($1, $2, $3, $4, $5::payment_method, $6, $7::discount_type, $8,
-                $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', $18, $19)
+                $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'completed', $19, $20)
         RETURNING
             id, branch_id, shift_id, teller_id,
             (SELECT name FROM users WHERE id = $3) AS teller_name,
             order_number, status::text, payment_method::text,
             subtotal, discount_type::text, discount_value,
             discount_amount, tax_amount, total_amount,
-            amount_tendered, change_given, tip_amount, discount_id,
-            customer_name, notes,
-            voided_at, void_reason::text, voided_by,
-            created_at
+            amount_tendered, change_given, tip_amount, tip_payment_method, discount_id,
+            customer_name, notes, voided_at, void_reason::text, voided_by, created_at
         "#,
     )
     .bind(body.branch_id)
@@ -671,6 +1000,7 @@ pub async fn create_order(
     .bind(body.amount_tendered)
     .bind(change_given)
     .bind(body.tip_amount.unwrap_or(0))
+    .bind(body.tip_payment_method.as_deref())
     .bind(body.discount_id)
     .bind(&body.customer_name)
     .bind(&body.notes)
@@ -679,12 +1009,13 @@ pub async fn create_order(
     .fetch_one(&mut *tx)
     .await?;
 
-    // Write order_payments — use explicit splits or derive from payment_method
+    // Payment splits
     if let Some(splits) = &body.payment_splits {
         for split in splits {
             validate_payment_method(&split.method)?;
             sqlx::query(
-                "INSERT INTO order_payments (order_id, method, amount, reference) VALUES ($1, $2::payment_method, $3, $4)",
+                "INSERT INTO order_payments (order_id, method, amount, reference) \
+                 VALUES ($1, $2::payment_method, $3, $4)",
             )
             .bind(order.id)
             .bind(&split.method)
@@ -695,7 +1026,8 @@ pub async fn create_order(
         }
     } else {
         sqlx::query(
-            "INSERT INTO order_payments (order_id, method, amount) VALUES ($1, $2::payment_method, $3)",
+            "INSERT INTO order_payments (order_id, method, amount) \
+             VALUES ($1, $2::payment_method, $3)",
         )
         .bind(order.id)
         .bind(&body.payment_method)
@@ -708,14 +1040,16 @@ pub async fn create_order(
 
     for resolved in resolved_items {
         let line_total = resolved.unit_price * resolved.quantity;
+        let snapshot   = serde_json::to_value(&resolved.deductions)
+            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
 
         let order_item = sqlx::query_as::<_, OrderItem>(
-            r#"
-            INSERT INTO order_items
-                (order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes
-            "#,
+            r#"INSERT INTO order_items
+                (order_id, menu_item_id, item_name, size_label,
+                 unit_price, quantity, line_total, notes, deductions_snapshot)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING id, order_id, menu_item_id, item_name, size_label,
+                         unit_price, quantity, line_total, notes, deductions_snapshot"#,
         )
         .bind(order.id)
         .bind(resolved.menu_item_id)
@@ -725,20 +1059,20 @@ pub async fn create_order(
         .bind(resolved.quantity)
         .bind(line_total)
         .bind(&resolved.notes)
+        .bind(snapshot)
         .fetch_one(&mut *tx)
         .await?;
 
+        // Addons
         let mut addon_rows: Vec<OrderItemAddon> = Vec::new();
-
         for addon in &resolved.addons {
             let addon_line = addon.unit_price * addon.quantity * resolved.quantity;
             let row = sqlx::query_as::<_, OrderItemAddon>(
-                r#"
-                INSERT INTO order_item_addons
+                r#"INSERT INTO order_item_addons
                     (order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total
-                "#,
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   RETURNING id, order_item_id, addon_item_id, addon_name,
+                             unit_price, quantity, line_total"#,
             )
             .bind(order_item.id)
             .bind(addon.addon_item_id)
@@ -751,38 +1085,71 @@ pub async fn create_order(
             addon_rows.push(row);
         }
 
-        for deduction in &resolved.deductions {
-            sqlx::query(
-                "UPDATE inventory_items SET current_stock = current_stock - $1 WHERE id = $2 AND branch_id = $3"
+        // Optionals
+        let mut optional_rows: Vec<OrderItemOptional> = Vec::new();
+        for opt in &resolved.optionals {
+            let row = sqlx::query_as::<_, OrderItemOptional>(
+                r#"INSERT INTO order_item_optionals
+                    (order_item_id, optional_field_id, field_name, price,
+                     org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   RETURNING id, order_item_id, optional_field_id, field_name, price,
+                             org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted"#,
             )
-            .bind(deduction.quantity)
-            .bind(deduction.inventory_item_id)
-            .bind(body.branch_id)
-            .execute(&mut *tx)
-            .await?;
-
-            sqlx::query(
-                r#"
-                INSERT INTO inventory_deduction_logs
-                    (branch_id, order_id, order_item_id, inventory_item_id, quantity_deducted, source)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-            )
-            .bind(body.branch_id)
-            .bind(order.id)
             .bind(order_item.id)
-            .bind(deduction.inventory_item_id)
-            .bind(deduction.quantity)
-            .bind(&deduction.source)
-            .execute(&mut *tx)
+            .bind(opt.optional_field_id)
+            .bind(&opt.field_name)
+            .bind(opt.price)
+            .bind(opt.org_ingredient_id)
+            .bind(&opt.ingredient_name)
+            .bind(&opt.ingredient_unit)
+            .bind(opt.quantity_used)
+            .fetch_one(&mut *tx)
             .await?;
+            optional_rows.push(row);
         }
 
-        order_items_full.push(OrderItemFull { item: order_item, addons: addon_rows });
+        // Apply inventory deductions (soft-fail — warn if not tracked)
+        for deduction in &resolved.deductions {
+            let Some(ing_id) = deduction.org_ingredient_id else {
+                tracing::warn!(
+                    source     = %deduction.source,
+                    ingredient = %deduction.ingredient_name,
+                    "Deduction skipped — no org_ingredient_id"
+                );
+                continue;
+            };
+
+            let rows_affected = sqlx::query(
+                "UPDATE branch_inventory \
+                 SET current_stock = current_stock - $1 \
+                 WHERE branch_id = $2 AND org_ingredient_id = $3"
+            )
+            .bind(deduction.quantity)
+            .bind(body.branch_id)
+            .bind(ing_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+            if rows_affected == 0 {
+                tracing::warn!(
+                    branch_id         = %body.branch_id,
+                    org_ingredient_id = %ing_id,
+                    source            = %deduction.source,
+                    "Ingredient not tracked in branch inventory — skipping"
+                );
+            }
+        }
+
+        order_items_full.push(OrderItemFull {
+            item:      order_item,
+            addons:    addon_rows,
+            optionals: optional_rows,
+        });
     }
 
     tx.commit().await?;
-
     Ok(HttpResponse::Created().json(OrderFull { order, items: order_items_full }))
 }
 
@@ -796,37 +1163,101 @@ pub async fn list_orders(
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "read").await?;
 
-    let orders = match (query.shift_id, query.branch_id) {
-        (Some(shift_id), _) => {
-            let branch_id: Option<Uuid> = sqlx::query_scalar("SELECT branch_id FROM shifts WHERE id = $1")
-                .bind(shift_id)
-                .fetch_optional(pool.get_ref())
-                .await?
-                .flatten();
-            if let Some(bid) = branch_id { require_branch_access(pool.get_ref(), &claims, bid).await?; }
+    let page     = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(30).clamp(1, 999999);
+    let offset   = (page - 1) * per_page;
 
-            match query.updated_after {
-                Some(after) => sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.shift_id = $1 AND o.updated_at > $2 ORDER BY o.created_at DESC"))
-                    .bind(shift_id).bind(after).fetch_all(pool.get_ref()).await?,
-                None => sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.shift_id = $1 ORDER BY o.created_at DESC"))
-                    .bind(shift_id).fetch_all(pool.get_ref()).await?,
-            }
+    if let Some(pm) = &query.payment_method { validate_payment_method(pm)?; }
+
+    let branch_id = match (query.shift_id, query.branch_id) {
+        (Some(shift_id), _) => {
+            let bid: Option<Uuid> = sqlx::query_scalar(
+                "SELECT branch_id FROM shifts WHERE id = $1"
+            )
+            .bind(shift_id)
+            .fetch_optional(pool.get_ref())
+            .await?
+            .flatten();
+            bid.ok_or_else(|| AppError::NotFound("Shift not found".into()))?
         }
-        (None, Some(branch_id)) => {
-            require_branch_access(pool.get_ref(), &claims, branch_id).await?;
-            sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.branch_id = $1 ORDER BY o.created_at DESC LIMIT 500"))
-                .bind(branch_id).fetch_all(pool.get_ref()).await?
-        }
+        (None, Some(bid)) => bid,
         _ => return Err(AppError::BadRequest("Provide either shift_id or branch_id".into())),
     };
 
-    Ok(HttpResponse::Ok().json(orders))
+    require_branch_access(pool.get_ref(), &claims, branch_id).await?;
+
+    let scope_condition = if query.shift_id.is_some() { "o.shift_id = $1" } else { "o.branch_id = $1" };
+    let scope_id = query.shift_id.unwrap_or(branch_id);
+
+    let mut data_filter  = String::new();
+    let mut count_filter = String::new();
+    let mut data_idx  = 4i32;
+    let mut count_idx = 2i32;
+
+    macro_rules! push_filter {
+        ($col:expr, $opt:expr) => {
+            if $opt.is_some() {
+                data_filter.push_str( &format!(" AND {} ${}", $col, data_idx));
+                count_filter.push_str(&format!(" AND {} ${}", $col, count_idx));
+                data_idx  += 1;
+                count_idx += 1;
+            }
+        };
+    }
+
+    push_filter!("u.name ILIKE",             query.teller_name);
+    push_filter!("o.payment_method::text =", query.payment_method);
+    push_filter!("o.status::text =",         query.status);
+    push_filter!("o.created_at >=",          query.from);
+    push_filter!("o.created_at <=",          query.to);
+    push_filter!("o.updated_at >",           query.updated_after);
+
+    let data_sql = format!(
+        "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT $2 OFFSET $3",
+        ORDER_SELECT, scope_condition, data_filter
+    );
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id WHERE {} {}",
+        scope_condition, count_filter
+    );
+
+    macro_rules! bind_filters {
+        ($q:expr) => {{
+            let mut q = $q;
+            if let Some(ref v) = query.teller_name    { q = q.bind(format!("%{}%", v)); }
+            if let Some(ref v) = query.payment_method { q = q.bind(v.clone()); }
+            if let Some(ref v) = query.status         { q = q.bind(v.clone()); }
+            if let Some(v)     = query.from            { q = q.bind(v); }
+            if let Some(v)     = query.to              { q = q.bind(v); }
+            if let Some(v)     = query.updated_after   { q = q.bind(v); }
+            q
+        }};
+    }
+
+    let total: i64 = bind_filters!(sqlx::query_scalar(&count_sql).bind(scope_id))
+        .fetch_one(pool.get_ref())
+        .await?;
+
+    let data: Vec<Order> = bind_filters!(
+        sqlx::query_as::<_, Order>(&data_sql)
+            .bind(scope_id)
+            .bind(per_page)
+            .bind(offset)
+    )
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    let total_pages = (total as f64 / per_page as f64).ceil() as i64;
+
+    Ok(HttpResponse::Ok().json(PaginatedOrders { data, total, page, per_page, total_pages }))
 }
 
 // ── GET /orders/:id ───────────────────────────────────────────
 
 pub async fn get_order(
-    req: HttpRequest, pool: web::Data<PgPool>, order_id: web::Path<Uuid>,
+    req:      HttpRequest,
+    pool:     web::Data<PgPool>,
+    order_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "read").await?;
@@ -839,8 +1270,10 @@ pub async fn get_order(
 // ── POST /orders/:id/void ─────────────────────────────────────
 
 pub async fn void_order(
-    req: HttpRequest, pool: web::Data<PgPool>,
-    order_id: web::Path<Uuid>, body: web::Json<VoidOrderRequest>,
+    req:      HttpRequest,
+    pool:     web::Data<PgPool>,
+    order_id: web::Path<Uuid>,
+    body:     web::Json<VoidOrderRequest>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "update").await?;
@@ -850,226 +1283,541 @@ pub async fn void_order(
     validate_void_reason(&body.reason)?;
     let voided_at = body.voided_at.unwrap_or_else(chrono::Utc::now);
 
-    let updated = sqlx::query_as::<_, Order>(
-        r#"
-        UPDATE orders SET status = 'voided', voided_at = $3, void_reason = $2::void_reason, voided_by = $4
-        WHERE id = $1
-        RETURNING
-            id, branch_id, shift_id, teller_id,
-            (SELECT name FROM users WHERE id = teller_id) AS teller_name,
-            order_number, status::text, payment_method::text,
-            subtotal, discount_type::text, discount_value,
-            discount_amount, tax_amount, total_amount,
-            amount_tendered, change_given, tip_amount, discount_id,
-            customer_name, notes, voided_at, void_reason::text, voided_by, created_at
-        "#,
-    )
-    .bind(*order_id).bind(&body.reason).bind(voided_at).bind(claims.user_id())
-    .fetch_one(pool.get_ref()).await?;
+    let mut tx = pool.begin().await?;
 
+    let updated = sqlx::query_as::<_, Order>(
+        r#"UPDATE orders
+           SET status      = 'voided',
+               voided_at   = $3,
+               void_reason = $2::void_reason,
+               voided_by   = $4
+           WHERE id = $1
+           RETURNING
+               id, branch_id, shift_id, teller_id,
+               (SELECT name FROM users WHERE id = teller_id) AS teller_name,
+               order_number, status::text, payment_method::text,
+               subtotal, discount_type::text, discount_value,
+               discount_amount, tax_amount, total_amount,
+               amount_tendered, change_given, tip_amount, tip_payment_method,
+               discount_id, customer_name, notes,
+               voided_at, void_reason::text, voided_by, created_at"#,
+    )
+    .bind(*order_id)
+    .bind(&body.reason)
+    .bind(voided_at)
+    .bind(claims.user_id())
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if body.restore_inventory.unwrap_or(false) {
+        let items = fetch_order_items_full(pool.get_ref(), *order_id).await?;
+        for item in items {
+            if let Some(deductions) = item.item.deductions_snapshot.as_array() {
+                for d in deductions {
+                    if let (Some(qty), Some(ing_id_str)) = (
+                        d.get("quantity").and_then(|v| v.as_f64()),
+                        d.get("org_ingredient_id").and_then(|v| v.as_str()),
+                    ) {
+                        if let Ok(ing_id) = Uuid::parse_str(ing_id_str) {
+                            sqlx::query(
+                                "UPDATE branch_inventory \
+                                 SET current_stock = current_stock + $1 \
+                                 WHERE branch_id = $2 AND org_ingredient_id = $3"
+                            )
+                            .bind(qty)
+                            .bind(order.branch_id)
+                            .bind(ing_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    tx.commit().await?;
     Ok(HttpResponse::Ok().json(updated))
 }
 
-// ── Shared SELECT macro ───────────────────────────────────────
+// ── POST /orders/preview-recipe ───────────────────────────────
 
-macro_rules! ORDER_SELECT {
-    ($where:expr) => {
-        concat!(
-            "SELECT o.id, o.branch_id, o.shift_id, o.teller_id, u.name AS teller_name,
-             o.order_number, o.status::text, o.payment_method::text,
-             o.subtotal, o.discount_type::text, o.discount_value,
-             o.discount_amount, o.tax_amount, o.total_amount,
-             o.amount_tendered, o.change_given, o.tip_amount, o.discount_id,
-             o.customer_name, o.notes, o.voided_at, o.void_reason::text, o.voided_by, o.created_at
-             FROM orders o JOIN users u ON u.id = o.teller_id ",
-            $where
+#[derive(Deserialize)]
+pub struct PreviewAddonInput {
+    pub addon_item_id: Uuid,
+    #[serde(default = "default_qty")]
+    pub quantity: i32,
+}
+
+#[derive(Deserialize)]
+pub struct PreviewRecipeRequest {
+    pub menu_item_id:      Uuid,
+    pub size_label:        Option<String>,
+    pub addons:            Vec<PreviewAddonInput>,
+    pub optional_field_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PreviewIngredient {
+    pub ingredient_name: String,
+    pub unit:            String,
+    pub quantity:        f64,
+    pub source:          String,
+}
+
+pub async fn preview_recipe(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    body: web::Json<PreviewRecipeRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "orders", "create").await?;
+
+    let mut result: Vec<PreviewIngredient> = Vec::new();
+
+    // Base recipe
+    let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
+        if let Some(size) = &body.size_label {
+            sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8,
+                        ingredient_name, ingredient_unit
+                 FROM   menu_item_recipes
+                 WHERE  menu_item_id = $1 AND size_label = $2::item_size",
+            )
+            .bind(body.menu_item_id)
+            .bind(size)
+            .fetch_all(pool.get_ref())
+            .await?
+        } else {
+            sqlx::query_as(
+                r#"SELECT org_ingredient_id, quantity_used::float8,
+                          ingredient_name, ingredient_unit
+                   FROM   menu_item_recipes
+                   WHERE  menu_item_id = $1
+                     AND  size_label = (
+                         SELECT size_label FROM menu_item_recipes
+                         WHERE  menu_item_id = $1 LIMIT 1
+                     )"#,
+            )
+            .bind(body.menu_item_id)
+            .fetch_all(pool.get_ref())
+            .await?
+        };
+
+    for (_, qty, name, unit) in recipe_rows {
+        result.push(PreviewIngredient { ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into() });
+    }
+
+    // Addons
+    for addon in &body.addons {
+        let addon_qty = addon.quantity.max(1) as f64;
+        let rows: Vec<(f64, String, String)> = sqlx::query_as(
+            "SELECT quantity_used::float8, ingredient_name, ingredient_unit
+             FROM   addon_item_ingredients WHERE addon_item_id = $1",
         )
-    };
+        .bind(addon.addon_item_id)
+        .fetch_all(pool.get_ref())
+        .await?;
+
+        for (qty, name, unit) in rows {
+            result.push(PreviewIngredient {
+                ingredient_name: name,
+                unit,
+                quantity: qty * addon_qty,
+                source: "addon".into(),
+            });
+        }
+    }
+
+    // Optionals
+    for &field_id in &body.optional_field_ids {
+        let row: Option<(String, Option<f64>, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT name, quantity_used::float8, ingredient_name, ingredient_unit
+                 FROM menu_item_optional_fields
+                 WHERE id = $1 AND menu_item_id = $2 AND is_active = true",
+            )
+            .bind(field_id)
+            .bind(body.menu_item_id)
+            .fetch_optional(pool.get_ref())
+            .await?
+            .flatten();
+
+        if let Some((fname, Some(qty), Some(ing_name), Some(ing_unit))) = row {
+            result.push(PreviewIngredient {
+                ingredient_name: ing_name,
+                unit:            ing_unit,
+                quantity:        qty,
+                source:          format!("optional:{}", fname),
+            });
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(result))
 }
 
 // ── Helpers ───────────────────────────────────────────────────
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
-    req.extensions().get::<Claims>().cloned()
+    req.extensions()
+        .get::<Claims>()
+        .cloned()
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
 }
 
 async fn fetch_order_or_404(pool: &PgPool, order_id: Uuid) -> Result<Order, AppError> {
-    sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.id = $1"))
-        .bind(order_id).fetch_optional(pool).await?
+    let sql = format!("{} WHERE o.id = $1", ORDER_SELECT);
+    sqlx::query_as::<_, Order>(&sql)
+        .bind(order_id)
+        .fetch_optional(pool)
+        .await?
         .ok_or_else(|| AppError::NotFound("Order not found".into()))
 }
 
-async fn fetch_order_by_idempotency_key(pool: &PgPool, key: Uuid) -> Result<Option<Order>, AppError> {
-    Ok(sqlx::query_as::<_, Order>(ORDER_SELECT!("WHERE o.idempotency_key = $1"))
-        .bind(key).fetch_optional(pool).await?)
+async fn fetch_order_by_idempotency_key(
+    pool: &PgPool,
+    key:  Uuid,
+) -> Result<Option<Order>, AppError> {
+    let sql = format!("{} WHERE o.idempotency_key = $1", ORDER_SELECT);
+    Ok(sqlx::query_as::<_, Order>(&sql)
+        .bind(key)
+        .fetch_optional(pool)
+        .await?)
 }
 
-async fn fetch_order_items_full(pool: &PgPool, order_id: Uuid) -> Result<Vec<OrderItemFull>, AppError> {
+async fn fetch_order_items_full(
+    pool:     &PgPool,
+    order_id: Uuid,
+) -> Result<Vec<OrderItemFull>, AppError> {
     let items = sqlx::query_as::<_, OrderItem>(
-        "SELECT id, order_id, menu_item_id, item_name, size_label, unit_price, quantity, line_total, notes FROM order_items WHERE order_id = $1 ORDER BY id",
-    ).bind(order_id).fetch_all(pool).await?;
+        "SELECT id, order_id, menu_item_id, item_name, size_label, \
+                unit_price, quantity, line_total, notes, deductions_snapshot \
+         FROM order_items WHERE order_id = $1 ORDER BY id",
+    )
+    .bind(order_id)
+    .fetch_all(pool)
+    .await?;
 
     let mut result = Vec::new();
     for item in items {
         let addons = sqlx::query_as::<_, OrderItemAddon>(
-            "SELECT id, order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total FROM order_item_addons WHERE order_item_id = $1 ORDER BY id",
-        ).bind(item.id).fetch_all(pool).await?;
-        result.push(OrderItemFull { item, addons });
+            "SELECT id, order_item_id, addon_item_id, addon_name, \
+                    unit_price, quantity, line_total \
+             FROM order_item_addons WHERE order_item_id = $1 ORDER BY id",
+        )
+        .bind(item.id)
+        .fetch_all(pool)
+        .await?;
+
+        let optionals = sqlx::query_as::<_, OrderItemOptional>(
+            "SELECT id, order_item_id, optional_field_id, field_name, price, \
+                    org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted \
+             FROM order_item_optionals WHERE order_item_id = $1 ORDER BY id",
+        )
+        .bind(item.id)
+        .fetch_all(pool)
+        .await?;
+
+        result.push(OrderItemFull { item, addons, optionals });
     }
     Ok(result)
 }
 
-async fn require_branch_access(pool: &PgPool, claims: &Claims, branch_id: Uuid) -> Result<(), AppError> {
+async fn require_branch_access(
+    pool:      &PgPool,
+    claims:    &Claims,
+    branch_id: Uuid,
+) -> Result<(), AppError> {
     if claims.role == UserRole::SuperAdmin { return Ok(()); }
+
     let branch_org: Option<Uuid> = sqlx::query_scalar(
         "SELECT org_id FROM branches WHERE id = $1 AND deleted_at IS NULL"
-    ).bind(branch_id).fetch_optional(pool).await?.flatten();
-    let branch_org = branch_org.ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+    )
+    .bind(branch_id)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    let branch_org = branch_org
+        .ok_or_else(|| AppError::NotFound("Branch not found".into()))?;
+
     if claims.org_id() != Some(branch_org) {
         return Err(AppError::Forbidden("Branch belongs to a different org".into()));
     }
     if claims.role == UserRole::OrgAdmin { return Ok(()); }
+
     let assigned: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_branch_assignments WHERE user_id = $1 AND branch_id = $2)"
-    ).bind(claims.user_id()).bind(branch_id).fetch_one(pool).await?;
-    if !assigned { return Err(AppError::Forbidden("Not assigned to this branch".into())); }
+        "SELECT EXISTS(SELECT 1 FROM user_branch_assignments \
+         WHERE user_id = $1 AND branch_id = $2)"
+    )
+    .bind(claims.user_id())
+    .bind(branch_id)
+    .fetch_one(pool)
+    .await?;
+
+    if !assigned {
+        return Err(AppError::Forbidden("Not assigned to this branch".into()));
+    }
     Ok(())
 }
 
 fn validate_payment_method(method: &str) -> Result<(), AppError> {
     match method {
-        "cash"|"card"|"digital_wallet"|"mixed"|"talabat_online"|"talabat_cash" => Ok(()),
+        "cash" | "card" | "digital_wallet" | "mixed"
+        | "talabat_online" | "talabat_cash" => Ok(()),
         _ => Err(AppError::BadRequest("Invalid payment_method".into())),
     }
 }
+
 fn validate_discount_type(dt: &str) -> Result<(), AppError> {
-    match dt { "percentage"|"fixed" => Ok(()), _ => Err(AppError::BadRequest("discount_type must be 'percentage' or 'fixed'".into())) }
+    match dt {
+        "percentage" | "fixed" => Ok(()),
+        _ => Err(AppError::BadRequest("discount_type must be 'percentage' or 'fixed'".into())),
+    }
 }
+
 fn validate_void_reason(reason: &str) -> Result<(), AppError> {
     match reason {
-        "customer_request"|"wrong_order"|"quality_issue"|"other" => Ok(()),
+        "customer_request" | "wrong_order" | "quality_issue" | "other" => Ok(()),
         _ => Err(AppError::BadRequest("Invalid void_reason".into())),
     }
 }
-EOF
+RUST
+echo "✓ orders/handlers.rs"
 
-echo "✓ src/orders/handlers.rs"
+# ─── Append optional fields handlers to menu/handlers.rs ─────
+cat >> src/menu/handlers.rs << 'RUST'
 
-# ── 3. Patch reports/handlers.rs — payment breakdowns from order_payments ─────
-python3 - << 'PYEOF'
-import pathlib, re, sys
+// ═══════════════════════════════════════════════════════════════
+// OPTIONAL FIELDS
+// ═══════════════════════════════════════════════════════════════
 
-path = pathlib.Path("src/reports/handlers.rs")
-if not path.exists():
-    print("ERROR: src/reports/handlers.rs not found", file=sys.stderr)
-    sys.exit(1)
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OptionalField {
+    pub id:                Uuid,
+    pub menu_item_id:      Uuid,
+    pub name:              String,
+    pub price:             i32,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<sqlx::types::BigDecimal>,
+    pub size_label:        Option<String>,
+    pub display_order:     i32,
+    pub is_active:         bool,
+    pub created_at:        DateTime<Utc>,
+    pub updated_at:        DateTime<Utc>,
+}
 
-src = path.read_text()
+#[derive(Deserialize)]
+pub struct CreateOptionalFieldRequest {
+    pub name:              String,
+    pub price:             Option<i32>,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<f64>,
+    pub size_label:        Option<String>,
+    pub display_order:     Option<i32>,
+}
 
-# Helper: build a per-method correlated subquery
-def op_subquery(method, alias, context_col, context_val):
-    """context_col/val is either 'shift_id = s.id' or 'branch_id = $1 AND date filters'"""
-    return (
-        f"COALESCE((SELECT SUM(op.amount) FROM order_payments op "
-        f"JOIN orders oo ON oo.id = op.order_id "
-        f"WHERE oo.{context_col} AND oo.status != 'voided' AND op.method = '{method}'), 0)::bigint AS {alias}"
+#[derive(Deserialize)]
+pub struct UpdateOptionalFieldRequest {
+    pub name:              Option<String>,
+    pub price:             Option<i32>,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<f64>,
+    pub size_label:        Option<String>,
+    pub display_order:     Option<i32>,
+    pub is_active:         Option<bool>,
+}
+
+pub async fn list_optional_fields(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "read").await?;
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    let rows = sqlx::query_as::<_, OptionalField>(
+        r#"
+        SELECT id, menu_item_id, name, price,
+               org_ingredient_id, ingredient_name, ingredient_unit,
+               quantity_used, size_label::text,
+               display_order, is_active, created_at, updated_at
+        FROM menu_item_optional_fields
+        WHERE menu_item_id = $1
+        ORDER BY display_order ASC, name ASC
+        "#,
     )
+    .bind(*id)
+    .fetch_all(pool.get_ref())
+    .await?;
 
-# ── Patch shift_summary ───────────────────────────────────────────────────────
-# Replace the 6 FILTER(payment_method=X) lines inside shift_summary
-SHIFT_PAT = re.compile(
-    r"COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'cash'\)[^\n]*\n"
-    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'card'\)[^\n]*\n"
-    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'digital_wallet'\)[^\n]*\n"
-    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'mixed'\)[^\n]*\n"
-    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'talabat_online'\)[^\n]*\n"
-    r"[^\n]*COALESCE\(SUM\(o\.total_amount\) FILTER \(WHERE o\.status != 'voided' AND o\.payment_method = 'talabat_cash'\)[^\n]*",
-    re.MULTILINE,
-)
+    Ok(HttpResponse::Ok().json(rows))
+}
 
-SHIFT_REPL = (
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'cash'), 0)::bigint           AS cash_revenue,\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'card'), 0)::bigint           AS card_revenue,\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'digital_wallet'), 0)::bigint AS digital_wallet_revenue,\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'mixed'), 0)::bigint          AS mixed_revenue,\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_online'), 0)::bigint  AS talabat_online_revenue,\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oo ON oo.id = op.order_id WHERE oo.shift_id = s.id AND oo.status != 'voided' AND op.method = 'talabat_cash'), 0)::bigint   AS talabat_cash_revenue"
-)
+pub async fn create_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<CreateOptionalFieldRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
 
-new_src, n = SHIFT_PAT.subn(SHIFT_REPL, src)
-print(f"shift_summary replacements: {n}")
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".into()));
+    }
 
-# ── Patch branch_sales — the 6 per-method FILTER lines inside branch_sales ───
-BRANCH_PAT = re.compile(
-    r"COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'cash'\)[^\n]*,\n"
-    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'card'\)[^\n]*,\n"
-    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'digital_wallet'\)[^\n]*,\n"
-    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'mixed'\)[^\n]*,\n"
-    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'talabat_online'\)[^\n]*,\n"
-    r"[^\n]*COALESCE\(SUM\(total_amount\)\s+FILTER \(WHERE status != 'voided' AND payment_method = 'talabat_cash'\)[^\n]*",
-    re.MULTILINE,
-)
+    // Validate: if any ingredient field is set, all required ones must be present
+    let has_ingredient = body.org_ingredient_id.is_some()
+        || body.ingredient_name.is_some()
+        || body.ingredient_unit.is_some()
+        || body.quantity_used.is_some();
 
-BRANCH_REPL = (
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'cash'), 0),\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'card'), 0),\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'digital_wallet'), 0),\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'mixed'), 0),\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_online'), 0),\n"
-    "            COALESCE((SELECT SUM(op.amount) FROM order_payments op JOIN orders oi ON oi.id = op.order_id WHERE oi.branch_id = $1 AND oi.status != 'voided' AND ($2::timestamptz IS NULL OR oi.created_at >= $2) AND ($3::timestamptz IS NULL OR oi.created_at <= $3) AND op.method = 'talabat_cash'), 0)"
-)
+    if has_ingredient {
+        if body.ingredient_name.is_none() || body.ingredient_unit.is_none() || body.quantity_used.is_none() {
+            return Err(AppError::BadRequest(
+                "ingredient_name, ingredient_unit, and quantity_used are all required when configuring an ingredient deduction".into()
+            ));
+        }
+        if let Some(qty) = body.quantity_used {
+            if qty <= 0.0 {
+                return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+            }
+        }
+    }
 
-new_src, n2 = BRANCH_PAT.subn(BRANCH_REPL, new_src)
-print(f"branch_sales replacements: {n2}")
-
-if n == 0 and n2 == 0:
-    print("WARNING: no replacements made — patterns may have changed")
-else:
-    path.write_text(new_src)
-    print("reports/handlers.rs patched OK")
-PYEOF
-
-echo "✓ src/reports/handlers.rs"
-
-# ── 4. Wire discounts into main.rs (pure Python, no sed) ─────────────────────
-python3 - << 'PYEOF'
-import pathlib
-
-path = pathlib.Path("src/main.rs")
-src  = path.read_text()
-
-if "mod discounts;" not in src:
-    src = src.replace("mod uploads;", "mod discounts;\nmod uploads;")
-    print("added mod discounts")
-
-if "discounts::routes::configure" not in src:
-    src = src.replace(
-        ".configure(orders::routes::configure)",
-        ".configure(orders::routes::configure)\n            .configure(discounts::routes::configure)"
+    let row = sqlx::query_as::<_, OptionalField>(
+        r#"
+        INSERT INTO menu_item_optional_fields
+            (menu_item_id, name, price, org_ingredient_id, ingredient_name,
+             ingredient_unit, quantity_used, size_label, display_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::item_size, $9)
+        RETURNING id, menu_item_id, name, price,
+                  org_ingredient_id, ingredient_name, ingredient_unit,
+                  quantity_used, size_label::text,
+                  display_order, is_active, created_at, updated_at
+        "#,
     )
-    print("wired discounts routes")
+    .bind(*id)
+    .bind(body.name.trim())
+    .bind(body.price.unwrap_or(0))
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
+    .bind(&body.size_label)
+    .bind(body.display_order.unwrap_or(0))
+    .fetch_one(pool.get_ref())
+    .await?;
 
-path.write_text(src)
-print("main.rs OK")
-PYEOF
+    Ok(HttpResponse::Created().json(row))
+}
 
-echo "✓ src/main.rs"
+pub async fn update_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UpdateOptionalFieldRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+    let (item_id, field_id) = path.into_inner();
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
 
-# ── 5. Build ──────────────────────────────────────────────────────────────────
+    if let Some(qty) = body.quantity_used {
+        if qty <= 0.0 {
+            return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+        }
+    }
+
+    let row = sqlx::query_as::<_, OptionalField>(
+        r#"
+        UPDATE menu_item_optional_fields SET
+            name              = COALESCE($3, name),
+            price             = COALESCE($4, price),
+            org_ingredient_id = COALESCE($5, org_ingredient_id),
+            ingredient_name   = COALESCE($6, ingredient_name),
+            ingredient_unit   = COALESCE($7, ingredient_unit),
+            quantity_used     = COALESCE($8, quantity_used),
+            size_label        = COALESCE($9::item_size, size_label),
+            display_order     = COALESCE($10, display_order),
+            is_active         = COALESCE($11, is_active)
+        WHERE id = $1 AND menu_item_id = $2
+        RETURNING id, menu_item_id, name, price,
+                  org_ingredient_id, ingredient_name, ingredient_unit,
+                  quantity_used, size_label::text,
+                  display_order, is_active, created_at, updated_at
+        "#,
+    )
+    .bind(field_id)
+    .bind(item_id)
+    .bind(&body.name)
+    .bind(body.price)
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
+    .bind(&body.size_label)
+    .bind(body.display_order)
+    .bind(body.is_active)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Optional field not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+pub async fn delete_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "delete").await?;
+    let (item_id, field_id) = path.into_inner();
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    sqlx::query(
+        "DELETE FROM menu_item_optional_fields WHERE id = $1 AND menu_item_id = $2"
+    )
+    .bind(field_id)
+    .bind(item_id)
+    .execute(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+RUST
+echo "✓ menu/handlers.rs (optional fields appended)"
+
 echo ""
-echo "Building..."
-cargo sqlx prepare 2>&1 | tail -3
-cargo build --release 2>&1 | grep -E "^error|Compiling rue|Finished" | tail -15
-
+echo "=== All files written. Now run: ==="
+echo "  cargo build --release"
 echo ""
-echo "Restarting service..."
-sudo systemctl restart rue-rust
-sleep 2
-sudo systemctl status rue-rust --no-pager | head -12
-
+echo "New endpoints added:"
+echo "  GET    /menu-items/:id/optionals"
+echo "  POST   /menu-items/:id/optionals"
+echo "  PATCH  /menu-items/:id/optionals/:field_id"
+echo "  DELETE /menu-items/:id/optionals/:field_id"
 echo ""
-echo "=== Rust patch complete ==="
-echo "New: GET/POST /discounts  PATCH/DELETE /discounts/:id"
-echo "Updated POST /orders: discount_id, amount_tendered, tip_amount, payment_splits"
-echo "Reports now aggregate from order_payments table"
+echo "Order API changes:"
+echo "  OrderItemInput now accepts: optional_field_ids: Vec<Uuid>"
+echo "  OrderItemFull now returns:  optionals: Vec<OrderItemOptional>"
+echo "  /orders/preview-recipe now accepts: optional_field_ids: Vec<Uuid>"
+echo ""
+echo "Removed:"
+echo "  All override/substitution logic"
+echo "  /recipes/overrides/* endpoints"
+echo "  replaces_org_ingredient_id from addon ingredients"

@@ -27,16 +27,17 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/{id}/sizes",       web::post().to(upsert_size))
                 .route("/{id}/sizes/{sid}", web::delete().to(delete_size))
 
-                // Addon slots — per-drink extra/configured addon groups
-                .route("/{id}/addon-slots",            web::get().to(list_addon_slots))
-                .route("/{id}/addon-slots",            web::post().to(create_addon_slot))
-                .route("/{id}/addon-slots/{slot_id}",  web::patch().to(update_addon_slot))
-                .route("/{id}/addon-slots/{slot_id}",  web::delete().to(delete_addon_slot))
+                // Addon slots
+                .route("/{id}/addon-slots",           web::get().to(list_addon_slots))
+                .route("/{id}/addon-slots",           web::post().to(create_addon_slot))
+                .route("/{id}/addon-slots/{slot_id}", web::patch().to(update_addon_slot))
+                .route("/{id}/addon-slots/{slot_id}", web::delete().to(delete_addon_slot))
 
-                // Addon overrides — per-(drink, addon, size) ingredient deduction rules
-                .route("/{id}/addon-overrides",                web::get().to(list_addon_overrides))
-                .route("/{id}/addon-overrides",                web::post().to(upsert_addon_override))
-                .route("/{id}/addon-overrides/{override_id}",  web::delete().to(delete_addon_override)),
+                // Optional fields
+                .route("/{id}/optionals",              web::get().to(list_optional_fields))
+                .route("/{id}/optionals",              web::post().to(create_optional_field))
+                .route("/{id}/optionals/{field_id}",   web::patch().to(update_optional_field))
+                .route("/{id}/optionals/{field_id}",   web::delete().to(delete_optional_field)),
         )
 
         // ── Addon items ───────────────────────────────────────────────────────

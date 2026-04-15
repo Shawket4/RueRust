@@ -24,25 +24,12 @@ pub struct DrinkRecipe {
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AddonIngredient {
-    pub id:                         Uuid,
-    pub addon_item_id:              Uuid,
-    pub org_ingredient_id:          Option<Uuid>,
-    pub ingredient_name:            String,
-    pub unit:                       String,
-    pub quantity_used:              sqlx::types::BigDecimal,
-    pub replaces_org_ingredient_id: Option<Uuid>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct DrinkOptionOverride {
-    pub id:                         Uuid,
-    pub drink_option_item_id:       Uuid,
-    pub size_label:                 Option<String>,
-    pub org_ingredient_id:          Option<Uuid>,
-    pub ingredient_name:            String,
-    pub unit:                       String,
-    pub quantity_used:              sqlx::types::BigDecimal,
-    pub replaces_org_ingredient_id: Option<Uuid>,
+    pub id:                Uuid,
+    pub addon_item_id:     Uuid,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   String,
+    pub unit:              String,
+    pub quantity_used:     sqlx::types::BigDecimal,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -58,32 +45,15 @@ pub struct UpsertDrinkRecipeRequest {
 
 #[derive(Deserialize)]
 pub struct UpsertAddonIngredientRequest {
-    pub org_ingredient_id:          Option<Uuid>,
-    pub ingredient_name:            String,
-    pub ingredient_unit:            String,
-    pub quantity_used:              f64,
-    pub replaces_org_ingredient_id: Option<Uuid>,
-}
-
-#[derive(Deserialize)]
-pub struct UpsertOverrideRequest {
-    pub size_label:                 Option<String>,
-    pub org_ingredient_id:          Option<Uuid>,
-    pub ingredient_name:            String,
-    pub ingredient_unit:            String,
-    pub quantity_used:              f64,
-    pub replaces_org_ingredient_id: Option<Uuid>,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   String,
+    pub ingredient_unit:   String,
+    pub quantity_used:     f64,
 }
 
 #[derive(Deserialize)]
 pub struct DeleteRecipeQuery {
     pub ingredient_name: String,
-}
-
-#[derive(Deserialize)]
-pub struct DeleteOverrideQuery {
-    pub ingredient_name: String,
-    pub size:            Option<String>,
 }
 
 // ── GET /recipes/drinks/:menu_item_id ─────────────────────────
@@ -209,8 +179,7 @@ pub async fn list_addon_ingredients(
                org_ingredient_id,
                ingredient_name,
                ingredient_unit AS unit,
-               quantity_used,
-               replaces_org_ingredient_id
+               quantity_used
         FROM addon_item_ingredients
         WHERE addon_item_id = $1
         ORDER BY ingredient_name
@@ -242,20 +211,18 @@ pub async fn upsert_addon_ingredient(
     let row = sqlx::query_as::<_, AddonIngredient>(
         r#"
         INSERT INTO addon_item_ingredients
-            (addon_item_id, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used, replaces_org_ingredient_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (addon_item_id, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (addon_item_id, ingredient_name)
         DO UPDATE SET
-            org_ingredient_id          = EXCLUDED.org_ingredient_id,
-            ingredient_unit            = EXCLUDED.ingredient_unit,
-            quantity_used              = EXCLUDED.quantity_used,
-            replaces_org_ingredient_id = EXCLUDED.replaces_org_ingredient_id
+            org_ingredient_id = EXCLUDED.org_ingredient_id,
+            ingredient_unit   = EXCLUDED.ingredient_unit,
+            quantity_used     = EXCLUDED.quantity_used
         RETURNING id, addon_item_id,
                   org_ingredient_id,
                   ingredient_name,
                   ingredient_unit AS unit,
-                  quantity_used,
-                  replaces_org_ingredient_id
+                  quantity_used
         "#,
     )
     .bind(*addon_item_id)
@@ -263,7 +230,6 @@ pub async fn upsert_addon_ingredient(
     .bind(&body.ingredient_name)
     .bind(&body.ingredient_unit)
     .bind(body.quantity_used)
-    .bind(body.replaces_org_ingredient_id)
     .fetch_one(pool.get_ref())
     .await?;
 
@@ -291,136 +257,6 @@ pub async fn delete_addon_ingredient(
     .bind(&query.ingredient_name)
     .execute(pool.get_ref())
     .await?;
-
-    Ok(HttpResponse::NoContent().finish())
-}
-
-// ── GET /recipes/overrides/:drink_option_item_id ──────────────
-
-pub async fn list_overrides(
-    req:                  HttpRequest,
-    pool:                 web::Data<PgPool>,
-    drink_option_item_id: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "recipes", "read").await?;
-    require_drink_option_org(pool.get_ref(), &claims, *drink_option_item_id).await?;
-
-    let rows = sqlx::query_as::<_, DrinkOptionOverride>(
-        r#"
-        SELECT id, drink_option_item_id,
-               size_label::text,
-               org_ingredient_id,
-               ingredient_name,
-               ingredient_unit AS unit,
-               quantity_used,
-               replaces_org_ingredient_id
-        FROM drink_option_ingredient_overrides
-        WHERE drink_option_item_id = $1
-        ORDER BY size_label, ingredient_name
-        "#,
-    )
-    .bind(*drink_option_item_id)
-    .fetch_all(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(rows))
-}
-
-// ── POST /recipes/overrides/:drink_option_item_id ─────────────
-
-pub async fn upsert_override(
-    req:                  HttpRequest,
-    pool:                 web::Data<PgPool>,
-    drink_option_item_id: web::Path<Uuid>,
-    body:                 web::Json<UpsertOverrideRequest>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "recipes", "create").await?;
-    require_drink_option_org(pool.get_ref(), &claims, *drink_option_item_id).await?;
-
-    if body.quantity_used <= 0.0 {
-        return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
-    }
-
-    let row = sqlx::query_as::<_, DrinkOptionOverride>(
-        r#"
-        INSERT INTO drink_option_ingredient_overrides
-            (drink_option_item_id, size_label, org_ingredient_id, ingredient_name, ingredient_unit, quantity_used, replaces_org_ingredient_id)
-        VALUES ($1, $2::item_size, $3, $4, $5, $6, $7)
-        ON CONFLICT (drink_option_item_id, size_label, ingredient_name)
-        DO UPDATE SET
-            org_ingredient_id          = EXCLUDED.org_ingredient_id,
-            ingredient_unit            = EXCLUDED.ingredient_unit,
-            quantity_used              = EXCLUDED.quantity_used,
-            replaces_org_ingredient_id = EXCLUDED.replaces_org_ingredient_id
-        RETURNING id, drink_option_item_id,
-                  size_label::text,
-                  org_ingredient_id,
-                  ingredient_name,
-                  ingredient_unit AS unit,
-                  quantity_used,
-                  replaces_org_ingredient_id
-        "#,
-    )
-    .bind(*drink_option_item_id)
-    .bind(&body.size_label)
-    .bind(body.org_ingredient_id)
-    .bind(&body.ingredient_name)
-    .bind(&body.ingredient_unit)
-    .bind(body.quantity_used)
-    .bind(body.replaces_org_ingredient_id)
-    .fetch_one(pool.get_ref())
-    .await?;
-
-    Ok(HttpResponse::Ok().json(row))
-}
-
-// ── DELETE /recipes/overrides/:drink_option_item_id ──────────
-
-pub async fn delete_override(
-    req:   HttpRequest,
-    pool:  web::Data<PgPool>,
-    path:  web::Path<Uuid>,
-    query: web::Query<DeleteOverrideQuery>,
-) -> Result<HttpResponse, AppError> {
-    let claims = extract_claims(&req)?;
-    check_permission(pool.get_ref(), &claims, "recipes", "delete").await?;
-
-    let drink_option_item_id = path.into_inner();
-    require_drink_option_org(pool.get_ref(), &claims, drink_option_item_id).await?;
-
-    match &query.size {
-        Some(size) => {
-            sqlx::query(
-                r#"
-                DELETE FROM drink_option_ingredient_overrides
-                WHERE drink_option_item_id = $1
-                  AND ingredient_name      = $2
-                  AND size_label           = $3::item_size
-                "#,
-            )
-            .bind(drink_option_item_id)
-            .bind(&query.ingredient_name)
-            .bind(size)
-            .execute(pool.get_ref())
-            .await?;
-        }
-        None => {
-            sqlx::query(
-                r#"
-                DELETE FROM drink_option_ingredient_overrides
-                WHERE drink_option_item_id = $1
-                  AND ingredient_name      = $2
-                  AND size_label IS NULL
-                "#,
-            )
-            .bind(drink_option_item_id)
-            .bind(&query.ingredient_name)
-            .execute(pool.get_ref())
-            .await?;
-        }
-    }
 
     Ok(HttpResponse::NoContent().finish())
 }
@@ -476,36 +312,6 @@ async fn require_addon_org(
     let addon_org = addon_org.ok_or_else(|| AppError::NotFound("Addon item not found".into()))?;
     if claims.org_id() != Some(addon_org) {
         return Err(AppError::Forbidden("Addon item belongs to a different org".into()));
-    }
-    Ok(())
-}
-
-async fn require_drink_option_org(
-    pool:                 &PgPool,
-    claims:               &Claims,
-    drink_option_item_id: Uuid,
-) -> Result<(), AppError> {
-    use crate::models::UserRole;
-    if claims.role == UserRole::SuperAdmin { return Ok(()); }
-
-    let item_org: Option<Uuid> = sqlx::query_scalar(
-        r#"
-        SELECT m.org_id
-        FROM drink_option_items doi
-        JOIN drink_option_groups dog ON dog.id = doi.group_id
-        JOIN menu_items m ON m.id = dog.menu_item_id
-        WHERE doi.id = $1
-        "#,
-    )
-    .bind(drink_option_item_id)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
-
-    let item_org = item_org
-        .ok_or_else(|| AppError::NotFound("Drink option item not found".into()))?;
-    if claims.org_id() != Some(item_org) {
-        return Err(AppError::Forbidden("Drink option belongs to a different org".into()));
     }
     Ok(())
 }

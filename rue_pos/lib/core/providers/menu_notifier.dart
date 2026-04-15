@@ -4,27 +4,30 @@ import '../repositories/menu_repository.dart';
 import '../storage/storage_service.dart';
 
 class MenuState {
-  final List<Category> categories;
-  final List<MenuItem> items;
+  final List<Category>  categories;
+  final List<MenuItem>  items;
   final List<AddonItem> allAddons;
-  final String? selectedCategoryId;
-  final bool isLoading;
-  final bool fromCache;
-  final String? error;
-  final String? loadedOrgId;
-  final DateTime? cachedAt;
+  final String?         selectedCategoryId;
+  final bool            isLoading;
+  final bool            fromCache;
+  final String?         error;
+  final String?         loadedOrgId;
+  final DateTime?       cachedAt;
 
   const MenuState({
-    this.categories = const [],
-    this.items = const [],
-    this.allAddons = const [],
+    this.categories         = const [],
+    this.items              = const [],
+    this.allAddons          = const [],
     this.selectedCategoryId,
-    this.isLoading = false,
-    this.fromCache = false,
+    this.isLoading          = false,
+    this.fromCache          = false,
     this.error,
     this.loadedOrgId,
     this.cachedAt,
   });
+
+  // Alias for backwards compatibility with any code referencing .addons
+  List<AddonItem> get addons => allAddons;
 
   List<MenuItem> get filtered => selectedCategoryId == null
       ? items
@@ -36,7 +39,7 @@ class MenuState {
     final map = <String, List<AddonItem>>{};
     for (final a in allAddons) {
       if (!a.isActive) continue;
-      map.putIfAbsent(a.type, () => []).add(a);
+      map.putIfAbsent(a.addonType, () => []).add(a);
     }
     for (final list in map.values) {
       list.sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
@@ -45,27 +48,27 @@ class MenuState {
   }
 
   MenuState copyWith({
-    List<Category>? categories,
-    List<MenuItem>? items,
+    List<Category>?  categories,
+    List<MenuItem>?  items,
     List<AddonItem>? allAddons,
-    String? selectedCategoryId,
-    bool? isLoading,
-    bool? fromCache,
-    String? error,
-    String? loadedOrgId,
-    DateTime? cachedAt,
-    bool clearError = false,
+    String?          selectedCategoryId,
+    bool?            isLoading,
+    bool?            fromCache,
+    String?          error,
+    String?          loadedOrgId,
+    DateTime?        cachedAt,
+    bool             clearError = false,
   }) =>
       MenuState(
-        categories: categories ?? this.categories,
-        items: items ?? this.items,
-        allAddons: allAddons ?? this.allAddons,
+        categories:         categories         ?? this.categories,
+        items:              items              ?? this.items,
+        allAddons:          allAddons          ?? this.allAddons,
         selectedCategoryId: selectedCategoryId ?? this.selectedCategoryId,
-        isLoading: isLoading ?? this.isLoading,
-        fromCache: fromCache ?? this.fromCache,
-        error: clearError ? null : (error ?? this.error),
-        loadedOrgId: loadedOrgId ?? this.loadedOrgId,
-        cachedAt: cachedAt ?? this.cachedAt,
+        isLoading:          isLoading          ?? this.isLoading,
+        fromCache:          fromCache          ?? this.fromCache,
+        error:              clearError ? null  : (error ?? this.error),
+        loadedOrgId:        loadedOrgId        ?? this.loadedOrgId,
+        cachedAt:           cachedAt           ?? this.cachedAt,
       );
 }
 
@@ -86,16 +89,16 @@ class MenuNotifier extends Notifier<MenuState> {
       // Fetch menu (categories + items) and addon items concurrently.
       final menuResult = await repo.fetchMenu(orgId);
       final addonItems = await repo.fetchAddonItems(orgId);
-      final cachedAt = ref.read(storageServiceProvider).menuCachedAt(orgId);
+      final cachedAt   = ref.read(storageServiceProvider).menuCachedAt(orgId);
 
       state = state.copyWith(
-        isLoading: false,
-        categories: menuResult.categories,
-        items: menuResult.items,
-        allAddons: addonItems,
-        fromCache: menuResult.fromCache,
-        loadedOrgId: orgId,
-        cachedAt: cachedAt,
+        isLoading:          false,
+        categories:         menuResult.categories,
+        items:              menuResult.items,
+        allAddons:          addonItems,
+        fromCache:          menuResult.fromCache,
+        loadedOrgId:        orgId,
+        cachedAt:           cachedAt,
         selectedCategoryId: menuResult.categories.isNotEmpty
             ? menuResult.categories.first.id
             : null,
@@ -103,7 +106,7 @@ class MenuNotifier extends Notifier<MenuState> {
     } catch (_) {
       state = state.copyWith(
         isLoading: false,
-        error: 'No connection and no cached menu available',
+        error:     'No connection and no cached menu available',
       );
     }
   }

@@ -76,6 +76,19 @@ pub struct OrderItemAddon {
     pub line_total:    i32,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OrderItemOptional {
+    pub id:               Uuid,
+    pub order_item_id:    Uuid,
+    pub optional_field_id: Option<Uuid>,
+    pub field_name:       String,
+    pub price:            i32,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:  Option<String>,
+    pub ingredient_unit:  Option<String>,
+    pub quantity_deducted: Option<sqlx::types::BigDecimal>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct OrderFull {
     #[serde(flatten)]
@@ -86,8 +99,9 @@ pub struct OrderFull {
 #[derive(Debug, Serialize)]
 pub struct OrderItemFull {
     #[serde(flatten)]
-    pub item:   OrderItem,
-    pub addons: Vec<OrderItemAddon>,
+    pub item:      OrderItem,
+    pub addons:    Vec<OrderItemAddon>,
+    pub optionals: Vec<OrderItemOptional>,
 }
 
 #[derive(Deserialize)]
@@ -97,24 +111,24 @@ pub struct PaymentSplitInput {
     pub reference: Option<String>,
 }
 
-// drink_option_item_id removed — addon is now identified solely by addon_item_id
 #[derive(Deserialize)]
 pub struct AddonInput {
     pub addon_item_id: Uuid,
-    #[serde(default = "default_addon_qty")]
+    #[serde(default = "default_qty")]
     pub quantity: i32,
 }
 
-fn default_addon_qty() -> i32 { 1 }
-
 #[derive(Deserialize)]
 pub struct OrderItemInput {
-    pub menu_item_id: Uuid,
-    pub size_label:   Option<String>,
-    pub quantity:     i32,
-    pub addons:       Vec<AddonInput>,
-    pub notes:        Option<String>,
+    pub menu_item_id:      Uuid,
+    pub size_label:        Option<String>,
+    pub quantity:          i32,
+    pub addons:            Vec<AddonInput>,
+    pub optional_field_ids: Vec<Uuid>,
+    pub notes:             Option<String>,
 }
+
+fn default_qty() -> i32 { 1 }
 
 #[derive(Deserialize)]
 pub struct CreateOrderRequest {
@@ -164,190 +178,15 @@ pub struct PaginatedOrders {
     pub total_pages: i64,
 }
 
-// ── Deduction helpers ─────────────────────────────────────────
+// ── Deduction helper ──────────────────────────────────────────
 
-// One deduction row — mirrors the snapshot shape stored in order_items.
 #[derive(Serialize, Clone)]
 struct InventoryDeduction {
-    org_ingredient_id:          Option<Uuid>,
-    ingredient_name:            String,
-    unit:                       String,
-    quantity:                   f64,
-    source:                     String,
-    replaces_org_ingredient_id: Option<Uuid>,
-    // Not serialised into the snapshot — used only during the substitution pass.
-    #[serde(skip)]
-    addon_qty: f64,
-}
-
-// One override ingredient row fetched from menu_item_addon_overrides.
-struct OverrideRow {
-    org_ingredient_id:          Option<Uuid>,
-    ingredient_name:            String,
-    ingredient_unit:            String,
-    quantity_used:              f64,
-    replaces_org_ingredient_id: Option<Uuid>,
-    combo_addon_item_id:        Option<Uuid>,
-}
-
-/// Fetch all override rows for a (menu_item, addon_item, size) triple.
-/// Returns both standalone rows and combo rows — the caller filters.
-async fn fetch_override_rows(
-    pool:          &PgPool,
-    menu_item_id:  Uuid,
-    addon_item_id: Uuid,
-    size_label:    Option<&str>,
-) -> Result<Vec<OverrideRow>, AppError> {
-    // Fetch rows that match this size OR are size-wildcards (NULL).
-    // Order: size-specific first so the caller can prefer them.
-    let rows: Vec<(Option<Uuid>, String, String, f64, Option<Uuid>, Option<Uuid>)> =
-        if let Some(size) = size_label {
-            sqlx::query_as(
-                r#"
-                SELECT org_ingredient_id,
-                       ingredient_name,
-                       ingredient_unit,
-                       quantity_used::float8,
-                       replaces_org_ingredient_id,
-                       combo_addon_item_id
-                FROM   menu_item_addon_overrides
-                WHERE  menu_item_id   = $1
-                  AND  addon_item_id  = $2
-                  AND  (size_label = $3::item_size OR size_label IS NULL)
-                ORDER  BY size_label DESC NULLS LAST
-                "#,
-            )
-            .bind(menu_item_id)
-            .bind(addon_item_id)
-            .bind(size)
-            .fetch_all(pool)
-            .await?
-        } else {
-            sqlx::query_as(
-                r#"
-                SELECT org_ingredient_id,
-                       ingredient_name,
-                       ingredient_unit,
-                       quantity_used::float8,
-                       replaces_org_ingredient_id,
-                       combo_addon_item_id
-                FROM   menu_item_addon_overrides
-                WHERE  menu_item_id  = $1
-                  AND  addon_item_id = $2
-                  AND  size_label IS NULL
-                "#,
-            )
-            .bind(menu_item_id)
-            .bind(addon_item_id)
-            .fetch_all(pool)
-            .await?
-        };
-
-    Ok(rows
-        .into_iter()
-        .map(|(oid, name, unit, qty, replaces, combo)| OverrideRow {
-            org_ingredient_id:          oid,
-            ingredient_name:            name,
-            ingredient_unit:            unit,
-            quantity_used:              qty,
-            replaces_org_ingredient_id: replaces,
-            combo_addon_item_id:        combo,
-        })
-        .collect())
-}
-
-/// Resolve the effective ingredient rows for one addon on one order item.
-///
-/// Priority (highest → lowest):
-///   1. Combo override rows where combo_addon_item_id is in selected_addon_ids
-///      (size-specific preferred over size-wildcard)
-///   2. Standalone override rows (combo_addon_item_id IS NULL)
-///      (size-specific preferred over size-wildcard)
-///   3. Global addon_item_ingredients fallback
-///
-/// Each resolved row is scaled by item_qty × addon_qty.
-async fn resolve_addon_deductions(
-    pool:               &PgPool,
-    menu_item_id:       Uuid,
-    addon_item_id:      Uuid,
-    size_label:         Option<&str>,
-    item_qty:           f64,
-    addon_qty:          f64,
-    selected_addon_ids: &[Uuid], // all addons selected on this order item
-) -> Result<Vec<InventoryDeduction>, AppError> {
-    let all_overrides = fetch_override_rows(
-        pool, menu_item_id, addon_item_id, size_label,
-    ).await?;
-
-    // Split into combo rows (matching a currently-selected partner) and standalone.
-    let active_combo: Vec<&OverrideRow> = all_overrides
-        .iter()
-        .filter(|r| {
-            r.combo_addon_item_id
-                .map(|c| selected_addon_ids.contains(&c))
-                .unwrap_or(false)
-        })
-        .collect();
-
-    let standalone: Vec<&OverrideRow> = all_overrides
-        .iter()
-        .filter(|r| r.combo_addon_item_id.is_none())
-        .collect();
-
-    // Use combo rows if any fire, otherwise standalone, otherwise global.
-    let effective: Vec<&OverrideRow> = if !active_combo.is_empty() {
-        // De-duplicate by ingredient_name keeping the most specific
-        // (size-specific already comes first due to ORDER BY above).
-        let mut seen = std::collections::HashSet::new();
-        active_combo
-            .into_iter()
-            .filter(|r| seen.insert(r.ingredient_name.clone()))
-            .collect()
-    } else if !standalone.is_empty() {
-        let mut seen = std::collections::HashSet::new();
-        standalone
-            .into_iter()
-            .filter(|r| seen.insert(r.ingredient_name.clone()))
-            .collect()
-    } else {
-        // Fall back to global addon_item_ingredients
-        let base_rows: Vec<(Option<Uuid>, f64, Option<Uuid>, String, String)> =
-            sqlx::query_as(
-                "SELECT org_ingredient_id, quantity_used::float8,
-                        replaces_org_ingredient_id, ingredient_name, ingredient_unit
-                 FROM   addon_item_ingredients
-                 WHERE  addon_item_id = $1",
-            )
-            .bind(addon_item_id)
-            .fetch_all(pool)
-            .await?;
-
-        return Ok(base_rows
-            .into_iter()
-            .map(|(oid, qty, replaces, name, unit)| InventoryDeduction {
-                org_ingredient_id:          oid,
-                ingredient_name:            name,
-                unit,
-                quantity:                   qty * item_qty * addon_qty,
-                source:                     "addon_base".into(),
-                replaces_org_ingredient_id: replaces,
-                addon_qty,
-            })
-            .collect());
-    };
-
-    Ok(effective
-        .into_iter()
-        .map(|r| InventoryDeduction {
-            org_ingredient_id:          r.org_ingredient_id,
-            ingredient_name:            r.ingredient_name.clone(),
-            unit:                       r.ingredient_unit.clone(),
-            quantity:                   r.quantity_used * item_qty * addon_qty,
-            source:                     "addon_override".into(),
-            replaces_org_ingredient_id: r.replaces_org_ingredient_id,
-            addon_qty,
-        })
-        .collect())
+    org_ingredient_id: Option<Uuid>,
+    ingredient_name:   String,
+    unit:              String,
+    quantity:          f64,
+    source:            String, // "drink_recipe" | "addon" | "optional"
 }
 
 // ── POST /orders ──────────────────────────────────────────────
@@ -420,6 +259,16 @@ pub async fn create_order(
     .await?;
 
     // ── Local types ───────────────────────────────────────────
+    struct ResolvedOptional {
+        optional_field_id: Uuid,
+        field_name:        String,
+        price:             i32,
+        org_ingredient_id: Option<Uuid>,
+        ingredient_name:   Option<String>,
+        ingredient_unit:   Option<String>,
+        quantity_used:     Option<f64>,
+    }
+
     struct ResolvedItem {
         menu_item_id: Uuid,
         item_name:    String,
@@ -428,8 +277,10 @@ pub async fn create_order(
         quantity:     i32,
         notes:        Option<String>,
         addons:       Vec<ResolvedAddon>,
+        optionals:    Vec<ResolvedOptional>,
         deductions:   Vec<InventoryDeduction>,
     }
+
     struct ResolvedAddon {
         addon_item_id: Uuid,
         addon_name:    String,
@@ -442,12 +293,11 @@ pub async fn create_order(
 
     for item_input in &body.items {
         if item_input.quantity <= 0 {
-            return Err(AppError::BadRequest("Item quantity must be greater than 0".into()));
+            return Err(AppError::BadRequest("Item quantity must be > 0".into()));
         }
 
         let (item_name, base_price): (String, i32) = sqlx::query_as(
-            "SELECT m.name, m.base_price FROM menu_items m \
-             WHERE m.id = $1 AND m.deleted_at IS NULL",
+            "SELECT name, base_price FROM menu_items WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(item_input.menu_item_id)
         .fetch_optional(pool.get_ref())
@@ -458,7 +308,7 @@ pub async fn create_order(
 
         let unit_price: i32 = match &item_input.size_label {
             Some(size) => {
-                let size_price: Option<i32> = sqlx::query_scalar(
+                let p: Option<i32> = sqlx::query_scalar(
                     "SELECT price_override FROM item_sizes \
                      WHERE menu_item_id = $1 AND label = $2::item_size AND is_active = true"
                 )
@@ -467,14 +317,14 @@ pub async fn create_order(
                 .fetch_optional(pool.get_ref())
                 .await?
                 .flatten();
-                size_price.unwrap_or(base_price)
+                p.unwrap_or(base_price)
             }
             None => base_price,
         };
 
-        let mut item_deductions: Vec<InventoryDeduction> = Vec::new();
+        let mut deductions: Vec<InventoryDeduction> = Vec::new();
 
-        // ── Base recipe ───────────────────────────────────────
+        // ── 1. Base drink recipe ──────────────────────────────
         let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
             if let Some(size) = &item_input.size_label {
                 sqlx::query_as(
@@ -504,24 +354,16 @@ pub async fn create_order(
             };
 
         for (ing_id, qty, name, unit) in recipe_rows {
-            item_deductions.push(InventoryDeduction {
-                org_ingredient_id:          ing_id,
-                ingredient_name:            name,
+            deductions.push(InventoryDeduction {
+                org_ingredient_id: ing_id,
+                ingredient_name:   name,
                 unit,
-                quantity:                   qty * item_input.quantity as f64,
-                source:                     "drink_recipe".into(),
-                replaces_org_ingredient_id: None,
-                addon_qty:                  1.0,
+                quantity:          qty * item_input.quantity as f64,
+                source:            "drink_recipe".into(),
             });
         }
 
-        // ── Addons ────────────────────────────────────────────
-        // Collect all selected addon_item_ids upfront for combo rule evaluation.
-        let selected_addon_ids: Vec<Uuid> = item_input.addons
-            .iter()
-            .map(|a| a.addon_item_id)
-            .collect();
-
+        // ── 2. Addon ingredients (flat — no overrides) ────────
         let mut resolved_addons: Vec<ResolvedAddon> = Vec::new();
 
         for addon_input in &item_input.addons {
@@ -539,78 +381,100 @@ pub async fn create_order(
 
             resolved_addons.push(ResolvedAddon {
                 addon_item_id: addon_input.addon_item_id,
-                addon_name:    addon_name.clone(),
+                addon_name,
                 unit_price:    default_price,
                 quantity:      addon_input.quantity.max(1),
             });
 
-            // Resolve deductions using the new override matrix + combo logic.
-            let addon_deductions = resolve_addon_deductions(
-                pool.get_ref(),
-                item_input.menu_item_id,
-                addon_input.addon_item_id,
-                item_input.size_label.as_deref(),
-                item_input.quantity as f64,
-                addon_qty,
-                &selected_addon_ids,
+            let addon_rows: Vec<(Option<Uuid>, f64, String, String)> = sqlx::query_as(
+                "SELECT org_ingredient_id, quantity_used::float8,
+                        ingredient_name, ingredient_unit
+                 FROM   addon_item_ingredients
+                 WHERE  addon_item_id = $1",
             )
+            .bind(addon_input.addon_item_id)
+            .fetch_all(pool.get_ref())
             .await?;
 
-            item_deductions.extend(addon_deductions);
-        }
-
-        // ── Substitution pass ─────────────────────────────────
-        // Collect base ingredients being replaced by any addon deduction.
-        let mut substitutions = std::collections::HashSet::new();
-        for d in &item_deductions {
-            if let Some(replaced) = d.replaces_org_ingredient_id {
-                substitutions.insert(replaced);
+            for (ing_id, qty, name, unit) in addon_rows {
+                deductions.push(InventoryDeduction {
+                    org_ingredient_id: ing_id,
+                    ingredient_name:   name,
+                    unit,
+                    quantity:          qty * item_input.quantity as f64 * addon_qty,
+                    source:            "addon".into(),
+                });
             }
         }
 
-        if !substitutions.is_empty() {
-            // Build per-unit base quantities for replaced ingredients.
-            let mut replaced_qty_per_item: std::collections::HashMap<Uuid, f64> =
-                std::collections::HashMap::new();
-            for d in &item_deductions {
-                if d.source == "drink_recipe" {
-                    if let Some(id) = d.org_ingredient_id {
-                        if substitutions.contains(&id) {
-                            let per_unit = d.quantity / item_input.quantity as f64;
-                            *replaced_qty_per_item.entry(id).or_insert(0.0) += per_unit;
-                        }
-                    }
+        // ── 3. Optional fields ────────────────────────────────
+        let mut resolved_optionals: Vec<ResolvedOptional> = Vec::new();
+
+        for &field_id in &item_input.optional_field_ids {
+            // Explicit type annotation fixes the inference issue
+            let row_result = sqlx::query_as::<_, (String, i32, Option<Uuid>, Option<String>, Option<String>, Option<f64>, Option<String>)>(
+                r#"SELECT name, price, org_ingredient_id,
+                          ingredient_name, ingredient_unit,
+                          quantity_used::float8, size_label::text
+                   FROM menu_item_optional_fields
+                   WHERE id = $1 AND menu_item_id = $2 AND is_active = true"#,
+            )
+            .bind(field_id)
+            .bind(item_input.menu_item_id)
+            .fetch_optional(pool.get_ref())
+            .await?;
+        
+            // Skip silently if field not found or not for this item  
+            let Some((fname, fprice, ing_id, ing_name, ing_unit, qty_used, field_size)) = row_result else {
+                tracing::warn!(field_id = %field_id, "Optional field not found or inactive — skipping");
+                continue;
+            };
+
+            // If field is size-restricted, check it matches
+            if let Some(fs) = &field_size {
+                if item_input.size_label.as_deref() != Some(fs.as_str()) {
+                    tracing::warn!(field_id = %field_id, "Optional field size mismatch — skipping");
+                    continue;
                 }
             }
 
-            let mut new_deductions: Vec<InventoryDeduction> = Vec::new();
-            for mut d in item_deductions {
-                // Drop the base-recipe row being substituted.
-                if d.source == "drink_recipe" {
-                    if let Some(id) = d.org_ingredient_id {
-                        if substitutions.contains(&id) {
-                            continue;
-                        }
-                    }
-                }
-                // Fix substituting addon quantity to inherit base volume × quantities.
-                if let Some(replaced_id) = d.replaces_org_ingredient_id {
-                    if let Some(&per_unit) = replaced_qty_per_item.get(&replaced_id) {
-                        d.quantity = per_unit * item_input.quantity as f64 * d.addon_qty;
-                    }
-                }
-                new_deductions.push(d);
+            // Add ingredient deduction if configured
+            if let (Some(ref name), Some(ref unit), Some(qty)) =
+                (ing_name.clone(), ing_unit.clone(), qty_used)
+            {
+                deductions.push(InventoryDeduction {
+                    org_ingredient_id: ing_id,
+                    ingredient_name:   name.clone(),
+                    unit:              unit.clone(),
+                    quantity:          qty * item_input.quantity as f64,
+                    source:            "optional".into(),
+                });
             }
-            item_deductions = new_deductions;
+
+            resolved_optionals.push(ResolvedOptional {
+                optional_field_id: field_id,
+                field_name:        fname,
+                price:             fprice,
+                org_ingredient_id: ing_id,
+                ingredient_name:   ing_name,
+                ingredient_unit:   ing_unit,
+                quantity_used:     qty_used,
+            });
         }
 
-        let item_line  = unit_price * item_input.quantity;
+        let item_line      = unit_price * item_input.quantity;
         let addon_line: i32 = resolved_addons
             .iter()
             .map(|a| a.unit_price * a.quantity)
             .sum::<i32>()
             * item_input.quantity;
-        subtotal += item_line + addon_line;
+        let optional_line: i32 = resolved_optionals
+            .iter()
+            .map(|o| o.price)
+            .sum::<i32>()
+            * item_input.quantity;
+
+        subtotal += item_line + addon_line + optional_line;
 
         resolved_items.push(ResolvedItem {
             menu_item_id: item_input.menu_item_id,
@@ -620,16 +484,15 @@ pub async fn create_order(
             quantity:     item_input.quantity,
             notes:        item_input.notes.clone(),
             addons:       resolved_addons,
-            deductions:   item_deductions,
+            optionals:    resolved_optionals,
+            deductions,
         });
     }
 
     let discount_amount = match resolved_discount_type.as_deref() {
-        Some("percentage") => {
-            (subtotal as f64 * resolved_discount_value as f64 / 100.0) as i32
-        }
-        Some("fixed") => resolved_discount_value.min(subtotal),
-        _             => 0,
+        Some("percentage") => (subtotal as f64 * resolved_discount_value as f64 / 100.0) as i32,
+        Some("fixed")      => resolved_discount_value.min(subtotal),
+        _                  => 0,
     };
     let taxable      = subtotal - discount_amount;
     let tax_rate_f64: f64 = tax_rate.to_string().parse().unwrap_or(0.14);
@@ -672,9 +535,7 @@ pub async fn create_order(
             subtotal, discount_type::text, discount_value,
             discount_amount, tax_amount, total_amount,
             amount_tendered, change_given, tip_amount, tip_payment_method, discount_id,
-            customer_name, notes,
-            voided_at, void_reason::text, voided_by,
-            created_at
+            customer_name, notes, voided_at, void_reason::text, voided_by, created_at
         "#,
     )
     .bind(body.branch_id)
@@ -700,12 +561,12 @@ pub async fn create_order(
     .fetch_one(&mut *tx)
     .await?;
 
+    // Payment splits
     if let Some(splits) = &body.payment_splits {
         for split in splits {
             validate_payment_method(&split.method)?;
             sqlx::query(
-                "INSERT INTO order_payments \
-                 (order_id, method, amount, reference) \
+                "INSERT INTO order_payments (order_id, method, amount, reference) \
                  VALUES ($1, $2::payment_method, $3, $4)",
             )
             .bind(order.id)
@@ -731,8 +592,7 @@ pub async fn create_order(
 
     for resolved in resolved_items {
         let line_total = resolved.unit_price * resolved.quantity;
-
-        let snapshot = serde_json::to_value(&resolved.deductions)
+        let snapshot   = serde_json::to_value(&resolved.deductions)
             .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
 
         let order_item = sqlx::query_as::<_, OrderItem>(
@@ -755,14 +615,13 @@ pub async fn create_order(
         .fetch_one(&mut *tx)
         .await?;
 
+        // Addons
         let mut addon_rows: Vec<OrderItemAddon> = Vec::new();
-
         for addon in &resolved.addons {
             let addon_line = addon.unit_price * addon.quantity * resolved.quantity;
             let row = sqlx::query_as::<_, OrderItemAddon>(
                 r#"INSERT INTO order_item_addons
-                    (order_item_id, addon_item_id, addon_name,
-                     unit_price, quantity, line_total)
+                    (order_item_id, addon_item_id, addon_name, unit_price, quantity, line_total)
                    VALUES ($1, $2, $3, $4, $5, $6)
                    RETURNING id, order_item_id, addon_item_id, addon_name,
                              unit_price, quantity, line_total"#,
@@ -778,14 +637,37 @@ pub async fn create_order(
             addon_rows.push(row);
         }
 
-        // Apply inventory deductions
+        // Optionals
+        let mut optional_rows: Vec<OrderItemOptional> = Vec::new();
+        for opt in &resolved.optionals {
+            let row = sqlx::query_as::<_, OrderItemOptional>(
+                r#"INSERT INTO order_item_optionals
+                    (order_item_id, optional_field_id, field_name, price,
+                     org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   RETURNING id, order_item_id, optional_field_id, field_name, price,
+                             org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted"#,
+            )
+            .bind(order_item.id)
+            .bind(opt.optional_field_id)
+            .bind(&opt.field_name)
+            .bind(opt.price)
+            .bind(opt.org_ingredient_id)
+            .bind(&opt.ingredient_name)
+            .bind(&opt.ingredient_unit)
+            .bind(opt.quantity_used)
+            .fetch_one(&mut *tx)
+            .await?;
+            optional_rows.push(row);
+        }
+
+        // Apply inventory deductions (soft-fail — warn if not tracked)
         for deduction in &resolved.deductions {
             let Some(ing_id) = deduction.org_ingredient_id else {
                 tracing::warn!(
-                    branch_id = %body.branch_id,
-                    source    = %deduction.source,
+                    source     = %deduction.source,
                     ingredient = %deduction.ingredient_name,
-                    "Deduction skipped — no org_ingredient_id linked"
+                    "Deduction skipped — no org_ingredient_id"
                 );
                 continue;
             };
@@ -807,12 +689,16 @@ pub async fn create_order(
                     branch_id         = %body.branch_id,
                     org_ingredient_id = %ing_id,
                     source            = %deduction.source,
-                    "Ingredient not tracked in branch inventory — skipping deduction"
+                    "Ingredient not tracked in branch inventory — skipping"
                 );
             }
         }
 
-        order_items_full.push(OrderItemFull { item: order_item, addons: addon_rows });
+        order_items_full.push(OrderItemFull {
+            item:      order_item,
+            addons:    addon_rows,
+            optionals: optional_rows,
+        });
     }
 
     tx.commit().await?;
@@ -847,32 +733,24 @@ pub async fn list_orders(
             bid.ok_or_else(|| AppError::NotFound("Shift not found".into()))?
         }
         (None, Some(bid)) => bid,
-        _ => return Err(AppError::BadRequest(
-            "Provide either shift_id or branch_id".into()
-        )),
+        _ => return Err(AppError::BadRequest("Provide either shift_id or branch_id".into())),
     };
 
     require_branch_access(pool.get_ref(), &claims, branch_id).await?;
 
-    let scope_condition = if query.shift_id.is_some() {
-        "o.shift_id = $1"
-    } else {
-        "o.branch_id = $1"
-    };
+    let scope_condition = if query.shift_id.is_some() { "o.shift_id = $1" } else { "o.branch_id = $1" };
     let scope_id = query.shift_id.unwrap_or(branch_id);
 
-    let mut data_filter_sql  = String::new();
-    let mut count_filter_sql = String::new();
-    #[allow(unused_assignments)]
+    let mut data_filter  = String::new();
+    let mut count_filter = String::new();
     let mut data_idx  = 4i32;
-    #[allow(unused_assignments)]
     let mut count_idx = 2i32;
 
     macro_rules! push_filter {
         ($col:expr, $opt:expr) => {
             if $opt.is_some() {
-                data_filter_sql.push_str( &format!(" AND {} ${}", $col, data_idx));
-                count_filter_sql.push_str(&format!(" AND {} ${}", $col, count_idx));
+                data_filter.push_str( &format!(" AND {} ${}", $col, data_idx));
+                count_filter.push_str(&format!(" AND {} ${}", $col, count_idx));
                 data_idx  += 1;
                 count_idx += 1;
             }
@@ -888,12 +766,11 @@ pub async fn list_orders(
 
     let data_sql = format!(
         "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT $2 OFFSET $3",
-        ORDER_SELECT, scope_condition, data_filter_sql
+        ORDER_SELECT, scope_condition, data_filter
     );
     let count_sql = format!(
-        "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id \
-         WHERE {} {}",
-        scope_condition, count_filter_sql
+        "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id WHERE {} {}",
+        scope_condition, count_filter
     );
 
     macro_rules! bind_filters {
@@ -909,11 +786,9 @@ pub async fn list_orders(
         }};
     }
 
-    let total: i64 = bind_filters!(
-        sqlx::query_scalar(&count_sql).bind(scope_id)
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
+    let total: i64 = bind_filters!(sqlx::query_scalar(&count_sql).bind(scope_id))
+        .fetch_one(pool.get_ref())
+        .await?;
 
     let data: Vec<Order> = bind_filters!(
         sqlx::query_as::<_, Order>(&data_sql)
@@ -926,13 +801,7 @@ pub async fn list_orders(
 
     let total_pages = (total as f64 / per_page as f64).ceil() as i64;
 
-    Ok(HttpResponse::Ok().json(PaginatedOrders {
-        data,
-        total,
-        page,
-        per_page,
-        total_pages,
-    }))
+    Ok(HttpResponse::Ok().json(PaginatedOrders { data, total, page, per_page, total_pages }))
 }
 
 // ── GET /orders/:id ───────────────────────────────────────────
@@ -970,10 +839,10 @@ pub async fn void_order(
 
     let updated = sqlx::query_as::<_, Order>(
         r#"UPDATE orders
-           SET status     = 'voided',
-               voided_at  = $3,
+           SET status      = 'voided',
+               voided_at   = $3,
                void_reason = $2::void_reason,
-               voided_by  = $4
+               voided_by   = $4
            WHERE id = $1
            RETURNING
                id, branch_id, shift_id, teller_id,
@@ -1026,17 +895,18 @@ pub async fn void_order(
 // ── POST /orders/preview-recipe ───────────────────────────────
 
 #[derive(Deserialize)]
-pub struct PreviewRecipeAddonInput {
+pub struct PreviewAddonInput {
     pub addon_item_id: Uuid,
-    #[serde(default = "default_addon_qty")]
+    #[serde(default = "default_qty")]
     pub quantity: i32,
 }
 
 #[derive(Deserialize)]
 pub struct PreviewRecipeRequest {
-    pub menu_item_id: Uuid,
-    pub size_label:   Option<String>,
-    pub addons:       Vec<PreviewRecipeAddonInput>,
+    pub menu_item_id:      Uuid,
+    pub size_label:        Option<String>,
+    pub addons:            Vec<PreviewAddonInput>,
+    pub optional_field_ids: Vec<Uuid>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1055,9 +925,9 @@ pub async fn preview_recipe(
     let claims = extract_claims(&req)?;
     check_permission(pool.get_ref(), &claims, "orders", "create").await?;
 
-    let mut deductions: Vec<InventoryDeduction> = Vec::new();
+    let mut result: Vec<PreviewIngredient> = Vec::new();
 
-    // ── Base recipe (item_quantity = 1 for preview) ───────────
+    // Base recipe
     let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
         if let Some(size) = &body.size_label {
             sqlx::query_as(
@@ -1086,92 +956,53 @@ pub async fn preview_recipe(
             .await?
         };
 
-    for (ing_id, qty, name, unit) in recipe_rows {
-        deductions.push(InventoryDeduction {
-            org_ingredient_id:          ing_id,
-            ingredient_name:            name,
-            unit,
-            quantity:                   qty,
-            source:                     "drink_recipe".into(),
-            replaces_org_ingredient_id: None,
-            addon_qty:                  1.0,
-        });
+    for (_, qty, name, unit) in recipe_rows {
+        result.push(PreviewIngredient { ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into() });
     }
 
-    // ── Addon contributions (item_qty = 1 for preview) ────────
-    let selected_addon_ids: Vec<Uuid> = body.addons
-        .iter()
-        .map(|a| a.addon_item_id)
-        .collect();
-
+    // Addons
     for addon in &body.addons {
         let addon_qty = addon.quantity.max(1) as f64;
-        let addon_deductions = resolve_addon_deductions(
-            pool.get_ref(),
-            body.menu_item_id,
-            addon.addon_item_id,
-            body.size_label.as_deref(),
-            1.0, // item_qty = 1 for preview
-            addon_qty,
-            &selected_addon_ids,
+        let rows: Vec<(f64, String, String)> = sqlx::query_as(
+            "SELECT quantity_used::float8, ingredient_name, ingredient_unit
+             FROM   addon_item_ingredients WHERE addon_item_id = $1",
         )
+        .bind(addon.addon_item_id)
+        .fetch_all(pool.get_ref())
         .await?;
-        deductions.extend(addon_deductions);
-    }
 
-    // ── Substitution pass ─────────────────────────────────────
-    let mut substitutions = std::collections::HashSet::new();
-    for d in &deductions {
-        if let Some(replaced) = d.replaces_org_ingredient_id {
-            substitutions.insert(replaced);
-        }
-    }
-
-    let result: Vec<PreviewIngredient> = if substitutions.is_empty() {
-        deductions
-            .into_iter()
-            .map(|d| PreviewIngredient {
-                ingredient_name: d.ingredient_name,
-                unit:            d.unit,
-                quantity:        d.quantity,
-                source:          d.source,
-            })
-            .collect()
-    } else {
-        let mut replaced_qty_per_item: std::collections::HashMap<Uuid, f64> =
-            std::collections::HashMap::new();
-        for d in &deductions {
-            if d.source == "drink_recipe" {
-                if let Some(id) = d.org_ingredient_id {
-                    if substitutions.contains(&id) {
-                        *replaced_qty_per_item.entry(id).or_insert(0.0) += d.quantity;
-                    }
-                }
-            }
-        }
-
-        let mut out: Vec<PreviewIngredient> = Vec::new();
-        for mut d in deductions {
-            if d.source == "drink_recipe" {
-                if let Some(id) = d.org_ingredient_id {
-                    if substitutions.contains(&id) { continue; }
-                }
-            }
-            if let Some(replaced_id) = d.replaces_org_ingredient_id {
-                if let Some(&per_unit) = replaced_qty_per_item.get(&replaced_id) {
-                    d.quantity = per_unit * d.addon_qty;
-                }
-            }
-            out.push(PreviewIngredient {
-                ingredient_name: d.ingredient_name,
-                unit:            d.unit,
-                quantity:        d.quantity,
-                source:          d.source,
+        for (qty, name, unit) in rows {
+            result.push(PreviewIngredient {
+                ingredient_name: name,
+                unit,
+                quantity: qty * addon_qty,
+                source: "addon".into(),
             });
         }
-        out
-    };
+    }
 
+    // Optionals
+    for &field_id in &body.optional_field_ids {
+        // Explicit type annotation fixes the inference issue
+        let row_result = sqlx::query_as::<_, (String, Option<f64>, Option<String>, Option<String>)>(
+            "SELECT name, quantity_used::float8, ingredient_name, ingredient_unit
+             FROM menu_item_optional_fields
+             WHERE id = $1 AND menu_item_id = $2 AND is_active = true",
+        )
+        .bind(field_id)
+        .bind(body.menu_item_id)
+        .fetch_optional(pool.get_ref())
+        .await?;
+    
+        if let Some((fname, Some(qty), Some(ing_name), Some(ing_unit))) = row_result {
+            result.push(PreviewIngredient {
+                ingredient_name: ing_name,
+                unit:            ing_unit,
+                quantity:        qty,
+                source:          format!("optional:{}", fname),
+            });
+        }
+    }
     Ok(HttpResponse::Ok().json(result))
 }
 
@@ -1227,7 +1058,17 @@ async fn fetch_order_items_full(
         .bind(item.id)
         .fetch_all(pool)
         .await?;
-        result.push(OrderItemFull { item, addons });
+
+        let optionals = sqlx::query_as::<_, OrderItemOptional>(
+            "SELECT id, order_item_id, optional_field_id, field_name, price, \
+                    org_ingredient_id, ingredient_name, ingredient_unit, quantity_deducted \
+             FROM order_item_optionals WHERE order_item_id = $1 ORDER BY id",
+        )
+        .bind(item.id)
+        .fetch_all(pool)
+        .await?;
+
+        result.push(OrderItemFull { item, addons, optionals });
     }
     Ok(result)
 }
@@ -1281,9 +1122,7 @@ fn validate_payment_method(method: &str) -> Result<(), AppError> {
 fn validate_discount_type(dt: &str) -> Result<(), AppError> {
     match dt {
         "percentage" | "fixed" => Ok(()),
-        _ => Err(AppError::BadRequest(
-            "discount_type must be 'percentage' or 'fixed'".into(),
-        )),
+        _ => Err(AppError::BadRequest("discount_type must be 'percentage' or 'fixed'".into())),
     }
 }
 

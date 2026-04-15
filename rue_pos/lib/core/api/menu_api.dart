@@ -7,8 +7,7 @@ class MenuApi {
   MenuApi(this._c);
 
   Future<List<Category>> categories(String orgId) async {
-    final res =
-        await _c.dio.get('/categories', queryParameters: {'org_id': orgId});
+    final res = await _c.dio.get('/categories', queryParameters: {'org_id': orgId});
     return (res.data as List).map((c) => Category.fromJson(c)).toList();
   }
 
@@ -28,10 +27,16 @@ class MenuApi {
   }
 
   Future<List<AddonItem>> addonItems(String orgId) async {
-    final res =
-        await _c.dio.get('/addon-items', queryParameters: {'org_id': orgId});
+    final res = await _c.dio.get('/addon-items', queryParameters: {'org_id': orgId});
     return (res.data as List)
         .map((a) => AddonItem.fromJson(a as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<OptionalField>> optionalFields(String menuItemId) async {
+    final res = await _c.dio.get('/menu-items/$menuItemId/optionals');
+    return (res.data as List)
+        .map((o) => OptionalField.fromJson(o as Map<String, dynamic>))
         .toList();
   }
 }

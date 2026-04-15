@@ -1,5 +1,37 @@
 import 'package:flutter/foundation.dart';
 
+// ── SelectedOptional ──────────────────────────────────────────
+@immutable
+class SelectedOptional {
+  final String optionalFieldId;
+  final String name;
+  final int    price;
+
+  const SelectedOptional({
+    required this.optionalFieldId,
+    required this.name,
+    required this.price,
+  });
+
+  Map<String, dynamic> toApiJson() => {
+    'optional_field_id': optionalFieldId,
+  };
+
+  Map<String, dynamic> toStorageJson() => {
+    'optional_field_id': optionalFieldId,
+    'name':              name,
+    'price':             price,
+  };
+
+  factory SelectedOptional.fromStorageJson(Map<String, dynamic> j) =>
+      SelectedOptional(
+        optionalFieldId: j['optional_field_id'] as String,
+        name:            (j['name']             as String?) ?? '',
+        price:           (j['price']            as int?)    ?? 0,
+      );
+}
+
+// ── SelectedAddon ─────────────────────────────────────────────
 @immutable
 class SelectedAddon {
   final String addonItemId;
@@ -33,13 +65,14 @@ class SelectedAddon {
   };
 
   factory SelectedAddon.fromStorageJson(Map<String, dynamic> j) => SelectedAddon(
-    addonItemId:   j['addon_item_id']  as String,
-    name:          (j['name']          as String?) ?? '',
-    priceModifier: (j['price_modifier'] as int?)   ?? 0,
-    quantity:      (j['quantity']      as int?)    ?? 1,
+    addonItemId:   j['addon_item_id']   as String,
+    name:          (j['name']           as String?) ?? '',
+    priceModifier: (j['price_modifier'] as int?)    ?? 0,
+    quantity:      (j['quantity']       as int?)    ?? 1,
   );
 }
 
+// ── CartItem ──────────────────────────────────────────────────
 @immutable
 class CartItem {
   final String              menuItemId;
@@ -47,7 +80,8 @@ class CartItem {
   final String?             sizeLabel;
   final int                 unitPrice;
   final int                 quantity;
-  final List<SelectedAddon> addons;
+  final List<SelectedAddon>    addons;
+  final List<SelectedOptional> optionals;
   final String?             notes;
 
   const CartItem({
@@ -55,31 +89,39 @@ class CartItem {
     required this.itemName,
     this.sizeLabel,
     required this.unitPrice,
-    this.quantity = 1,
-    this.addons   = const [],
+    this.quantity  = 1,
+    this.addons    = const [],
+    this.optionals = const [],
     this.notes,
   });
 
-  CartItem copyWith({int? quantity, List<SelectedAddon>? addons, String? notes}) =>
-      CartItem(
-        menuItemId: menuItemId,
-        itemName:   itemName,
-        sizeLabel:  sizeLabel,
-        unitPrice:  unitPrice,
-        notes:      notes    ?? this.notes,
-        quantity:   quantity ?? this.quantity,
-        addons:     addons   ?? this.addons,
-      );
+  CartItem copyWith({
+    int?                    quantity,
+    List<SelectedAddon>?    addons,
+    List<SelectedOptional>? optionals,
+    String?                 notes,
+  }) => CartItem(
+    menuItemId: menuItemId,
+    itemName:   itemName,
+    sizeLabel:  sizeLabel,
+    unitPrice:  unitPrice,
+    notes:      notes     ?? this.notes,
+    quantity:   quantity  ?? this.quantity,
+    addons:     addons    ?? this.addons,
+    optionals:  optionals ?? this.optionals,
+  );
 
-  int get addonsPrice => addons.fold(0, (s, a) => s + a.priceModifier * a.quantity);
-  int get lineTotal   => (unitPrice + addonsPrice) * quantity;
+  int get addonsPrice    => addons.fold(0, (s, a) => s + a.priceModifier * a.quantity);
+  int get optionalsPrice => optionals.fold(0, (s, o) => s + o.price);
+  int get lineTotal      => (unitPrice + addonsPrice + optionalsPrice) * quantity;
 
   Map<String, dynamic> toApiJson() => {
-    'menu_item_id': menuItemId,
-    'size_label':   sizeLabel,
-    'quantity':     quantity,
-    'addons':       addons.map((a) => a.toApiJson()).toList(),
-    'notes':        notes,
+    'menu_item_id':       menuItemId,
+    'size_label':         sizeLabel,
+    'quantity':           quantity,
+    'addons':             addons.map((a) => a.toApiJson()).toList(),
+    'optional_field_ids': optionals.map((o) => o.optionalFieldId).toList(),
+    'notes':              notes,
   };
 
   Map<String, dynamic> toStorageJson() => {
@@ -87,6 +129,7 @@ class CartItem {
     'item_name':  itemName,
     'unit_price': unitPrice,
     'addons':     addons.map((a) => a.toStorageJson()).toList(),
+    'optionals':  optionals.map((o) => o.toStorageJson()).toList(),
   };
 
   factory CartItem.fromStorageJson(Map<String, dynamic> j) => CartItem(
@@ -99,25 +142,34 @@ class CartItem {
     addons: (j['addons'] as List? ?? [])
         .map((a) => SelectedAddon.fromStorageJson(a as Map<String, dynamic>))
         .toList(),
+    optionals: (j['optionals'] as List? ?? [])
+        .map((o) => SelectedOptional.fromStorageJson(o as Map<String, dynamic>))
+        .toList(),
   );
 
-  // Two cart items match if they have the same set of addon_item_ids
-  // (order-independent). drinkOptionItemId is gone.
   static bool addonsMatch(List<SelectedAddon> a, List<SelectedAddon> b) {
     if (a.length != b.length) return false;
     final aIds = a.map((x) => x.addonItemId).toSet();
     final bIds = b.map((x) => x.addonItemId).toSet();
     return aIds.containsAll(bIds) && bIds.containsAll(aIds);
   }
+
+  static bool optionalsMatch(List<SelectedOptional> a, List<SelectedOptional> b) {
+    if (a.length != b.length) return false;
+    final aIds = a.map((x) => x.optionalFieldId).toSet();
+    final bIds = b.map((x) => x.optionalFieldId).toSet();
+    return aIds.containsAll(bIds) && bIds.containsAll(aIds);
+  }
 }
 
+// ── DiscountType ──────────────────────────────────────────────
 enum DiscountType { percentage, fixed }
 
 extension DiscountTypeX on DiscountType {
   String get apiValue => name;
 }
 
-// ── Payment split ─────────────────────────────────────────────
+// ── PaymentSplit ──────────────────────────────────────────────
 @immutable
 class PaymentSplit {
   final String method;
@@ -131,6 +183,7 @@ class PaymentSplit {
       PaymentSplit(method: method ?? this.method, amount: amount ?? this.amount);
 }
 
+// ── CartState ─────────────────────────────────────────────────
 @immutable
 class CartState {
   final List<CartItem>      items;

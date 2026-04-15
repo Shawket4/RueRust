@@ -1,185 +1,174 @@
 #!/usr/bin/env bash
-# patch_order_screen.sh
-# Usage: ./patch_order_screen.sh path/to/order_screen.dart
-#
-# Edge-case fixes applied to CheckoutSheet._place() and build():
-#   1. Cash tendered < order total → block with error
-#   2. Cash mode with no tendered → block with error
-#   3. Tip > (tendered - total) → block with error
-#   4. Split total validation now accounts for tip
-#   5. No payment method selected → block with error
-#   6. Empty cart → block with error
-#   7. Double-tap guard: early return if _loading already true
-#   8. discountType forwarded as raw string (already correct for API layer)
+# =============================================================
+# fix_v6_duplicates.sh
+# Removes duplicate field/getter declarations inserted by
+# the two patch runs, and adds missing menuApiProvider import.
+# Run from Flutter project root: bash fix_v6_duplicates.sh
+# =============================================================
+set -e
 
-set -euo pipefail
+echo "=== Fix v6 duplicate declarations ==="
 
-TARGET="${1:-}"
-if [[ -z "$TARGET" ]]; then
-  echo "Usage: $0 path/to/order_screen.dart" >&2
-  exit 1
-fi
-if [[ ! -f "$TARGET" ]]; then
-  echo "Error: file not found: $TARGET" >&2
-  exit 1
-fi
+python3 - << 'PYEOF'
+with open('lib/features/order/order_screen.dart', 'r') as f:
+    src = f.read()
 
-python3 - "$TARGET" <<'PYEOF'
-import sys, shutil, pathlib, datetime
+original_len = len(src)
 
-path = pathlib.Path(sys.argv[1])
-src  = path.read_text(encoding="utf-8")
-original = src
-patches_applied = []
+# ── 1. Remove the SECOND set of duplicate field declarations ──
+# The first set (lines ~876-878) is correct and used.
+# The second set (lines ~881-883) is the duplicate from the second patch run.
+# They look like:
+#   List<OptionalField> _optionalFields       = [];   <- keep (first)
+#   bool _optionalFieldsLoading = false;              <- keep (first)
+#   final Set<String> _selectedOptionals = {};        <- keep (first)
+#   ...
+#   List<OptionalField> _optionalFields       = [];   <- remove (second)
+#   bool _optionalFieldsLoading = false;              <- remove (second)
+#   final Set<String> _selectedOptionals = {};        <- remove (second)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PATCH 1 — Replace the entire _place() validation block (up to setState loading)
-# Inserts: double-tap guard, empty cart, no payment, cash coverage, tip sanity,
-#          and fixes split+tip validation.
-# ─────────────────────────────────────────────────────────────────────────────
-OLD1 = (
-    "    if (shift == null) {\n"
-    "      setState(() => _error = 'No open shift');\n"
-    "      return;\n"
-    "    }\n"
-    "\n"
-    "    // Validate split amounts sum to total if split mode\n"
-    "    List<PaymentSplit>? splits;\n"
-    "    if (_isSplit) {\n"
-    "      splits = _buildSplits();\n"
-    "      if (splits.isEmpty) {\n"
-    "        setState(() => _error = 'Add at least one payment');\n"
-    "        return;\n"
-    "      }\n"
-    "      final splitTotal = splits.fold(0, (s, p) => s + p.amount);\n"
-    "      if (splitTotal != cart.total) {\n"
-    "        setState(() => _error =\n"
-    "            'Split total ${egp(splitTotal)} must equal order total ${egp(cart.total)}');\n"
-    "        return;\n"
-    "      }\n"
-    "    }\n"
-    "\n"
-    "    final int? tendered = _showTendered && !_isSplit\n"
-    "        ? (double.tryParse(_tenderedCtrl.text) != null\n"
-    "            ? (double.parse(_tenderedCtrl.text) * 100).round()\n"
-    "            : null)\n"
-    "        : null;\n"
-    "\n"
-    "    final int? tip = _showTendered && !_isSplit\n"
-    "        ? (double.tryParse(_tipCtrl.text) != null &&\n"
-    "                double.parse(_tipCtrl.text) > 0\n"
-    "            ? (double.parse(_tipCtrl.text) * 100).round()\n"
-    "            : null)\n"
-    "        : null;\n"
-    "\n"
-    "    setState(() {\n"
-    "      _loading = true;\n"
-    "      _error = null;\n"
-    "    });\n"
-)
+import re
 
-NEW1 = (
-    "    // Guard: prevent double-tap\n"
-    "    if (_loading) return;\n"
-    "\n"
-    "    // Guard: empty cart\n"
-    "    if (cart.isEmpty) {\n"
-    "      setState(() => _error = 'Cart is empty');\n"
-    "      return;\n"
-    "    }\n"
-    "\n"
-    "    if (shift == null) {\n"
-    "      setState(() => _error = 'No open shift');\n"
-    "      return;\n"
-    "    }\n"
-    "\n"
-    "    // Guard: payment method required (non-split)\n"
-    "    if (!_isSplit && (cart.payment.isEmpty)) {\n"
-    "      setState(() => _error = 'Select a payment method');\n"
-    "      return;\n"
-    "    }\n"
-    "\n"
-    "    // Parse cash tendered & tip up-front so validation can use them\n"
-    "    final int? tendered = _showTendered && !_isSplit\n"
-    "        ? (double.tryParse(_tenderedCtrl.text) != null\n"
-    "            ? (double.parse(_tenderedCtrl.text) * 100).round()\n"
-    "            : null)\n"
-    "        : null;\n"
-    "\n"
-    "    final int? tip = _showTendered && !_isSplit\n"
-    "        ? (double.tryParse(_tipCtrl.text) != null &&\n"
-    "                double.parse(_tipCtrl.text) > 0\n"
-    "            ? (double.parse(_tipCtrl.text) * 100).round()\n"
-    "            : null)\n"
-    "        : null;\n"
-    "\n"
-    "    // Cash-mode validations\n"
-    "    if (_showTendered && !_isSplit) {\n"
-    "      if (tendered == null || tendered == 0) {\n"
-    "        setState(() => _error = 'Enter the cash amount tendered');\n"
-    "        return;\n"
-    "      }\n"
-    "      if (tendered < cart.total) {\n"
-    "        setState(() => _error =\n"
-    "            'Tendered ${egp(tendered)} is less than total ${egp(cart.total)}');\n"
-    "        return;\n"
-    "      }\n"
-    "      final tipAmt = tip ?? 0;\n"
-    "      if (tipAmt > (tendered - cart.total)) {\n"
-    "        setState(() => _error =\n"
-    "            'Tip ${egp(tipAmt)} exceeds change ${egp(tendered - cart.total)}');\n"
-    "        return;\n"
-    "      }\n"
-    "    }\n"
-    "\n"
-    "    // Validate split amounts sum to total + tip if split mode\n"
-    "    List<PaymentSplit>? splits;\n"
-    "    if (_isSplit) {\n"
-    "      if (_activeSplitMethods.isEmpty) {\n"
-    "        setState(() => _error = 'Select at least one payment method');\n"
-    "        return;\n"
-    "      }\n"
-    "      splits = _buildSplits();\n"
-    "      if (splits.isEmpty) {\n"
-    "        setState(() => _error = 'Enter amounts for selected payment methods');\n"
-    "        return;\n"
-    "      }\n"
-    "      final splitTip = ((double.tryParse(_tipCtrl.text) ?? 0) * 100).round();\n"
-    "      final splitTotal = splits.fold(0, (s, p) => s + p.amount);\n"
-    "      final expectedTotal = cart.total + splitTip;\n"
-    "      if (splitTotal != expectedTotal) {\n"
-    "        setState(() => _error =\n"
-    "            'Split total ${egp(splitTotal)} must equal order total ${egp(expectedTotal)}');\n"
-    "        return;\n"
-    "      }\n"
-    "    }\n"
-    "\n"
-    "    setState(() {\n"
-    "      _loading = true;\n"
-    "      _error = null;\n"
-    "    });\n"
-)
+# Remove duplicate field block (second occurrence of the three fields together)
+# We'll do it by finding the pattern twice and removing the second occurrence
 
-if OLD1 in src:
-    src = src.replace(OLD1, NEW1, 1)
-    patches_applied.append("1 - added double-tap guard, empty cart, no payment, cash coverage, tip sanity, split+tip validation")
+def remove_second_occurrence(text, pattern):
+    first = text.find(pattern)
+    if first == -1:
+        return text, False
+    second = text.find(pattern, first + len(pattern))
+    if second == -1:
+        return text, False
+    return text[:second] + text[second + len(pattern):], True
+
+# The three field declarations that got duplicated
+field1 = '  List<OptionalField> _optionalFields       = [];\n'
+field2 = '  bool                _optionalFieldsLoading = false;\n'
+field3 = '  final Set<String>   _selectedOptionals     = {};\n'
+
+# Also try variant spellings from the two different patches
+variants_field1 = [
+    '  List<OptionalField> _optionalFields       = [];\n',
+    '  List<OptionalField> _optionalFields = [];\n',
+]
+variants_field2 = [
+    '  bool                _optionalFieldsLoading = false;\n',
+    '  bool _optionalFieldsLoading = false;\n',
+]
+variants_field3 = [
+    '  final Set<String>   _selectedOptionals     = {};\n',
+    '  final Set<String> _selectedOptionals = {};\n',
+]
+
+changed = False
+for v1 in variants_field1:
+    src, ok = remove_second_occurrence(src, v1)
+    if ok:
+        print(f"  ✓ Removed duplicate: _optionalFields")
+        changed = True
+        break
+
+for v2 in variants_field2:
+    src, ok = remove_second_occurrence(src, v2)
+    if ok:
+        print(f"  ✓ Removed duplicate: _optionalFieldsLoading")
+        changed = True
+        break
+
+for v3 in variants_field3:
+    src, ok = remove_second_occurrence(src, v3)
+    if ok:
+        print(f"  ✓ Removed duplicate: _selectedOptionals")
+        changed = True
+        break
+
+# ── 2. Remove duplicate _optionalsTotal getter ────────────────
+getter = '''  int get _optionalsTotal =>
+      _optionalFields
+          .where((f) => _selectedOptionals.contains(f.id))
+          .fold(0, (s, f) => s + f.price);'''
+
+src, ok = remove_second_occurrence(src, getter)
+if ok:
+    print("  ✓ Removed duplicate: _optionalsTotal getter")
 else:
-    print("  WARN patch 1: validation block not found - skipping")
+    # Try alternate formatting
+    getter2 = '''  int get _optionalsTotal =>
+      _optionalFields
+          .where((f) => _selectedOptionals.contains(f.id))
+          .fold(0, (s, f) => s + f.price);\n'''
+    src, ok = remove_second_occurrence(src, getter2)
+    if ok:
+        print("  ✓ Removed duplicate: _optionalsTotal getter (alt)")
+    else:
+        print("  ~ _optionalsTotal duplicate not found by string match")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Write output
-# ─────────────────────────────────────────────────────────────────────────────
-if src == original:
-    print("No changes made - all patch targets were missing.")
-    sys.exit(0)
+# ── 3. Fix menuApiProvider undefined — add import ─────────────
+menu_api_import = "import '../../core/api/menu_api.dart';"
+if menu_api_import not in src:
+    # Insert after recipe_api import
+    recipe_import = "import '../../core/api/recipe_api.dart';"
+    if recipe_import in src:
+        src = src.replace(
+            recipe_import,
+            recipe_import + '\n' + menu_api_import,
+            1
+        )
+        print("  ✓ Added menu_api.dart import")
+    else:
+        # Insert after order_api import
+        order_import = "import '../../core/api/order_api.dart';"
+        if order_import in src:
+            src = src.replace(
+                order_import,
+                order_import + '\n' + menu_api_import,
+                1
+            )
+            print("  ✓ Added menu_api.dart import (after order_api)")
+        else:
+            print("  ✗ Could not find anchor for menu_api import")
+else:
+    print("  ✓ menu_api.dart already imported")
 
-backup = path.with_suffix(f".dart.bak_{datetime.datetime.now():%Y%m%d_%H%M%S}")
-shutil.copy2(path, backup)
-path.write_text(src, encoding="utf-8")
+# ── 4. Remove unused allAddons local variable in _addToCart ──
+# line: final allAddons = ref.read(menuProvider).allAddons;
+# This was left over from before and is now unused
+old_all_addons = '''    final allAddons   = ref.read(menuProvider).allAddons;
+    final slottedTypes = widget.item.addonSlots.map((s) => s.addonType).toSet();'''
+if old_all_addons in src:
+    src = src.replace(old_all_addons,
+        '    final slottedTypes = widget.item.addonSlots.map((s) => s.addonType).toSet();', 1)
+    print("  ✓ Removed unused allAddons variable")
+else:
+    # Try other variant
+    old2 = '    final allAddons    = ref.read(menuProvider).allAddons;\n'
+    if old2 in src:
+        src = src.replace(old2, '', 1)
+        print("  ✓ Removed unused allAddons variable (alt)")
+    else:
+        print("  ~ allAddons variable not found or already removed")
 
-print(f"Backup : {backup}")
-print(f"Patched: {path}")
-print(f"Applied {len(patches_applied)} patch(es):")
-for p in patches_applied:
-    print(f"  + {p}")
+# ── 5. Remove unused _emptyAddon function ────────────────────
+empty_addon = '''// Safe sentinel — no orgId field, matches current AddonItem constructor
+AddonItem _emptyAddon() => const AddonItem(
+    id: '', name: '', addonType: '', defaultPrice: 0,
+    isActive: false, displayOrder: 0);'''
+if empty_addon in src:
+    src = src.replace(empty_addon, '', 1)
+    print("  ✓ Removed unused _emptyAddon function")
+else:
+    print("  ~ _emptyAddon not found or already removed")
+
+final_len = len(src)
+print(f"\n  File size: {original_len} → {final_len} chars ({original_len - final_len} removed)")
+
+with open('lib/features/order/order_screen.dart', 'w') as f:
+    f.write(src)
+
+print("\n✓ order_screen.dart cleaned up")
 PYEOF
+
+echo ""
+echo "=== Verifying remaining errors ==="
+flutter analyze lib/features/order/order_screen.dart 2>&1 | grep -E "error|Error" | head -20 || echo "No errors found"
+flutter analyze lib/core/providers/menu_notifier.dart 2>&1 | grep -E "error|Error" | head -10 || echo "No errors found"

@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lottie/lottie.dart';
 import 'package:rue_pos/core/api/client.dart';
+import 'package:rue_pos/core/api/menu_api.dart';
 import 'package:rue_pos/core/models/pending_action.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/order_api.dart';
 import '../../core/api/discount_api.dart';
+import '../../core/api/recipe_api.dart';
 import '../../core/models/discount.dart';
 import '../../core/models/cart.dart';
 import '../../core/models/menu.dart';
@@ -45,6 +47,15 @@ String _methodLabel(String m) => switch (m) {
     };
 
 bool _isCashMethod(String m) => m == 'cash' || m == 'talabat_cash';
+
+// Safe sentinel — no orgId field, matches current AddonItem constructor
+AddonItem _emptyAddon() => const AddonItem(
+    id: '',
+    name: '',
+    addonType: '',
+    defaultPrice: 0,
+    isActive: false,
+    displayOrder: 0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
@@ -239,10 +250,9 @@ class _TopBar extends ConsumerWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  final Color color;
+  final Color color, textColor;
   final IconData icon;
   final String text;
-  final Color textColor;
   final bool animate;
   const _StatusBanner({
     required this.color,
@@ -301,8 +311,9 @@ class _SyncBtnState extends ConsumerState<_SyncBtn>
     _spinCtrl.repeat();
     try {
       final orgId = ref.read(authProvider).user?.orgId;
-      if (orgId != null)
+      if (orgId != null) {
         await ref.read(menuProvider.notifier).load(orgId, force: true);
+      }
     } finally {
       if (mounted) {
         _spinCtrl.stop();
@@ -680,12 +691,13 @@ class _ImageSkeletonState extends State<_ImageSkeleton>
 class _CatStyle {
   final IconData icon;
   final Color bgTop, bgBottom, iconColor, accent;
-  const _CatStyle(
-      {required this.icon,
-      required this.bgTop,
-      required this.bgBottom,
-      required this.iconColor,
-      required this.accent});
+  const _CatStyle({
+    required this.icon,
+    required this.bgTop,
+    required this.bgBottom,
+    required this.iconColor,
+    required this.accent,
+  });
 
   static _CatStyle of(String name) {
     final n = name.toLowerCase();
@@ -927,13 +939,26 @@ class _CardBg extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class ItemDetailSheet extends ConsumerStatefulWidget {
   final MenuItem item;
-  const ItemDetailSheet({super.key, required this.item});
+  // When non-null the sheet is in edit mode: pre-populate from existingItem
+  // and call replaceAt(editIndex) instead of add().
+  final int? editIndex;
+  final CartItem? existingItem;
 
-  static void show(BuildContext ctx, MenuItem item) => showModalBottomSheet(
-      context: ctx,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => ItemDetailSheet(item: item));
+  const ItemDetailSheet({
+    super.key,
+    required this.item,
+    this.editIndex,
+    this.existingItem,
+  });
+
+  static void show(BuildContext ctx, MenuItem item,
+          {int? editIndex, CartItem? existingItem}) =>
+      showModalBottomSheet(
+          context: ctx,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => ItemDetailSheet(
+              item: item, editIndex: editIndex, existingItem: existingItem));
 
   @override
   ConsumerState<ItemDetailSheet> createState() => _ItemDetailSheetState();
@@ -943,13 +968,24 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   String? _selectedSize;
   int _qty = 1;
 
-  // Keyed by slot.id → selected addonItem.id (single-select slots)
+  // Single-select slots: slotId → addonItemId
   final Map<String, String> _single = {};
-  // Keyed by slot.id → Set of selected addonItem.ids (multi-select slots)
-  final Map<String, Set<String>> _multi = {};
+  // Multi-select slots:  slotId → { addonItemId → quantity }
+  final Map<String, Map<String, int>> _multi = {};
+  // Unslotted global extras: addonItemId → quantity
+  final Map<String, int> _extras = {};
 
-  // Synthetic slot id used for global addon types not covered by any custom slot
-  static const _kExtrasSlotId = '__extras__';
+  // Optional fields state
+  List<OptionalField> _optionalFields = [];
+  bool _optionalFieldsLoading = false;
+  final Set<String> _selectedOptionals = {};
+
+  // Recipe preview state
+  bool _recipeLoading = false;
+  List<RecipeIngredient>? _recipeResult;
+  String? _recipeError;
+
+  bool get _isEdit => widget.editIndex != null && widget.existingItem != null;
 
   @override
   void initState() {
@@ -957,133 +993,330 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     if (widget.item.sizes.isNotEmpty) {
       _selectedSize = widget.item.sizes.first.label;
     }
+
+    // Load optional fields for this drink
+    _loadOptionalFields();
+
+    // Pre-populate from existing cart item when editing
+    if (_isEdit) {
+      final existing = widget.existingItem!;
+      _selectedSize = existing.sizeLabel;
+      _qty = existing.quantity;
+
+      final allAddons = ref.read(menuProvider).allAddons;
+      final slottedTypes =
+          widget.item.addonSlots.map((s) => s.addonType).toSet();
+      for (final so in existing.optionals) {
+        _selectedOptionals.add(so.optionalFieldId);
+      }
+
+      for (final sa in existing.addons) {
+        // Find the addon's type
+        final addon = allAddons.where((a) => a.id == sa.addonItemId);
+        if (addon.isEmpty) continue;
+        final addonType = addon.first.addonType;
+
+        // Find matching slot
+        final matchingSlot =
+            widget.item.addonSlots.where((s) => s.addonType == addonType);
+
+        if (matchingSlot.isNotEmpty) {
+          final slot = matchingSlot.first;
+          final isMulti = (slot.maxSelections ?? 2) > 1;
+          if (isMulti) {
+            _multi.putIfAbsent(slot.id, () => {})[sa.addonItemId] = sa.quantity;
+          } else {
+            _single[slot.id] = sa.addonItemId;
+          }
+        } else if (slottedTypes.contains(addonType) == false) {
+          // Goes into extras
+          _extras[sa.addonItemId] = sa.quantity;
+        }
+      }
+    }
   }
 
-  // ── Derived ───────────────────────────────────────────────
+  // ── Pricing ───────────────────────────────────────────────
 
   int get _unitPrice => widget.item.priceForSize(_selectedSize);
+
+  int get _optionalsTotal => _optionalFields
+      .where((f) => _selectedOptionals.contains(f.id))
+      .fold(0, (s, f) => s + f.price);
 
   int get _addonsTotal {
     final allAddons = ref.read(menuProvider).allAddons;
     int t = 0;
-    for (final id in _allSelectedAddonIds) {
-      final matches = allAddons.where((a) => a.id == id);
+
+    for (final aId in _single.values) {
+      final matches = allAddons.where((a) => a.id == aId);
       if (matches.isNotEmpty) t += matches.first.defaultPrice;
+    }
+    for (final qtyMap in _multi.values) {
+      for (final entry in qtyMap.entries) {
+        final matches = allAddons.where((a) => a.id == entry.key);
+        if (matches.isNotEmpty) t += matches.first.defaultPrice * entry.value;
+      }
+    }
+    for (final entry in _extras.entries) {
+      final matches = allAddons.where((a) => a.id == entry.key);
+      if (matches.isNotEmpty) t += matches.first.defaultPrice * entry.value;
     }
     return t;
   }
 
-  int get _lineTotal => (_unitPrice + _addonsTotal) * _qty;
+  int get _lineTotal => (_unitPrice + _addonsTotal + _optionalsTotal) * _qty;
 
-  /// Flat set of every selected addon_item_id across all slots.
-  Set<String> get _allSelectedAddonIds {
-    final ids = <String>{};
-    ids.addAll(_single.values);
-    for (final s in _multi.values) {
-      ids.addAll(s);
-    }
-    return ids;
-  }
+  // ── Validation ────────────────────────────────────────────
 
-  /// Returns the display name of the first required slot whose
-  /// min_selections threshold is not yet met, or null if all satisfied.
   String? get _firstUnsatisfiedSlot {
-    for (final slot in widget.item.addonSlots) {
-      if (!slot.isRequired) continue;
-      final min = slot.minSelections.clamp(1, 999);
-      final count = _countForSlot(slot);
-      if (count < min) return slot.displayName;
+    for (final s in widget.item.addonSlots) {
+      if (!s.isRequired) continue;
+      final min = s.minSelections.clamp(1, 999);
+      final isMulti = (s.maxSelections ?? 2) > 1;
+      final count = isMulti
+          ? (_multi[s.id]?.length ?? 0)
+          : (_single.containsKey(s.id) ? 1 : 0);
+      if (count < min) return s.displayName;
     }
     return null;
   }
 
   bool get _canAdd => _firstUnsatisfiedSlot == null;
 
-  int _countForSlot(AddonSlot slot) {
-    final isMulti = (slot.maxSelections ?? 2) > 1;
-    return isMulti
-        ? (_multi[slot.id] ?? {}).length
-        : (_single.containsKey(slot.id) ? 1 : 0);
-  }
-
   // ── Toggle helpers ────────────────────────────────────────
 
-  void _toggleSingle(String slotId, String addonItemId, bool required) =>
+  void _toggleSingle(String slotId, String addonId, bool required) =>
       setState(() {
-        if (_single[slotId] == addonItemId) {
+        if (_single[slotId] == addonId) {
           if (!required) _single.remove(slotId);
         } else {
-          _single[slotId] = addonItemId;
+          _single[slotId] = addonId;
         }
+        _clearRecipe();
       });
 
-  void _toggleMulti(String slotId, String addonItemId, int? maxSel) =>
-      setState(() {
-        final s = _multi.putIfAbsent(slotId, () => {});
-        if (s.contains(addonItemId)) {
-          s.remove(addonItemId);
-          if (s.isEmpty) _multi.remove(slotId);
+  void _toggleMulti(String slotId, String addonId, int? maxSel) => setState(() {
+        final m = _multi.putIfAbsent(slotId, () => {});
+        if (m.containsKey(addonId)) {
+          m.remove(addonId);
+          if (m.isEmpty) _multi.remove(slotId);
         } else {
-          if (maxSel != null && s.length >= maxSel) s.clear();
-          s.add(addonItemId);
+          if (maxSel != null && m.length >= maxSel) {
+            // At max: replace oldest (clear all then add)
+            m.clear();
+          }
+          m[addonId] = 1;
         }
+        _clearRecipe();
       });
 
-  // ── Add to cart ───────────────────────────────────────────
+  void _incrementMulti(String slotId, String addonId) => setState(() {
+        _multi.putIfAbsent(slotId, () => {})[addonId] =
+            (_multi[slotId]![addonId] ?? 1) + 1;
+        _clearRecipe();
+      });
 
-  void _addToCart() {
+  void _decrementMulti(String slotId, String addonId) => setState(() {
+        final m = _multi[slotId];
+        if (m == null) return;
+        final cur = m[addonId] ?? 1;
+        if (cur <= 1) {
+          m.remove(addonId);
+          if (m.isEmpty) _multi.remove(slotId);
+        } else {
+          m[addonId] = cur - 1;
+        }
+        _clearRecipe();
+      });
+
+  void _toggleExtra(String addonId) => setState(() {
+        if (_extras.containsKey(addonId)) {
+          _extras.remove(addonId);
+        } else {
+          _extras[addonId] = 1;
+        }
+        _clearRecipe();
+      });
+
+  void _incrementExtra(String addonId) => setState(() {
+        _extras[addonId] = (_extras[addonId] ?? 1) + 1;
+        _clearRecipe();
+      });
+
+  void _decrementExtra(String addonId) => setState(() {
+        final cur = _extras[addonId] ?? 1;
+        if (cur <= 1) {
+          _extras.remove(addonId);
+        } else {
+          _extras[addonId] = cur - 1;
+        }
+        _clearRecipe();
+      });
+
+  // ── Recipe preview ────────────────────────────────────────
+
+  void _clearRecipe() {
+    _recipeResult = null;
+    _recipeError = null;
+  }
+
+  Future<void> _fetchRecipe() async {
+    setState(() {
+      _recipeLoading = true;
+      _recipeError = null;
+    });
+    try {
+      final addons = _buildSelectedAddons();
+      final optionals = _buildSelectedOptionals();
+      final result = await ref.read(recipeApiProvider).preview(
+            menuItemId: widget.item.id,
+            sizeLabel: _selectedSize,
+            addons: addons,
+            optionals: optionals,
+          );
+      if (mounted)
+        setState(() {
+          _recipeResult = result;
+          _recipeLoading = false;
+        });
+    } catch (e) {
+      if (mounted)
+        setState(() {
+          _recipeError = 'Could not load recipe';
+          _recipeLoading = false;
+        });
+    }
+  }
+
+  void _showRecipeSheet() {
+    _fetchRecipe();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          // Mirror loading state into sheet via listen
+          return _RecipeSheet(
+            itemName: normaliseName(widget.item.name),
+            sizeLabel: _selectedSize,
+            loading: _recipeLoading,
+            result: _recipeResult,
+            error: _recipeError,
+            onRefresh: () {
+              _fetchRecipe();
+              // Sheet will pick up state changes on next frame via
+              // the parent setState calls in _fetchRecipe
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Optional fields ──────────────────────────────────────
+
+  Future<void> _loadOptionalFields() async {
+    setState(() => _optionalFieldsLoading = true);
+    try {
+      final fields =
+          await ref.read(menuApiProvider).optionalFields(widget.item.id);
+      if (mounted) {
+        setState(() {
+          _optionalFields = fields.where((f) => f.isActive).toList();
+          _optionalFieldsLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _optionalFieldsLoading = false);
+    }
+  }
+
+  List<SelectedOptional> _buildSelectedOptionals() {
+    return _optionalFields
+        .where((f) => _selectedOptionals.contains(f.id))
+        .map((f) => SelectedOptional(
+              optionalFieldId: f.id,
+              name: f.name,
+              price: f.price,
+            ))
+        .toList();
+  }
+
+  // ── Build selected addons list ────────────────────────────
+
+  List<SelectedAddon> _buildSelectedAddons() {
     final allAddons = ref.read(menuProvider).allAddons;
+    final result = <SelectedAddon>[];
 
-    // Helper: find addon by id, returns null if not found
-    AddonItem findAddon(String id) {
+    AddonItem? findAddon(String id) {
       final matches = allAddons.where((a) => a.id == id);
-      return matches.isNotEmpty
-          ? matches.first
-          : AddonItem(
-              id: '',
-              name: '',
-              type: '',
-              defaultPrice: 0,
-              isActive: false,
-              displayOrder: 0);
+      return matches.isNotEmpty ? matches.first : null;
     }
 
-    final addons = <SelectedAddon>[];
-
-    // Single-select slots
-    _single.forEach((slotId, addonItemId) {
-      final a = findAddon(addonItemId);
-      if (a.id.isNotEmpty) {
-        addons.add(SelectedAddon(
-          addonItemId: a.id,
-          name: a.name,
-          priceModifier: a.defaultPrice,
-        ));
-      }
-    });
-
-    // Multi-select slots (including __extras__)
-    _multi.forEach((slotId, ids) {
-      for (final id in ids) {
-        final a = findAddon(id);
-        if (a.id.isNotEmpty) {
-          addons.add(SelectedAddon(
+    // Single-select slots (always qty 1)
+    for (final aId in _single.values) {
+      final a = findAddon(aId);
+      if (a != null) {
+        result.add(SelectedAddon(
             addonItemId: a.id,
             name: a.name,
             priceModifier: a.defaultPrice,
-          ));
+            quantity: 1));
+      }
+    }
+
+    // Multi-select slots with quantities
+    for (final qtyMap in _multi.values) {
+      for (final entry in qtyMap.entries) {
+        final a = findAddon(entry.key);
+        if (a != null) {
+          result.add(SelectedAddon(
+              addonItemId: a.id,
+              name: a.name,
+              priceModifier: a.defaultPrice,
+              quantity: entry.value));
         }
       }
-    });
+    }
 
-    ref.read(cartProvider.notifier).add(CartItem(
-          menuItemId: widget.item.id,
-          itemName: normaliseName(widget.item.name),
-          sizeLabel: _selectedSize,
-          unitPrice: _unitPrice,
-          quantity: _qty,
-          addons: addons,
-        ));
+    // Extras with quantities
+    for (final entry in _extras.entries) {
+      final a = findAddon(entry.key);
+      if (a != null) {
+        result.add(SelectedAddon(
+            addonItemId: a.id,
+            name: a.name,
+            priceModifier: a.defaultPrice,
+            quantity: entry.value));
+      }
+    }
+
+    return result;
+  }
+
+  // ── Cart action ───────────────────────────────────────────
+
+  void _addToCart() {
+    final addons = _buildSelectedAddons();
+    final optionals = _buildSelectedOptionals();
+    final cartItem = CartItem(
+      menuItemId: widget.item.id,
+      itemName: normaliseName(widget.item.name),
+      sizeLabel: _selectedSize,
+      unitPrice: _unitPrice,
+      quantity: _qty,
+      addons: addons,
+      optionals: optionals,
+    );
+
+    final notifier = ref.read(cartProvider.notifier);
+    if (_isEdit) {
+      notifier.replaceAt(widget.editIndex!, cartItem);
+    } else {
+      notifier.add(cartItem);
+    }
     Navigator.pop(context);
   }
 
@@ -1091,20 +1324,19 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final menuState = ref.watch(menuProvider);
-    final byType = menuState.addonsByType;
     final mq = MediaQuery.of(context);
+    final allAddons = ref.watch(menuProvider).allAddons;
+    final byType = ref.watch(menuProvider).addonsByType;
 
-    // Types covered by custom slots on this drink
+    // Types covered by defined slots on this drink
     final slottedTypes = widget.item.addonSlots.map((s) => s.addonType).toSet();
 
-    // Global addon types always shown on every drink
+    // Global addon types not covered by any custom slot — shown in Extras
     const globalTypes = ['milk_type', 'coffee_type', 'extra'];
-
-    // Active addons for global types not already covered by a custom slot
     final extrasAddons = globalTypes
         .where((t) => !slottedTypes.contains(t))
         .expand((t) => byType[t] ?? <AddonItem>[])
+        .where((a) => a.isActive)
         .toList();
 
     return Padding(
@@ -1149,7 +1381,39 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                               height: 1.4)),
                     ],
                   ])),
-              const SizedBox(width: 16),
+              const SizedBox(width: 10),
+
+              // Recipe button
+              GestureDetector(
+                onTap: _showRecipeSheet,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                      color: AppColors.bg,
+                      borderRadius: BorderRadius.circular(AppRadius.xs),
+                      border: Border.all(color: AppColors.border)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    _recipeLoading
+                        ? const SizedBox(
+                            width: 11,
+                            height: 11,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.5, color: AppColors.primary))
+                        : Icon(Icons.science_outlined,
+                            size: 13, color: AppColors.textSecondary),
+                    const SizedBox(width: 5),
+                    Text('Recipe',
+                        style: cairo(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textSecondary)),
+                  ]),
+                ),
+              ),
+              const SizedBox(width: 10),
+
+              // Price badge
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 200),
                 transitionBuilder: (child, anim) => SlideTransition(
@@ -1164,7 +1428,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                   decoration: BoxDecoration(
                       color: AppColors.primary.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(AppRadius.sm)),
-                  child: Text(egp(_unitPrice + _addonsTotal),
+                  child: Text(egp(_unitPrice + _addonsTotal + _optionalsTotal),
                       style: cairo(
                           fontSize: 15,
                           fontWeight: FontWeight.w800,
@@ -1193,46 +1457,82 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                               sublabel: egp(s.price),
                               selected: s.label == _selectedSize,
                               checkbox: false,
-                              onTap: () =>
-                                  setState(() => _selectedSize = s.label),
+                              onTap: () => setState(() {
+                                _selectedSize = s.label;
+                                _clearRecipe();
+                              }),
                             ))
                         .toList()),
                 const SizedBox(height: 20),
               ],
 
-              // Custom slot groups (defined in menu_item_addon_slots)
-              for (final slot in widget.item.addonSlots
+              // Custom slots
+              for (final s in widget.item.addonSlots
                 ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder))) ...[
-                _AddonSlotCard(
-                  slotId: slot.id,
-                  displayName: slot.displayName,
-                  isRequired: slot.isRequired,
-                  minSelections: slot.minSelections,
-                  maxSelections: slot.maxSelections,
-                  availableAddons: byType[slot.addonType] ?? [],
-                  selectedSingle: _single[slot.id],
-                  selectedMulti: _multi[slot.id] ?? {},
-                  onToggleSingle: (id) =>
-                      _toggleSingle(slot.id, id, slot.isRequired),
-                  onToggleMulti: (id) =>
-                      _toggleMulti(slot.id, id, slot.maxSelections),
+                _AddonCard(
+                  title: s.displayName,
+                  isRequired: s.isRequired,
+                  isMulti: (s.maxSelections ?? 2) > 1,
+                  maxSelections: s.maxSelections,
+                  items: (byType[s.addonType] ?? [])
+                      .where((a) => a.isActive)
+                      .toList(),
+                  selectedSingle: _single[s.id],
+                  selectedMulti: _multi[s.id] ?? {},
+                  onToggleSingle: (aId) =>
+                      _toggleSingle(s.id, aId, s.isRequired),
+                  onToggleMulti: (aId) =>
+                      _toggleMulti(s.id, aId, s.maxSelections),
+                  onIncrement: (aId) => _incrementMulti(s.id, aId),
+                  onDecrement: (aId) => _decrementMulti(s.id, aId),
                 ),
                 const SizedBox(height: 12),
               ],
 
-              // Global addon types not covered by any custom slot
+              // Extras — global types not covered by a custom slot
               if (extrasAddons.isNotEmpty) ...[
-                _AddonSlotCard(
-                  slotId: _kExtrasSlotId,
-                  displayName: 'Extras',
+                _AddonCard(
+                  title: 'Extras',
                   isRequired: false,
-                  minSelections: 0,
+                  isMulti: true,
                   maxSelections: null,
-                  availableAddons: extrasAddons,
+                  items: extrasAddons,
                   selectedSingle: null,
-                  selectedMulti: _multi[_kExtrasSlotId] ?? {},
+                  selectedMulti: _extras,
                   onToggleSingle: (_) {},
-                  onToggleMulti: (id) => _toggleMulti(_kExtrasSlotId, id, null),
+                  onToggleMulti: (aId) => _toggleExtra(aId),
+                  onIncrement: (aId) => _incrementExtra(aId),
+                  onDecrement: (aId) => _decrementExtra(aId),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              const SizedBox(height: 6),
+
+              // Optionals section
+              if (_optionalFieldsLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Center(
+                      child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.primary))),
+                )
+              else if (_optionalFields.isNotEmpty) ...[
+                _OptionalFieldsCard(
+                  fields: _optionalFields,
+                  selected: _selectedOptionals,
+                  sizeLabel: _selectedSize,
+                  onToggle: (id) => setState(() {
+                    if (_selectedOptionals.contains(id)) {
+                      _selectedOptionals.remove(id);
+                    } else {
+                      _selectedOptionals.add(id);
+                    }
+                    _clearRecipe();
+                  }),
                 ),
                 const SizedBox(height: 12),
               ],
@@ -1280,7 +1580,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               Expanded(
                   child: AppButton(
                 label: _canAdd
-                    ? 'Add  —  ${egp(_lineTotal)}'
+                    ? '${_isEdit ? "Update" : "Add"}  —  ${egp(_lineTotal)}'
                     : 'Select ${_firstUnsatisfiedSlot ?? "required options"}',
                 height: 50,
                 onTap: _canAdd ? _addToCart : null,
@@ -1294,39 +1594,183 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  ADDON SLOT CARD
-//  Replaces _OptionGroupCard. Driven by AddonSlot metadata + AddonItem list.
+//  RECIPE SHEET
 // ─────────────────────────────────────────────────────────────────────────────
-class _AddonSlotCard extends StatefulWidget {
-  final String slotId;
-  final String displayName;
+class _RecipeSheet extends StatelessWidget {
+  final String itemName;
+  final String? sizeLabel;
+  final bool loading;
+  final List<RecipeIngredient>? result;
+  final String? error;
+  final VoidCallback onRefresh;
+
+  const _RecipeSheet({
+    required this.itemName,
+    required this.sizeLabel,
+    required this.loading,
+    required this.result,
+    required this.error,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: AppRadius.sheetRadius),
+      child: Column(children: [
+        Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Center(
+                child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                        color: AppColors.border,
+                        borderRadius: BorderRadius.circular(2))))),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+          child: Row(children: [
+            const Icon(Icons.science_outlined,
+                size: 16, color: AppColors.primary),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(
+              '$itemName${sizeLabel != null ? " · ${normaliseName(sizeLabel!)}" : ""} — Recipe',
+              style: cairo(fontSize: 14, fontWeight: FontWeight.w700),
+            )),
+            if (!loading)
+              GestureDetector(
+                onTap: onRefresh,
+                child: Icon(Icons.refresh_rounded,
+                    size: 18, color: AppColors.textSecondary),
+              ),
+          ]),
+        ),
+        Container(height: 1, color: AppColors.border),
+        Expanded(
+          child: loading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppColors.primary))
+              : error != null
+                  ? Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.error_outline,
+                          size: 32, color: AppColors.border),
+                      const SizedBox(height: 8),
+                      Text(error!,
+                          style: cairo(
+                              fontSize: 13, color: AppColors.textSecondary)),
+                      const SizedBox(height: 12),
+                      TextButton(
+                          onPressed: onRefresh, child: const Text('Retry')),
+                    ]))
+                  : result == null || result!.isEmpty
+                      ? Center(
+                          child: Text('No recipe data',
+                              style: cairo(color: AppColors.textMuted)))
+                      : ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: result!.length,
+                          separatorBuilder: (_, __) => const Divider(
+                              height: 1, color: AppColors.borderLight),
+                          itemBuilder: (_, i) {
+                            final ing = result![i];
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: Row(children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  margin:
+                                      const EdgeInsets.only(right: 10, top: 1),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: ing.isBase
+                                        ? AppColors.primary
+                                        : AppColors.textMuted,
+                                  ),
+                                ),
+                                Expanded(
+                                    child: Text(ing.name,
+                                        style: cairo(
+                                            fontSize: 13,
+                                            fontWeight: ing.isBase
+                                                ? FontWeight.w600
+                                                : FontWeight.w500))),
+                                Text(
+                                    '${ing.quantity % 1 == 0 ? ing.quantity.toInt() : ing.quantity.toStringAsFixed(1)} ${ing.unit}',
+                                    style: cairo(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.textSecondary)),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                      color: (ing.isBase
+                                              ? AppColors.primary
+                                              : AppColors.textMuted)
+                                          .withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(4)),
+                                  child: Text(ing.isBase ? 'base' : 'addon',
+                                      style: cairo(
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w700,
+                                          color: ing.isBase
+                                              ? AppColors.primary
+                                              : AppColors.textMuted)),
+                                ),
+                              ]),
+                            );
+                          }),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ADDON CARD
+// ─────────────────────────────────────────────────────────────────────────────
+class _AddonCard extends StatefulWidget {
+  final String title;
   final bool isRequired;
-  final int minSelections;
-  final int? maxSelections; // null = unlimited
-  final List<AddonItem> availableAddons;
-  final String? selectedSingle; // addonItemId (single-select only)
-  final Set<String> selectedMulti; // addonItemIds (multi-select)
+  final bool isMulti;
+  final int? maxSelections;
+  final List<AddonItem> items;
+  // For single-select: the selected addonItemId
+  final String? selectedSingle;
+  // For multi-select: addonItemId → quantity (int)
+  // Accepts both Map<String,int> and Set<String> for extras compatibility
+  final dynamic selectedMulti;
   final void Function(String) onToggleSingle;
   final void Function(String) onToggleMulti;
+  final void Function(String) onIncrement;
+  final void Function(String) onDecrement;
 
-  const _AddonSlotCard({
-    required this.slotId,
-    required this.displayName,
+  const _AddonCard({
+    required this.title,
     required this.isRequired,
-    required this.minSelections,
+    required this.isMulti,
     required this.maxSelections,
-    required this.availableAddons,
+    required this.items,
     required this.selectedSingle,
     required this.selectedMulti,
     required this.onToggleSingle,
     required this.onToggleMulti,
+    required this.onIncrement,
+    required this.onDecrement,
   });
 
   @override
-  State<_AddonSlotCard> createState() => _AddonSlotCardState();
+  State<_AddonCard> createState() => _AddonCardState();
 }
 
-class _AddonSlotCardState extends State<_AddonSlotCard> {
+class _AddonCardState extends State<_AddonCard> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
@@ -1343,20 +1787,37 @@ class _AddonSlotCardState extends State<_AddonSlotCard> {
     super.dispose();
   }
 
-  // Multi if maxSelections is null (unlimited) or > 1
-  bool get _isMulti => (widget.maxSelections ?? 2) > 1;
+  // selectedMulti is Map<String,int> for slots, Set<String> or Map<String,int>
+  // for extras — normalise to a qty lookup
+  bool _isSelected(String id) {
+    final m = widget.selectedMulti;
+    if (m is Map<String, int>) return m.containsKey(id);
+    if (m is Set<String>) return m.contains(id);
+    return false;
+  }
 
-  int get _selCount => _isMulti
-      ? widget.selectedMulti.length
-      : (widget.selectedSingle != null ? 1 : 0);
+  int _qty(String id) {
+    final m = widget.selectedMulti;
+    if (m is Map<String, int>) return m[id] ?? 1;
+    return 1;
+  }
+
+  int get _selCount {
+    if (!widget.isMulti) return widget.selectedSingle != null ? 1 : 0;
+    final m = widget.selectedMulti;
+    if (m is Map<String, int>) return m.length;
+    if (m is Set<String>) return m.length;
+    return 0;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final allOpts = widget.availableAddons;
-    final showSearch = allOpts.length > 5;
+    final showSearch = widget.items.length > 5;
     final opts = _query.isEmpty
-        ? allOpts
-        : allOpts.where((a) => a.name.toLowerCase().contains(_query)).toList();
+        ? widget.items
+        : widget.items
+            .where((o) => o.name.toLowerCase().contains(_query))
+            .toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -1369,34 +1830,34 @@ class _AddonSlotCardState extends State<_AddonSlotCard> {
         boxShadow: AppShadows.card,
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header row
+        // Header
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
           child: Row(children: [
             Expanded(
-                child: Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                  Text(widget.displayName.toUpperCase(),
-                      style: cairo(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary,
-                          letterSpacing: 0.7)),
-                  if (widget.isRequired)
-                    const _Pill('Required', AppColors.danger),
-                  if (_isMulti) const _Pill('Multi', AppColors.primary),
-                  if (widget.maxSelections != null)
-                    _Pill(
-                        'Max ${widget.maxSelections}', AppColors.textSecondary),
-                ])),
+                child: Row(children: [
+              Text(widget.title.toUpperCase(),
+                  style: cairo(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textSecondary,
+                      letterSpacing: 0.7)),
+              const SizedBox(width: 6),
+              if (widget.isRequired) const _Pill('Required', AppColors.danger),
+              if (widget.isMulti) ...[
+                const SizedBox(width: 4),
+                const _Pill('Multi', AppColors.primary),
+              ],
+              if (widget.maxSelections != null) ...[
+                const SizedBox(width: 4),
+                _Pill('Max ${widget.maxSelections}', AppColors.textSecondary),
+              ],
+            ])),
             if (_selCount > 0) _CountBadge(count: _selCount),
           ]),
         ),
 
-        // Search field (only when > 5 options)
+        // Search
         if (showSearch) ...[
           const SizedBox(height: 10),
           Padding(
@@ -1436,25 +1897,38 @@ class _AddonSlotCardState extends State<_AddonSlotCard> {
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
           child: opts.isEmpty
-              ? Text('No options match "$_query"',
+              ? Text('No match for "$_query"',
                   style: cairo(fontSize: 12, color: AppColors.textMuted))
               : Wrap(
                   spacing: 7,
                   runSpacing: 7,
-                  children: opts.map((addon) {
-                    final sel = _isMulti
-                        ? widget.selectedMulti.contains(addon.id)
-                        : widget.selectedSingle == addon.id;
+                  children: opts.map((opt) {
+                    final sel = widget.isMulti
+                        ? _isSelected(opt.id)
+                        : widget.selectedSingle == opt.id;
+                    final qty = _qty(opt.id);
+
+                    // Multi-select selected chip: show qty stepper inline
+                    if (widget.isMulti && sel) {
+                      return _QtyChip(
+                        label: normaliseName(opt.name),
+                        price: opt.defaultPrice,
+                        qty: qty,
+                        onIncrement: () => widget.onIncrement(opt.id),
+                        onDecrement: () => widget.onDecrement(opt.id),
+                      );
+                    }
+
                     return _Chip(
-                      label: normaliseName(addon.name),
-                      sublabel: addon.defaultPrice > 0
-                          ? '+${egp(addon.defaultPrice)}'
+                      label: normaliseName(opt.name),
+                      sublabel: opt.defaultPrice > 0
+                          ? '+${egp(opt.defaultPrice)}'
                           : null,
                       selected: sel,
-                      checkbox: _isMulti,
-                      onTap: () => _isMulti
-                          ? widget.onToggleMulti(addon.id)
-                          : widget.onToggleSingle(addon.id),
+                      checkbox: widget.isMulti,
+                      onTap: () => widget.isMulti
+                          ? widget.onToggleMulti(opt.id)
+                          : widget.onToggleSingle(opt.id),
                     );
                   }).toList()),
         ),
@@ -1463,6 +1937,88 @@ class _AddonSlotCardState extends State<_AddonSlotCard> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  QTY CHIP  — selected multi addon with inline +/- stepper
+// ─────────────────────────────────────────────────────────────────────────────
+class _QtyChip extends StatelessWidget {
+  final String label;
+  final int price;
+  final int qty;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
+
+  const _QtyChip({
+    required this.label,
+    required this.price,
+    required this.qty,
+    required this.onIncrement,
+    required this.onDecrement,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+            color: AppColors.primary,
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+            border: Border.all(color: AppColors.primary, width: 1.5)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          // Decrement / remove
+          GestureDetector(
+            onTap: onDecrement,
+            child: Container(
+              width: 30,
+              height: 34,
+              alignment: Alignment.center,
+              child: const Icon(Icons.remove, size: 13, color: Colors.white),
+            ),
+          ),
+          // Label + qty
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(label,
+                  style: cairo(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white)),
+              if (price > 0)
+                Text('+${egp(price * qty)}',
+                    style: cairo(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withOpacity(0.8))),
+            ]),
+          ),
+          // Qty badge
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(4)),
+            child: Text('$qty',
+                style: cairo(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white)),
+          ),
+          // Increment
+          GestureDetector(
+            onTap: onIncrement,
+            child: Container(
+              width: 30,
+              height: 34,
+              alignment: Alignment.center,
+              child: const Icon(Icons.add, size: 13, color: Colors.white),
+            ),
+          ),
+        ]),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CART PANEL (tablet)
+// ─────────────────────────────────────────────────────────────────────────────
 class _CartPanel extends ConsumerWidget {
   const _CartPanel();
 
@@ -1580,6 +2136,9 @@ class _EmptyCart extends StatelessWidget {
       );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  CART ROW  — with edit button
+// ─────────────────────────────────────────────────────────────────────────────
 class _CartRow extends ConsumerWidget {
   final int index;
   const _CartRow({required this.index});
@@ -1588,6 +2147,7 @@ class _CartRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final cart = ref.watch(cartProvider);
     final item = cart.items[index];
+    final menu = ref.watch(menuProvider);
 
     return Container(
       padding: const EdgeInsets.all(11),
@@ -1623,12 +2183,35 @@ class _CartRow extends ConsumerWidget {
                             borderRadius: BorderRadius.circular(AppRadius.xs)),
                         child: Text(
                             a.priceModifier > 0
-                                ? '${normaliseName(a.name)} +${egp(a.priceModifier)}'
-                                : normaliseName(a.name),
+                                ? '\${normaliseName(a.name)}\${a.quantity > 1 ? " ×\${a.quantity}" : ""} +\${egp(a.priceModifier * a.quantity)}'
+                                : '\${normaliseName(a.name)}\${a.quantity > 1 ? " ×\${a.quantity}" : ""}',
                             style: cairo(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                                 color: AppColors.primary)),
+                      ))
+                  .toList()),
+        ],
+        if (item.optionals.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: item.optionals
+                  .map((o) => Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: AppColors.warning.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(AppRadius.xs)),
+                        child: Text(
+                            o.price > 0
+                                ? '\${o.name} +\${egp(o.price)}'
+                                : o.name,
+                            style: cairo(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.warning)),
                       ))
                   .toList()),
         ],
@@ -1649,6 +2232,32 @@ class _CartRow extends ConsumerWidget {
                   .read(cartProvider.notifier)
                   .setQty(index, item.quantity + 1)),
           const Spacer(),
+
+          // Edit button — open ItemDetailSheet pre-populated
+          GestureDetector(
+            onTap: () {
+              final menuItem = menu.items.where((m) => m.id == item.menuItemId);
+              if (menuItem.isEmpty) return;
+              ItemDetailSheet.show(
+                context,
+                menuItem.first,
+                editIndex: index,
+                existingItem: item,
+              );
+            },
+            child: Container(
+                width: 28,
+                height: 28,
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(AppRadius.xs)),
+                alignment: Alignment.center,
+                child: const Icon(Icons.edit_outlined,
+                    size: 13, color: AppColors.primary)),
+          ),
+
+          // Delete button
           GestureDetector(
             onTap: () => ref.read(cartProvider.notifier).removeAt(index),
             child: Container(
@@ -1717,9 +2326,6 @@ class _CartFooter extends ConsumerWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  PAYMENT METHOD DATA
-// ─────────────────────────────────────────────────────────────────────────────
 class _PaymentMethod {
   final String value, label;
   final IconData icon;
@@ -3159,4 +3765,124 @@ class _ErrorState extends StatelessWidget {
           TextButton(onPressed: onRetry, child: const Text('Retry')),
         ]),
       );
+}
+
+// ─────────────────────────────────────────────────────────────
+//  OPTIONAL FIELDS CARD
+// ─────────────────────────────────────────────────────────────
+class _OptionalFieldsCard extends StatelessWidget {
+  final List<OptionalField> fields;
+  final Set<String> selected;
+  final String? sizeLabel;
+  final void Function(String) onToggle;
+
+  const _OptionalFieldsCard({
+    required this.fields,
+    required this.selected,
+    required this.sizeLabel,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Show only fields that match current size (or have no size restriction)
+    final visible = fields
+        .where((f) => f.sizeLabel == null || f.sizeLabel == sizeLabel)
+        .toList();
+
+    if (visible.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(
+            color: selected.any((id) => visible.any((f) => f.id == id))
+                ? AppColors.primary.withOpacity(0.2)
+                : AppColors.border),
+        boxShadow: AppShadows.card,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+          child: Row(children: [
+            Text('OPTIONALS',
+                style: cairo(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                    letterSpacing: 0.7)),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(AppRadius.xs)),
+              child: Text('Optional',
+                  style: cairo(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary)),
+            ),
+          ]),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: visible.map((f) {
+              final sel = selected.contains(f.id);
+              return GestureDetector(
+                onTap: () => onToggle(f.id),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: sel ? AppColors.primary : AppColors.bg,
+                    borderRadius: BorderRadius.circular(AppRadius.xs),
+                    border: Border.all(
+                        color: sel ? AppColors.primary : AppColors.border,
+                        width: sel ? 1.5 : 1),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                        sel
+                            ? Icons.check_box_rounded
+                            : Icons.check_box_outline_blank_rounded,
+                        size: 14,
+                        color: sel ? Colors.white : AppColors.textMuted),
+                    const SizedBox(width: 6),
+                    Text(f.name,
+                        style: cairo(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: sel ? Colors.white : AppColors.textPrimary)),
+                    if (!f.isFree) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                            color: sel
+                                ? Colors.white.withOpacity(0.2)
+                                : AppColors.primary.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(4)),
+                        child: Text('+${egp(f.price)}',
+                            style: cairo(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: sel ? Colors.white : AppColors.primary)),
+                      ),
+                    ],
+                  ]),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ]),
+    );
+  }
 }

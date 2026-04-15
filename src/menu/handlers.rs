@@ -996,6 +996,218 @@ pub async fn delete_addon_override(
     Ok(HttpResponse::NoContent().finish())
 }
 
+// ═══════════════════════════════════════════════════════════════
+// OPTIONAL FIELDS
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct OptionalField {
+    pub id:                Uuid,
+    pub menu_item_id:      Uuid,
+    pub name:              String,
+    pub price:             i32,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<sqlx::types::BigDecimal>,
+    pub size_label:        Option<String>,
+    pub display_order:     i32,
+    pub is_active:         bool,
+    pub created_at:        DateTime<Utc>,
+    pub updated_at:        DateTime<Utc>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateOptionalFieldRequest {
+    pub name:              String,
+    pub price:             Option<i32>,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<f64>,
+    pub size_label:        Option<String>,
+    pub display_order:     Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateOptionalFieldRequest {
+    pub name:              Option<String>,
+    pub price:             Option<i32>,
+    pub org_ingredient_id: Option<Uuid>,
+    pub ingredient_name:   Option<String>,
+    pub ingredient_unit:   Option<String>,
+    pub quantity_used:     Option<f64>,
+    pub size_label:        Option<String>,
+    pub display_order:     Option<i32>,
+    pub is_active:         Option<bool>,
+}
+
+pub async fn list_optional_fields(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "read").await?;
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    let rows = sqlx::query_as::<_, OptionalField>(
+        r#"
+        SELECT id, menu_item_id, name, price,
+               org_ingredient_id, ingredient_name, ingredient_unit,
+               quantity_used, size_label::text,
+               display_order, is_active, created_at, updated_at
+        FROM menu_item_optional_fields
+        WHERE menu_item_id = $1
+        ORDER BY display_order ASC, name ASC
+        "#,
+    )
+    .bind(*id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Ok().json(rows))
+}
+
+pub async fn create_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    id:   web::Path<Uuid>,
+    body: web::Json<CreateOptionalFieldRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+    let item = fetch_menu_item(pool.get_ref(), *id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".into()));
+    }
+
+    // Validate: if any ingredient field is set, all required ones must be present
+    let has_ingredient = body.org_ingredient_id.is_some()
+        || body.ingredient_name.is_some()
+        || body.ingredient_unit.is_some()
+        || body.quantity_used.is_some();
+
+    if has_ingredient {
+        if body.ingredient_name.is_none() || body.ingredient_unit.is_none() || body.quantity_used.is_none() {
+            return Err(AppError::BadRequest(
+                "ingredient_name, ingredient_unit, and quantity_used are all required when configuring an ingredient deduction".into()
+            ));
+        }
+        if let Some(qty) = body.quantity_used {
+            if qty <= 0.0 {
+                return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+            }
+        }
+    }
+
+    let row = sqlx::query_as::<_, OptionalField>(
+        r#"
+        INSERT INTO menu_item_optional_fields
+            (menu_item_id, name, price, org_ingredient_id, ingredient_name,
+             ingredient_unit, quantity_used, size_label, display_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::item_size, $9)
+        RETURNING id, menu_item_id, name, price,
+                  org_ingredient_id, ingredient_name, ingredient_unit,
+                  quantity_used, size_label::text,
+                  display_order, is_active, created_at, updated_at
+        "#,
+    )
+    .bind(*id)
+    .bind(body.name.trim())
+    .bind(body.price.unwrap_or(0))
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
+    .bind(&body.size_label)
+    .bind(body.display_order.unwrap_or(0))
+    .fetch_one(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::Created().json(row))
+}
+
+pub async fn update_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+    body: web::Json<UpdateOptionalFieldRequest>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "update").await?;
+    let (item_id, field_id) = path.into_inner();
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    if let Some(qty) = body.quantity_used {
+        if qty <= 0.0 {
+            return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+        }
+    }
+
+    let row = sqlx::query_as::<_, OptionalField>(
+        r#"
+        UPDATE menu_item_optional_fields SET
+            name              = COALESCE($3, name),
+            price             = COALESCE($4, price),
+            org_ingredient_id = COALESCE($5, org_ingredient_id),
+            ingredient_name   = COALESCE($6, ingredient_name),
+            ingredient_unit   = COALESCE($7, ingredient_unit),
+            quantity_used     = COALESCE($8, quantity_used),
+            size_label        = COALESCE($9::item_size, size_label),
+            display_order     = COALESCE($10, display_order),
+            is_active         = COALESCE($11, is_active)
+        WHERE id = $1 AND menu_item_id = $2
+        RETURNING id, menu_item_id, name, price,
+                  org_ingredient_id, ingredient_name, ingredient_unit,
+                  quantity_used, size_label::text,
+                  display_order, is_active, created_at, updated_at
+        "#,
+    )
+    .bind(field_id)
+    .bind(item_id)
+    .bind(&body.name)
+    .bind(body.price)
+    .bind(body.org_ingredient_id)
+    .bind(&body.ingredient_name)
+    .bind(&body.ingredient_unit)
+    .bind(body.quantity_used)
+    .bind(&body.size_label)
+    .bind(body.display_order)
+    .bind(body.is_active)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Optional field not found".into()))?;
+
+    Ok(HttpResponse::Ok().json(row))
+}
+
+pub async fn delete_optional_field(
+    req:  HttpRequest,
+    pool: web::Data<PgPool>,
+    path: web::Path<(Uuid, Uuid)>,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    check_permission(pool.get_ref(), &claims, "menu_items", "delete").await?;
+    let (item_id, field_id) = path.into_inner();
+    let item = fetch_menu_item(pool.get_ref(), item_id).await?;
+    require_same_org(&claims, Some(item.org_id))?;
+
+    sqlx::query(
+        "DELETE FROM menu_item_optional_fields WHERE id = $1 AND menu_item_id = $2"
+    )
+    .bind(field_id)
+    .bind(item_id)
+    .execute(pool.get_ref())
+    .await?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
 // ── Helpers ───────────────────────────────────────────────────
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {

@@ -8,8 +8,9 @@ class CartNotifier extends Notifier<CartState> {
   void add(CartItem incoming) {
     final idx = state.items.indexWhere((i) =>
         i.menuItemId == incoming.menuItemId &&
-        i.sizeLabel == incoming.sizeLabel &&
-        CartItem.addonsMatch(i.addons, incoming.addons));
+        i.sizeLabel  == incoming.sizeLabel &&
+        CartItem.addonsMatch(i.addons, incoming.addons) &&
+        CartItem.optionalsMatch(i.optionals, incoming.optionals));
 
     if (idx >= 0) {
       final updated = List<CartItem>.of(state.items);
@@ -27,12 +28,15 @@ class CartNotifier extends Notifier<CartState> {
   }
 
   void setQty(int index, int qty) {
-    if (qty <= 0) {
-      removeAt(index);
-      return;
-    }
+    if (qty <= 0) { removeAt(index); return; }
     final updated = List<CartItem>.of(state.items);
     updated[index] = updated[index].copyWith(quantity: qty);
+    state = state.copyWith(items: updated);
+  }
+
+  void replaceAt(int index, CartItem incoming) {
+    final updated = List<CartItem>.of(state.items);
+    updated[index] = incoming;
     state = state.copyWith(items: updated);
   }
 
@@ -44,7 +48,6 @@ class CartNotifier extends Notifier<CartState> {
 
   void setNotes(String? n) => state = state.copyWith(notes: n);
 
-  // Item 6
   void setDiscount(DiscountType? type, int? value) => state = type == null
       ? state.copyWith(clearDiscount: true, clearDiscountId: true)
       : state.copyWith(
@@ -56,15 +59,12 @@ class CartNotifier extends Notifier<CartState> {
   void clearDiscount() =>
       state = state.copyWith(clearDiscount: true, clearDiscountId: true);
 
-  // Item 2
   void setAmountTendered(int? amount) => state =
       state.copyWith(amountTendered: amount, clearTendered: amount == null);
 
   void setTip(int? tip) => state = state.copyWith(tipAmount: tip);
 
-  // Item 7
   void setPaymentSplits(List<PaymentSplit> splits) {
-    splits.fold(0, (s, p) => s + p.amount);
     final method = splits.length == 1 ? splits.first.method : 'mixed';
     state = state.copyWith(paymentSplits: splits, payment: method);
   }

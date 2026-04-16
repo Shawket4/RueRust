@@ -98,8 +98,8 @@ pub async fn upsert_drink_recipe(
     check_permission(pool.get_ref(), &claims, "recipes", "create").await?;
     require_menu_item_org(pool.get_ref(), &claims, *menu_item_id).await?;
 
-    if body.quantity_used <= 0.0 {
-        return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
+    if body.quantity_used < 0.0 {
+        return Err(AppError::BadRequest("quantity_used cannot be negative".into()));
     }
 
     let row = sqlx::query_as::<_, DrinkRecipe>(
@@ -204,8 +204,8 @@ pub async fn upsert_addon_ingredient(
     check_permission(pool.get_ref(), &claims, "recipes", "create").await?;
     require_addon_org(pool.get_ref(), &claims, *addon_item_id).await?;
 
-    if body.quantity_used <= 0.0 {
-        return Err(AppError::BadRequest("quantity_used must be greater than 0".into()));
+    if body.quantity_used < 0.0 {
+        return Err(AppError::BadRequest("quantity_used cannot be negative".into()));
     }
 
     let row = sqlx::query_as::<_, AddonIngredient>(

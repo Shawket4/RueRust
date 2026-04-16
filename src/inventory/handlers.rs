@@ -18,6 +18,7 @@ pub struct OrgIngredient {
     pub org_id:        Uuid,
     pub name:          String,
     pub unit:          String,
+    pub category:      String,
     pub description:   Option<String>,
     pub cost_per_unit: i32,
     pub is_active:     bool,
@@ -81,6 +82,7 @@ pub struct BranchInventoryTransfer {
 pub struct CreateCatalogItemRequest {
     pub name:          String,
     pub unit:          String,
+    pub category:      String,
     pub description:   Option<String>,
     pub cost_per_unit: Option<i32>,
 }
@@ -89,6 +91,7 @@ pub struct CreateCatalogItemRequest {
 pub struct UpdateCatalogItemRequest {
     pub name:          Option<String>,
     pub unit:          Option<String>,
+    pub category:      Option<String>,
     pub description:   Option<String>,
     pub cost_per_unit: Option<i32>,
     pub is_active:     Option<bool>,
@@ -147,7 +150,7 @@ pub async fn list_catalog(
 
     let rows = sqlx::query_as::<_, OrgIngredient>(
         r#"
-        SELECT id, org_id, name, unit::text, description, cost_per_unit,
+        SELECT id, org_id, name, unit::text, category, description, cost_per_unit,
                is_active, created_at, updated_at
         FROM org_ingredients
         WHERE org_id = $1 AND deleted_at IS NULL
@@ -180,15 +183,16 @@ pub async fn create_catalog_item(
 
     let row = sqlx::query_as::<_, OrgIngredient>(
         r#"
-        INSERT INTO org_ingredients (org_id, name, unit, description, cost_per_unit)
-        VALUES ($1, $2, $3::inventory_unit, $4, $5)
-        RETURNING id, org_id, name, unit::text, description, cost_per_unit,
+        INSERT INTO org_ingredients (org_id, name, unit, category, description, cost_per_unit)
+        VALUES ($1, $2, $3::inventory_unit, $4, $5, $6)
+        RETURNING id, org_id, name, unit::text, category, description, cost_per_unit,
                   is_active, created_at, updated_at
         "#,
     )
     .bind(*org_id)
     .bind(body.name.trim())
     .bind(&body.unit)
+    .bind(&body.category)
     .bind(&body.description)
     .bind(body.cost_per_unit.unwrap_or(0))
     .fetch_one(pool.get_ref())
@@ -225,17 +229,19 @@ pub async fn update_catalog_item(
         UPDATE org_ingredients SET
             name          = COALESCE($2, name),
             unit          = COALESCE($3::inventory_unit, unit),
-            description   = COALESCE($4, description),
-            cost_per_unit = COALESCE($5, cost_per_unit),
-            is_active     = COALESCE($6, is_active)
-        WHERE id = $1 AND org_id = $7 AND deleted_at IS NULL
-        RETURNING id, org_id, name, unit::text, description, cost_per_unit,
+            category      = COALESCE($4, category),
+            description   = COALESCE($5, description),
+            cost_per_unit = COALESCE($6, cost_per_unit),
+            is_active     = COALESCE($7, is_active)
+        WHERE id = $1 AND org_id = $8 AND deleted_at IS NULL
+        RETURNING id, org_id, name, unit::text, category, description, cost_per_unit,
                   is_active, created_at, updated_at
         "#,
     )
     .bind(id)
     .bind(&body.name)
     .bind(&body.unit)
+    .bind(&body.category)
     .bind(&body.description)
     .bind(body.cost_per_unit)
     .bind(body.is_active)

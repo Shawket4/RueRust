@@ -1098,8 +1098,8 @@ pub async fn create_optional_field(
             ));
         }
         if let Some(qty) = body.quantity_used {
-            if qty <= 0.0 {
-                return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+            if qty < 0.0 {
+                return Err(AppError::BadRequest("quantity_used cannot be negative".into()));
             }
         }
     }
@@ -1144,8 +1144,8 @@ pub async fn update_optional_field(
     require_same_org(&claims, Some(item.org_id))?;
 
     if let Some(qty) = body.quantity_used {
-        if qty <= 0.0 {
-            return Err(AppError::BadRequest("quantity_used must be > 0".into()));
+        if qty < 0.0 {
+            return Err(AppError::BadRequest("quantity_used cannot be negative".into()));
         }
     }
 

@@ -187,6 +187,7 @@ struct InventoryDeduction {
     unit:              String,
     quantity:          f64,
     source:            String, // "drink_recipe" | "addon" | "optional"
+    category:          String,
 }
 
 // ── POST /orders ──────────────────────────────────────────────
@@ -325,13 +326,15 @@ pub async fn create_order(
         let mut deductions: Vec<InventoryDeduction> = Vec::new();
 
         // ── 1. Base drink recipe ──────────────────────────────
-        let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
+        let recipe_rows: Vec<(Option<Uuid>, f64, String, String, String)> =
             if let Some(size) = &item_input.size_label {
                 sqlx::query_as(
-                    "SELECT org_ingredient_id, quantity_used::float8,
-                            ingredient_name, ingredient_unit
-                     FROM   menu_item_recipes
-                     WHERE  menu_item_id = $1 AND size_label = $2::item_size",
+                    r#"SELECT r.org_ingredient_id, r.quantity_used::float8,
+                              r.ingredient_name, r.ingredient_unit,
+                              COALESCE(i.category, 'general') as category
+                       FROM   menu_item_recipes r
+                       LEFT JOIN org_ingredients i ON i.id = r.org_ingredient_id
+                       WHERE  r.menu_item_id = $1 AND r.size_label = $2::item_size"#,
                 )
                 .bind(item_input.menu_item_id)
                 .bind(size)
@@ -339,11 +342,13 @@ pub async fn create_order(
                 .await?
             } else {
                 sqlx::query_as(
-                    r#"SELECT org_ingredient_id, quantity_used::float8,
-                              ingredient_name, ingredient_unit
-                       FROM   menu_item_recipes
-                       WHERE  menu_item_id = $1
-                         AND  size_label = (
+                    r#"SELECT r.org_ingredient_id, r.quantity_used::float8,
+                              r.ingredient_name, r.ingredient_unit,
+                              COALESCE(i.category, 'general') as category
+                       FROM   menu_item_recipes r
+                       LEFT JOIN org_ingredients i ON i.id = r.org_ingredient_id
+                       WHERE  r.menu_item_id = $1
+                         AND  r.size_label = (
                              SELECT size_label FROM menu_item_recipes
                              WHERE  menu_item_id = $1 LIMIT 1
                          )"#,
@@ -353,13 +358,14 @@ pub async fn create_order(
                 .await?
             };
 
-        for (ing_id, qty, name, unit) in recipe_rows {
+        for (ing_id, qty, name, unit, category) in recipe_rows {
             deductions.push(InventoryDeduction {
                 org_ingredient_id: ing_id,
                 ingredient_name:   name,
                 unit,
                 quantity:          qty * item_input.quantity as f64,
                 source:            "drink_recipe".into(),
+                category,
             });
         }
 
@@ -369,8 +375,8 @@ pub async fn create_order(
         for addon_input in &item_input.addons {
             let addon_qty = addon_input.quantity.max(1) as f64;
 
-            let (addon_name, default_price): (String, i32) = sqlx::query_as(
-                "SELECT name, default_price FROM addon_items WHERE id = $1"
+            let (addon_name, default_price, addon_type): (String, i32, String) = sqlx::query_as(
+                "SELECT name, default_price, type FROM addon_items WHERE id = $1"
             )
             .bind(addon_input.addon_item_id)
             .fetch_optional(pool.get_ref())
@@ -381,7 +387,7 @@ pub async fn create_order(
 
             resolved_addons.push(ResolvedAddon {
                 addon_item_id: addon_input.addon_item_id,
-                addon_name,
+                addon_name:    addon_name.clone(),
                 unit_price:    default_price,
                 quantity:      addon_input.quantity.max(1),
             });
@@ -396,6 +402,33 @@ pub async fn create_order(
             .fetch_all(pool.get_ref())
             .await?;
 
+            // Dynamic swap logic for milk and coffee types
+            let target_category = match addon_type.as_str() {
+                "milk_type" => Some("milk"),
+                "coffee_type" => Some("coffee_bean"),
+                _ => None,
+            };
+
+            if let Some(cat) = target_category {
+                if let Some((repl_id, _, repl_name, repl_unit)) = addon_rows.first() {
+                    let mut swapped = false;
+                    for ded in deductions.iter_mut() {
+                        if ded.source == "drink_recipe" && ded.category == cat {
+                            ded.org_ingredient_id = *repl_id;
+                            ded.ingredient_name = repl_name.clone();
+                            ded.unit = repl_unit.clone();
+                            ded.source = format!("addon_swap:{}", addon_name);
+                            swapped = true;
+                            // Do not break, swap all matching category deductions just in case
+                        }
+                    }
+                    if !swapped {
+                        tracing::warn!(addon_name = %addon_name, cat = %cat, "Addon swap failed, no base ingredient found with category");
+                    }
+                }
+                continue; // Skip the normal additive deduction for these addon types
+            }
+
             for (ing_id, qty, name, unit) in addon_rows {
                 deductions.push(InventoryDeduction {
                     org_ingredient_id: ing_id,
@@ -403,6 +436,7 @@ pub async fn create_order(
                     unit,
                     quantity:          qty * item_input.quantity as f64 * addon_qty,
                     source:            "addon".into(),
+                    category:          "general".into(),
                 });
             }
         }
@@ -448,6 +482,7 @@ pub async fn create_order(
                     unit:              unit.clone(),
                     quantity:          qty * item_input.quantity as f64,
                     source:            "optional".into(),
+                    category:          "general".into(),
                 });
             }
 
@@ -915,6 +950,7 @@ pub struct PreviewIngredient {
     pub unit:            String,
     pub quantity:        f64,
     pub source:          String,
+    pub category:        String,
 }
 
 pub async fn preview_recipe(
@@ -928,13 +964,15 @@ pub async fn preview_recipe(
     let mut result: Vec<PreviewIngredient> = Vec::new();
 
     // Base recipe
-    let recipe_rows: Vec<(Option<Uuid>, f64, String, String)> =
+    let recipe_rows: Vec<(Option<Uuid>, f64, String, String, String)> =
         if let Some(size) = &body.size_label {
             sqlx::query_as(
-                "SELECT org_ingredient_id, quantity_used::float8,
-                        ingredient_name, ingredient_unit
-                 FROM   menu_item_recipes
-                 WHERE  menu_item_id = $1 AND size_label = $2::item_size",
+                r#"SELECT r.org_ingredient_id, r.quantity_used::float8,
+                          r.ingredient_name, r.ingredient_unit,
+                          COALESCE(i.category, 'general') as category
+                   FROM   menu_item_recipes r
+                   LEFT JOIN org_ingredients i ON i.id = r.org_ingredient_id
+                   WHERE  r.menu_item_id = $1 AND r.size_label = $2::item_size"#,
             )
             .bind(body.menu_item_id)
             .bind(size)
@@ -942,13 +980,15 @@ pub async fn preview_recipe(
             .await?
         } else {
             sqlx::query_as(
-                r#"SELECT org_ingredient_id, quantity_used::float8,
-                          ingredient_name, ingredient_unit
-                   FROM   menu_item_recipes
-                   WHERE  menu_item_id = $1
-                     AND  size_label = (
+                r#"SELECT r.org_ingredient_id, r.quantity_used::float8,
+                          r.ingredient_name, r.ingredient_unit,
+                          COALESCE(i.category, 'general') as category
+                   FROM   menu_item_recipes r
+                   LEFT JOIN org_ingredients i ON i.id = r.org_ingredient_id
+                   WHERE  r.menu_item_id = $1
+                     AND  r.size_label = (
                          SELECT size_label FROM menu_item_recipes
-                         WHERE  menu_item_id = $1 LIMIT 1
+                         WHERE  r.menu_item_id = $1 LIMIT 1
                      )"#,
             )
             .bind(body.menu_item_id)
@@ -956,27 +996,56 @@ pub async fn preview_recipe(
             .await?
         };
 
-    for (_, qty, name, unit) in recipe_rows {
-        result.push(PreviewIngredient { ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into() });
+    for (_, qty, name, unit, category) in recipe_rows {
+        result.push(PreviewIngredient { ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into(), category });
     }
 
     // Addons
     for addon in &body.addons {
         let addon_qty = addon.quantity.max(1) as f64;
-        let rows: Vec<(f64, String, String)> = sqlx::query_as(
-            "SELECT quantity_used::float8, ingredient_name, ingredient_unit
+        
+        let (addon_name, addon_type): (String, String) = sqlx::query_as(
+            "SELECT name, type FROM addon_items WHERE id = $1"
+        )
+        .bind(addon.addon_item_id)
+        .fetch_optional(pool.get_ref())
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Addon {} not found", addon.addon_item_id)))?;
+
+        let rows: Vec<(Option<Uuid>, f64, String, String)> = sqlx::query_as(
+            "SELECT org_ingredient_id, quantity_used::float8, ingredient_name, ingredient_unit
              FROM   addon_item_ingredients WHERE addon_item_id = $1",
         )
         .bind(addon.addon_item_id)
         .fetch_all(pool.get_ref())
         .await?;
 
-        for (qty, name, unit) in rows {
+        let target_category = match addon_type.as_str() {
+            "milk_type" => Some("milk"),
+            "coffee_type" => Some("coffee_bean"),
+            _ => None,
+        };
+
+        if let Some(cat) = target_category {
+            if let Some((_, _, repl_name, repl_unit)) = rows.first() {
+                for r in result.iter_mut() {
+                    if r.source == "drink_recipe" && r.category == cat {
+                        r.ingredient_name = repl_name.clone();
+                        r.unit = repl_unit.clone();
+                        r.source = format!("addon_swap:{}", addon_name);
+                    }
+                }
+            }
+            continue;
+        }
+
+        for (_, qty, name, unit) in rows {
             result.push(PreviewIngredient {
                 ingredient_name: name,
                 unit,
                 quantity: qty * addon_qty,
                 source: "addon".into(),
+                category: "general".into(),
             });
         }
     }
@@ -1000,6 +1069,7 @@ pub async fn preview_recipe(
                 unit:            ing_unit,
                 quantity:        qty,
                 source:          format!("optional:{}", fname),
+                category:        "general".into(),
             });
         }
     }

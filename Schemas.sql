@@ -1,8 +1,9 @@
+Password: 
 --
 -- PostgreSQL database dump
 --
 
-\restrict ucOGpbHfaZfKsWsTvQLpGdJeaTHJGvxmzRPhf21z16qkEfzNkE483LhR2Vy046o
+\restrict higYn0IhbnlLjYjlQJIcbi5gX6oLuF0sGP0QwBwtmGZyBUXcdKQQi4Qa89cL7qf
 
 -- Dumped from database version 17.9 (Debian 17.9-0+deb13u1)
 -- Dumped by pg_dump version 17.9 (Debian 17.9-0+deb13u1)
@@ -27,7 +28,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
 
 --
--- Name: EXTENSION pg_trgm; Type: COMMENT; Schema: -; Owner: -
+-- Name: EXTENSION pg_trgm; Type: COMMENT; Schema: -; Owner: 
 --
 
 COMMENT ON EXTENSION pg_trgm IS 'text similarity measurement and index searching based on trigrams';
@@ -41,24 +42,14 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 
 --
--- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: -
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: 
 --
 
 COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
--- Name: addon_selection; Type: TYPE; Schema: public; Owner: -
---
-
-CREATE TYPE public.addon_selection AS ENUM (
-    'single',
-    'multi'
-);
-
-
---
--- Name: discount_type; Type: TYPE; Schema: public; Owner: -
+-- Name: discount_type; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.discount_type AS ENUM (
@@ -67,8 +58,10 @@ CREATE TYPE public.discount_type AS ENUM (
 );
 
 
+ALTER TYPE public.discount_type OWNER TO rue;
+
 --
--- Name: inventory_adjustment_type; Type: TYPE; Schema: public; Owner: -
+-- Name: inventory_adjustment_type; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.inventory_adjustment_type AS ENUM (
@@ -79,8 +72,10 @@ CREATE TYPE public.inventory_adjustment_type AS ENUM (
 );
 
 
+ALTER TYPE public.inventory_adjustment_type OWNER TO rue;
+
 --
--- Name: inventory_unit; Type: TYPE; Schema: public; Owner: -
+-- Name: inventory_unit; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.inventory_unit AS ENUM (
@@ -92,8 +87,10 @@ CREATE TYPE public.inventory_unit AS ENUM (
 );
 
 
+ALTER TYPE public.inventory_unit OWNER TO rue;
+
 --
--- Name: item_size; Type: TYPE; Schema: public; Owner: -
+-- Name: item_size; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.item_size AS ENUM (
@@ -105,8 +102,10 @@ CREATE TYPE public.item_size AS ENUM (
 );
 
 
+ALTER TYPE public.item_size OWNER TO rue;
+
 --
--- Name: order_status; Type: TYPE; Schema: public; Owner: -
+-- Name: order_status; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.order_status AS ENUM (
@@ -119,8 +118,10 @@ CREATE TYPE public.order_status AS ENUM (
 );
 
 
+ALTER TYPE public.order_status OWNER TO rue;
+
 --
--- Name: payment_method; Type: TYPE; Schema: public; Owner: -
+-- Name: payment_method; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.payment_method AS ENUM (
@@ -133,8 +134,10 @@ CREATE TYPE public.payment_method AS ENUM (
 );
 
 
+ALTER TYPE public.payment_method OWNER TO rue;
+
 --
--- Name: permission_action; Type: TYPE; Schema: public; Owner: -
+-- Name: permission_action; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.permission_action AS ENUM (
@@ -145,8 +148,10 @@ CREATE TYPE public.permission_action AS ENUM (
 );
 
 
+ALTER TYPE public.permission_action OWNER TO rue;
+
 --
--- Name: permission_resource; Type: TYPE; Schema: public; Owner: -
+-- Name: permission_resource; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.permission_resource AS ENUM (
@@ -171,8 +176,10 @@ CREATE TYPE public.permission_resource AS ENUM (
 );
 
 
+ALTER TYPE public.permission_resource OWNER TO rue;
+
 --
--- Name: printer_brand; Type: TYPE; Schema: public; Owner: -
+-- Name: printer_brand; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.printer_brand AS ENUM (
@@ -181,8 +188,10 @@ CREATE TYPE public.printer_brand AS ENUM (
 );
 
 
+ALTER TYPE public.printer_brand OWNER TO rue;
+
 --
--- Name: shift_status; Type: TYPE; Schema: public; Owner: -
+-- Name: shift_status; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.shift_status AS ENUM (
@@ -192,20 +201,10 @@ CREATE TYPE public.shift_status AS ENUM (
 );
 
 
---
--- Name: transfer_status; Type: TYPE; Schema: public; Owner: -
---
-
-CREATE TYPE public.transfer_status AS ENUM (
-    'pending',
-    'completed',
-    'partial',
-    'rejected'
-);
-
+ALTER TYPE public.shift_status OWNER TO rue;
 
 --
--- Name: user_role; Type: TYPE; Schema: public; Owner: -
+-- Name: user_role; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.user_role AS ENUM (
@@ -216,8 +215,10 @@ CREATE TYPE public.user_role AS ENUM (
 );
 
 
+ALTER TYPE public.user_role OWNER TO rue;
+
 --
--- Name: void_reason; Type: TYPE; Schema: public; Owner: -
+-- Name: void_reason; Type: TYPE; Schema: public; Owner: rue
 --
 
 CREATE TYPE public.void_reason AS ENUM (
@@ -228,40 +229,10 @@ CREATE TYPE public.void_reason AS ENUM (
 );
 
 
---
--- Name: check_addon_group_item(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.check_addon_group_item() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    IF NOT (SELECT is_addon FROM menu_items WHERE id = NEW.addon_item_id) THEN
-        RAISE EXCEPTION 'Only addon items can be added to an addon group';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
+ALTER TYPE public.void_reason OWNER TO rue;
 
 --
--- Name: check_drink_addon_group(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.check_drink_addon_group() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    IF (SELECT is_addon FROM menu_items WHERE id = NEW.menu_item_id) THEN
-        RAISE EXCEPTION 'Only drink items can be linked to addon groups';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-
---
--- Name: set_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: set_updated_at(); Type: FUNCTION; Schema: public; Owner: rue
 --
 
 CREATE FUNCTION public.set_updated_at() RETURNS trigger
@@ -274,30 +245,32 @@ END;
 $$;
 
 
+ALTER FUNCTION public.set_updated_at() OWNER TO rue;
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- Name: addon_item_ingredients; Type: TABLE; Schema: public; Owner: -
+-- Name: addon_item_ingredients; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.addon_item_ingredients (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     addon_item_id uuid NOT NULL,
-    inventory_item_id uuid,
     quantity_used numeric(12,3) NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     ingredient_name text NOT NULL,
     ingredient_unit text NOT NULL,
-    org_ingredient_id uuid,
-    replaces_org_ingredient_id uuid
+    org_ingredient_id uuid
 );
 
 
+ALTER TABLE public.addon_item_ingredients OWNER TO rue;
+
 --
--- Name: addon_items; Type: TABLE; Schema: public; Owner: -
+-- Name: addon_items; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.addon_items (
@@ -309,13 +282,14 @@ CREATE TABLE public.addon_items (
     is_active boolean DEFAULT true NOT NULL,
     display_order integer DEFAULT 0 NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT addon_items_type_check CHECK ((type = ANY (ARRAY['coffee_type'::text, 'milk_type'::text, 'extra'::text])))
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
+ALTER TABLE public.addon_items OWNER TO rue;
+
 --
--- Name: branch_inventory; Type: TABLE; Schema: public; Owner: -
+-- Name: branch_inventory; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.branch_inventory (
@@ -329,8 +303,10 @@ CREATE TABLE public.branch_inventory (
 );
 
 
+ALTER TABLE public.branch_inventory OWNER TO rue;
+
 --
--- Name: branch_inventory_adjustments; Type: TABLE; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.branch_inventory_adjustments (
@@ -346,8 +322,10 @@ CREATE TABLE public.branch_inventory_adjustments (
 );
 
 
+ALTER TABLE public.branch_inventory_adjustments OWNER TO rue;
+
 --
--- Name: branch_inventory_transfers; Type: TABLE; Schema: public; Owner: -
+-- Name: branch_inventory_transfers; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.branch_inventory_transfers (
@@ -364,8 +342,10 @@ CREATE TABLE public.branch_inventory_transfers (
 );
 
 
+ALTER TABLE public.branch_inventory_transfers OWNER TO rue;
+
 --
--- Name: branch_menu_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: branch_menu_overrides; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.branch_menu_overrides (
@@ -377,8 +357,10 @@ CREATE TABLE public.branch_menu_overrides (
 );
 
 
+ALTER TABLE public.branch_menu_overrides OWNER TO rue;
+
 --
--- Name: branches; Type: TABLE; Schema: public; Owner: -
+-- Name: branches; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.branches (
@@ -398,8 +380,10 @@ CREATE TABLE public.branches (
 );
 
 
+ALTER TABLE public.branches OWNER TO rue;
+
 --
--- Name: categories; Type: TABLE; Schema: public; Owner: -
+-- Name: categories; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.categories (
@@ -415,8 +399,10 @@ CREATE TABLE public.categories (
 );
 
 
+ALTER TABLE public.categories OWNER TO rue;
+
 --
--- Name: discounts; Type: TABLE; Schema: public; Owner: -
+-- Name: discounts; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.discounts (
@@ -431,57 +417,10 @@ CREATE TABLE public.discounts (
 );
 
 
---
--- Name: drink_option_groups; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.drink_option_groups (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    menu_item_id uuid NOT NULL,
-    type text NOT NULL,
-    selection_type public.addon_selection DEFAULT 'single'::public.addon_selection NOT NULL,
-    is_required boolean DEFAULT false NOT NULL,
-    min_selections integer DEFAULT 0 NOT NULL,
-    display_order integer DEFAULT 0 NOT NULL,
-    CONSTRAINT drink_option_groups_type_check CHECK ((type = ANY (ARRAY['coffee_type'::text, 'milk_type'::text, 'extra'::text])))
-);
-
+ALTER TABLE public.discounts OWNER TO rue;
 
 --
--- Name: drink_option_ingredient_overrides; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.drink_option_ingredient_overrides (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    drink_option_item_id uuid NOT NULL,
-    size_label public.item_size,
-    inventory_item_id uuid,
-    quantity_used numeric(12,3) NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    ingredient_name text NOT NULL,
-    ingredient_unit text NOT NULL,
-    org_ingredient_id uuid,
-    replaces_org_ingredient_id uuid
-);
-
-
---
--- Name: drink_option_items; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.drink_option_items (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    group_id uuid NOT NULL,
-    addon_item_id uuid NOT NULL,
-    price_override integer,
-    display_order integer DEFAULT 0 NOT NULL,
-    is_active boolean DEFAULT true NOT NULL
-);
-
-
---
--- Name: item_sizes; Type: TABLE; Schema: public; Owner: -
+-- Name: item_sizes; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.item_sizes (
@@ -494,15 +433,59 @@ CREATE TABLE public.item_sizes (
 );
 
 
+ALTER TABLE public.item_sizes OWNER TO rue;
+
 --
--- Name: menu_item_recipes; Type: TABLE; Schema: public; Owner: -
+-- Name: menu_item_addon_slots; Type: TABLE; Schema: public; Owner: rue
+--
+
+CREATE TABLE public.menu_item_addon_slots (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    menu_item_id uuid NOT NULL,
+    addon_type text NOT NULL,
+    is_required boolean DEFAULT false NOT NULL,
+    min_selections integer DEFAULT 0 NOT NULL,
+    max_selections integer,
+    display_order integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    label text
+);
+
+
+ALTER TABLE public.menu_item_addon_slots OWNER TO rue;
+
+--
+-- Name: menu_item_optional_fields; Type: TABLE; Schema: public; Owner: rue
+--
+
+CREATE TABLE public.menu_item_optional_fields (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    menu_item_id uuid NOT NULL,
+    name text NOT NULL,
+    price integer DEFAULT 0 NOT NULL,
+    org_ingredient_id uuid,
+    ingredient_name text,
+    ingredient_unit text,
+    quantity_used numeric(12,3),
+    size_label public.item_size,
+    display_order integer DEFAULT 0 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_optional_ingredient CHECK ((((org_ingredient_id IS NULL) AND (ingredient_name IS NULL) AND (ingredient_unit IS NULL) AND (quantity_used IS NULL)) OR ((ingredient_name IS NOT NULL) AND (ingredient_unit IS NOT NULL) AND (quantity_used IS NOT NULL))))
+);
+
+
+ALTER TABLE public.menu_item_optional_fields OWNER TO rue;
+
+--
+-- Name: menu_item_recipes; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.menu_item_recipes (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     menu_item_id uuid NOT NULL,
     size_label public.item_size NOT NULL,
-    inventory_item_id uuid,
     quantity_used numeric(12,3) NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -512,8 +495,10 @@ CREATE TABLE public.menu_item_recipes (
 );
 
 
+ALTER TABLE public.menu_item_recipes OWNER TO rue;
+
 --
--- Name: menu_items; Type: TABLE; Schema: public; Owner: -
+-- Name: menu_items; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.menu_items (
@@ -532,8 +517,10 @@ CREATE TABLE public.menu_items (
 );
 
 
+ALTER TABLE public.menu_items OWNER TO rue;
+
 --
--- Name: order_item_addons; Type: TABLE; Schema: public; Owner: -
+-- Name: order_item_addons; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.order_item_addons (
@@ -547,8 +534,30 @@ CREATE TABLE public.order_item_addons (
 );
 
 
+ALTER TABLE public.order_item_addons OWNER TO rue;
+
 --
--- Name: order_items; Type: TABLE; Schema: public; Owner: -
+-- Name: order_item_optionals; Type: TABLE; Schema: public; Owner: rue
+--
+
+CREATE TABLE public.order_item_optionals (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    order_item_id uuid NOT NULL,
+    optional_field_id uuid,
+    field_name text NOT NULL,
+    price integer DEFAULT 0 NOT NULL,
+    org_ingredient_id uuid,
+    ingredient_name text,
+    ingredient_unit text,
+    quantity_deducted numeric(12,3),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+ALTER TABLE public.order_item_optionals OWNER TO rue;
+
+--
+-- Name: order_items; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.order_items (
@@ -565,8 +574,10 @@ CREATE TABLE public.order_items (
 );
 
 
+ALTER TABLE public.order_items OWNER TO rue;
+
 --
--- Name: order_payments; Type: TABLE; Schema: public; Owner: -
+-- Name: order_payments; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.order_payments (
@@ -579,8 +590,10 @@ CREATE TABLE public.order_payments (
 );
 
 
+ALTER TABLE public.order_payments OWNER TO rue;
+
 --
--- Name: orders; Type: TABLE; Schema: public; Owner: -
+-- Name: orders; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.orders (
@@ -613,8 +626,10 @@ CREATE TABLE public.orders (
 );
 
 
+ALTER TABLE public.orders OWNER TO rue;
+
 --
--- Name: org_ingredients; Type: TABLE; Schema: public; Owner: -
+-- Name: org_ingredients; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.org_ingredients (
@@ -631,8 +646,10 @@ CREATE TABLE public.org_ingredients (
 );
 
 
+ALTER TABLE public.org_ingredients OWNER TO rue;
+
 --
--- Name: organizations; Type: TABLE; Schema: public; Owner: -
+-- Name: organizations; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.organizations (
@@ -650,8 +667,10 @@ CREATE TABLE public.organizations (
 );
 
 
+ALTER TABLE public.organizations OWNER TO rue;
+
 --
--- Name: permissions; Type: TABLE; Schema: public; Owner: -
+-- Name: permissions; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.permissions (
@@ -664,8 +683,10 @@ CREATE TABLE public.permissions (
 );
 
 
+ALTER TABLE public.permissions OWNER TO rue;
+
 --
--- Name: role_permissions; Type: TABLE; Schema: public; Owner: -
+-- Name: role_permissions; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.role_permissions (
@@ -676,8 +697,10 @@ CREATE TABLE public.role_permissions (
 );
 
 
+ALTER TABLE public.role_permissions OWNER TO rue;
+
 --
--- Name: shift_cash_movements; Type: TABLE; Schema: public; Owner: -
+-- Name: shift_cash_movements; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.shift_cash_movements (
@@ -690,8 +713,10 @@ CREATE TABLE public.shift_cash_movements (
 );
 
 
+ALTER TABLE public.shift_cash_movements OWNER TO rue;
+
 --
--- Name: shift_inventory_counts; Type: TABLE; Schema: public; Owner: -
+-- Name: shift_inventory_counts; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.shift_inventory_counts (
@@ -708,8 +733,10 @@ CREATE TABLE public.shift_inventory_counts (
 );
 
 
+ALTER TABLE public.shift_inventory_counts OWNER TO rue;
+
 --
--- Name: shifts; Type: TABLE; Schema: public; Owner: -
+-- Name: shifts; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.shifts (
@@ -736,8 +763,10 @@ CREATE TABLE public.shifts (
 );
 
 
+ALTER TABLE public.shifts OWNER TO rue;
+
 --
--- Name: user_branch_assignments; Type: TABLE; Schema: public; Owner: -
+-- Name: user_branch_assignments; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.user_branch_assignments (
@@ -748,8 +777,10 @@ CREATE TABLE public.user_branch_assignments (
 );
 
 
+ALTER TABLE public.user_branch_assignments OWNER TO rue;
+
 --
--- Name: users; Type: TABLE; Schema: public; Owner: -
+-- Name: users; Type: TABLE; Schema: public; Owner: rue
 --
 
 CREATE TABLE public.users (
@@ -771,8 +802,10 @@ CREATE TABLE public.users (
 );
 
 
+ALTER TABLE public.users OWNER TO rue;
+
 --
--- Name: addon_item_ingredients addon_item_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_item_ingredients addon_item_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_item_ingredients
@@ -780,7 +813,7 @@ ALTER TABLE ONLY public.addon_item_ingredients
 
 
 --
--- Name: addon_item_ingredients addon_item_ingredients_unique; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_item_ingredients addon_item_ingredients_unique; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_item_ingredients
@@ -788,7 +821,7 @@ ALTER TABLE ONLY public.addon_item_ingredients
 
 
 --
--- Name: addon_items addon_items_org_id_name_type_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_items addon_items_org_id_name_type_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_items
@@ -796,7 +829,7 @@ ALTER TABLE ONLY public.addon_items
 
 
 --
--- Name: addon_items addon_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_items addon_items_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_items
@@ -804,7 +837,7 @@ ALTER TABLE ONLY public.addon_items
 
 
 --
--- Name: branch_inventory_adjustments branch_inventory_adjustments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_adjustments
@@ -812,7 +845,7 @@ ALTER TABLE ONLY public.branch_inventory_adjustments
 
 
 --
--- Name: branch_inventory branch_inventory_branch_id_org_ingredient_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory branch_inventory_branch_id_org_ingredient_id_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory
@@ -820,7 +853,7 @@ ALTER TABLE ONLY public.branch_inventory
 
 
 --
--- Name: branch_inventory branch_inventory_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory branch_inventory_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory
@@ -828,7 +861,7 @@ ALTER TABLE ONLY public.branch_inventory
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -836,7 +869,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_menu_overrides branch_menu_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_menu_overrides branch_menu_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_menu_overrides
@@ -844,7 +877,7 @@ ALTER TABLE ONLY public.branch_menu_overrides
 
 
 --
--- Name: branches branches_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branches branches_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branches
@@ -852,7 +885,7 @@ ALTER TABLE ONLY public.branches
 
 
 --
--- Name: branches branches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: branches branches_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branches
@@ -860,7 +893,7 @@ ALTER TABLE ONLY public.branches
 
 
 --
--- Name: categories categories_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: categories categories_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.categories
@@ -868,7 +901,7 @@ ALTER TABLE ONLY public.categories
 
 
 --
--- Name: categories categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: categories categories_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.categories
@@ -876,7 +909,7 @@ ALTER TABLE ONLY public.categories
 
 
 --
--- Name: discounts discounts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: discounts discounts_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.discounts
@@ -884,55 +917,7 @@ ALTER TABLE ONLY public.discounts
 
 
 --
--- Name: drink_option_groups drink_option_groups_menu_item_id_type_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_groups
-    ADD CONSTRAINT drink_option_groups_menu_item_id_type_key UNIQUE (menu_item_id, type);
-
-
---
--- Name: drink_option_groups drink_option_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_groups
-    ADD CONSTRAINT drink_option_groups_pkey PRIMARY KEY (id);
-
-
---
--- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_ingredient_overrides
-    ADD CONSTRAINT drink_option_ingredient_overrides_pkey PRIMARY KEY (id);
-
-
---
--- Name: drink_option_items drink_option_items_group_id_addon_item_id_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_items
-    ADD CONSTRAINT drink_option_items_group_id_addon_item_id_key UNIQUE (group_id, addon_item_id);
-
-
---
--- Name: drink_option_items drink_option_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_items
-    ADD CONSTRAINT drink_option_items_pkey PRIMARY KEY (id);
-
-
---
--- Name: drink_option_ingredient_overrides drink_option_overrides_unique; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_ingredient_overrides
-    ADD CONSTRAINT drink_option_overrides_unique UNIQUE (drink_option_item_id, size_label, ingredient_name);
-
-
---
--- Name: item_sizes item_sizes_menu_item_id_label_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: item_sizes item_sizes_menu_item_id_label_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.item_sizes
@@ -940,7 +925,7 @@ ALTER TABLE ONLY public.item_sizes
 
 
 --
--- Name: item_sizes item_sizes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: item_sizes item_sizes_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.item_sizes
@@ -948,7 +933,31 @@ ALTER TABLE ONLY public.item_sizes
 
 
 --
--- Name: menu_item_recipes menu_item_recipes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_item_addon_slots menu_item_addon_slots_menu_item_id_addon_type_key; Type: CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_addon_slots
+    ADD CONSTRAINT menu_item_addon_slots_menu_item_id_addon_type_key UNIQUE (menu_item_id, addon_type);
+
+
+--
+-- Name: menu_item_addon_slots menu_item_addon_slots_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_addon_slots
+    ADD CONSTRAINT menu_item_addon_slots_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: menu_item_optional_fields menu_item_optional_fields_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_optional_fields
+    ADD CONSTRAINT menu_item_optional_fields_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_item_recipes
@@ -956,7 +965,7 @@ ALTER TABLE ONLY public.menu_item_recipes
 
 
 --
--- Name: menu_item_recipes menu_item_recipes_unique; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_item_recipes menu_item_recipes_unique; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_item_recipes
@@ -964,7 +973,7 @@ ALTER TABLE ONLY public.menu_item_recipes
 
 
 --
--- Name: menu_items menu_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_items menu_items_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_items
@@ -972,7 +981,7 @@ ALTER TABLE ONLY public.menu_items
 
 
 --
--- Name: order_item_addons order_item_addons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: order_item_addons order_item_addons_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_item_addons
@@ -980,7 +989,15 @@ ALTER TABLE ONLY public.order_item_addons
 
 
 --
--- Name: order_items order_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: order_item_optionals order_item_optionals_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.order_item_optionals
+    ADD CONSTRAINT order_item_optionals_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: order_items order_items_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_items
@@ -988,7 +1005,7 @@ ALTER TABLE ONLY public.order_items
 
 
 --
--- Name: order_payments order_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: order_payments order_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_payments
@@ -996,7 +1013,7 @@ ALTER TABLE ONLY public.order_payments
 
 
 --
--- Name: orders orders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1004,7 +1021,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: orders orders_shift_id_order_number_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_shift_id_order_number_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1012,7 +1029,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: org_ingredients org_ingredients_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: org_ingredients org_ingredients_org_id_name_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.org_ingredients
@@ -1020,7 +1037,7 @@ ALTER TABLE ONLY public.org_ingredients
 
 
 --
--- Name: org_ingredients org_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: org_ingredients org_ingredients_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.org_ingredients
@@ -1028,7 +1045,7 @@ ALTER TABLE ONLY public.org_ingredients
 
 
 --
--- Name: organizations organizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organizations organizations_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.organizations
@@ -1036,7 +1053,7 @@ ALTER TABLE ONLY public.organizations
 
 
 --
--- Name: organizations organizations_slug_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: organizations organizations_slug_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.organizations
@@ -1044,7 +1061,7 @@ ALTER TABLE ONLY public.organizations
 
 
 --
--- Name: permissions permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: permissions permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.permissions
@@ -1052,7 +1069,7 @@ ALTER TABLE ONLY public.permissions
 
 
 --
--- Name: permissions permissions_user_id_resource_action_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: permissions permissions_user_id_resource_action_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.permissions
@@ -1060,7 +1077,7 @@ ALTER TABLE ONLY public.permissions
 
 
 --
--- Name: role_permissions role_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: role_permissions role_permissions_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.role_permissions
@@ -1068,7 +1085,7 @@ ALTER TABLE ONLY public.role_permissions
 
 
 --
--- Name: shift_cash_movements shift_cash_movements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_cash_movements shift_cash_movements_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_cash_movements
@@ -1076,7 +1093,7 @@ ALTER TABLE ONLY public.shift_cash_movements
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
@@ -1084,7 +1101,7 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_shift_id_branch_inventory_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_shift_id_branch_inventory_id_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
@@ -1092,7 +1109,7 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shifts shifts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shifts shifts_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shifts
@@ -1100,7 +1117,7 @@ ALTER TABLE ONLY public.shifts
 
 
 --
--- Name: user_branch_assignments user_branch_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: user_branch_assignments user_branch_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.user_branch_assignments
@@ -1108,7 +1125,7 @@ ALTER TABLE ONLY public.user_branch_assignments
 
 
 --
--- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.users
@@ -1116,7 +1133,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.users
@@ -1124,350 +1141,378 @@ ALTER TABLE ONLY public.users
 
 
 --
--- Name: idx_bia_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_bia_branch; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_bia_branch ON public.branch_inventory_adjustments USING btree (branch_id);
 
 
 --
--- Name: idx_bia_inv; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_bia_inv; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_bia_inv ON public.branch_inventory_adjustments USING btree (branch_inventory_id);
 
 
 --
--- Name: idx_bit_dest; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_bit_dest; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_bit_dest ON public.branch_inventory_transfers USING btree (destination_branch_id);
 
 
 --
--- Name: idx_bit_ingredient; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_bit_ingredient; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_bit_ingredient ON public.branch_inventory_transfers USING btree (org_ingredient_id);
 
 
 --
--- Name: idx_bit_source; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_bit_source; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_bit_source ON public.branch_inventory_transfers USING btree (source_branch_id);
 
 
 --
--- Name: idx_branch_inventory_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_branch_inventory_branch; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_branch_inventory_branch ON public.branch_inventory USING btree (branch_id);
 
 
 --
--- Name: idx_branch_inventory_ingredient; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_branch_inventory_ingredient; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_branch_inventory_ingredient ON public.branch_inventory USING btree (org_ingredient_id);
 
 
 --
--- Name: idx_branches_org; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_branches_org; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_branches_org ON public.branches USING btree (org_id);
 
 
 --
--- Name: idx_discounts_org_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_discounts_org_id; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_discounts_org_id ON public.discounts USING btree (org_id);
 
 
 --
--- Name: idx_menu_item_recipes_item_size; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_menu_item_recipes_item_size; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_menu_item_recipes_item_size ON public.menu_item_recipes USING btree (menu_item_id, size_label);
 
 
 --
--- Name: idx_menu_items_category; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_menu_items_category; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_menu_items_category ON public.menu_items USING btree (category_id);
 
 
 --
--- Name: idx_menu_items_name_trgm; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_menu_items_name_trgm; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_menu_items_name_trgm ON public.menu_items USING gin (name public.gin_trgm_ops);
 
 
 --
--- Name: idx_menu_items_org; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_menu_items_org; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_menu_items_org ON public.menu_items USING btree (org_id);
 
 
 --
--- Name: idx_order_item_addons_oi; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_mias_menu_item; Type: INDEX; Schema: public; Owner: rue
+--
+
+CREATE INDEX idx_mias_menu_item ON public.menu_item_addon_slots USING btree (menu_item_id);
+
+
+--
+-- Name: idx_miof_ingredient; Type: INDEX; Schema: public; Owner: rue
+--
+
+CREATE INDEX idx_miof_ingredient ON public.menu_item_optional_fields USING btree (org_ingredient_id) WHERE (org_ingredient_id IS NOT NULL);
+
+
+--
+-- Name: idx_miof_menu_item; Type: INDEX; Schema: public; Owner: rue
+--
+
+CREATE INDEX idx_miof_menu_item ON public.menu_item_optional_fields USING btree (menu_item_id);
+
+
+--
+-- Name: idx_oio_order_item; Type: INDEX; Schema: public; Owner: rue
+--
+
+CREATE INDEX idx_oio_order_item ON public.order_item_optionals USING btree (order_item_id);
+
+
+--
+-- Name: idx_order_item_addons_oi; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_order_item_addons_oi ON public.order_item_addons USING btree (order_item_id);
 
 
 --
--- Name: idx_order_items_order; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_order_items_order; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_order_items_order ON public.order_items USING btree (order_id);
 
 
 --
--- Name: idx_order_payments_order; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_order_payments_order; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_order_payments_order ON public.order_payments USING btree (order_id);
 
 
 --
--- Name: idx_order_payments_order_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_order_payments_order_id; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_order_payments_order_id ON public.order_payments USING btree (order_id);
 
 
 --
--- Name: idx_orders_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_branch; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_branch ON public.orders USING btree (branch_id);
 
 
 --
--- Name: idx_orders_branch_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_branch_id; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_branch_id ON public.orders USING btree (branch_id);
 
 
 --
--- Name: idx_orders_created_at; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_created_at; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_created_at ON public.orders USING btree (created_at);
 
 
 --
--- Name: idx_orders_shift; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_shift; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_shift ON public.orders USING btree (shift_id);
 
 
 --
--- Name: idx_orders_shift_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_shift_id; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_shift_id ON public.orders USING btree (shift_id);
 
 
 --
--- Name: idx_orders_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_status; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_status ON public.orders USING btree (status);
 
 
 --
--- Name: idx_orders_teller; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_teller; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_orders_teller ON public.orders USING btree (teller_id);
 
 
 --
--- Name: idx_org_ingredients_org; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_org_ingredients_org; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_org_ingredients_org ON public.org_ingredients USING btree (org_id);
 
 
 --
--- Name: idx_permissions_user; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_permissions_user; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_permissions_user ON public.permissions USING btree (user_id);
 
 
 --
--- Name: idx_shift_cash_movements_shift; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_shift_cash_movements_shift; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_shift_cash_movements_shift ON public.shift_cash_movements USING btree (shift_id);
 
 
 --
--- Name: idx_shifts_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_shifts_branch; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_shifts_branch ON public.shifts USING btree (branch_id);
 
 
 --
--- Name: idx_shifts_one_open_per_branch; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_shifts_one_open_per_branch; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE UNIQUE INDEX idx_shifts_one_open_per_branch ON public.shifts USING btree (branch_id) WHERE (status = 'open'::public.shift_status);
 
 
 --
--- Name: idx_shifts_opened_at; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_shifts_opened_at; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_shifts_opened_at ON public.shifts USING btree (opened_at);
 
 
 --
--- Name: idx_shifts_teller; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_shifts_teller; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_shifts_teller ON public.shifts USING btree (teller_id);
 
 
 --
--- Name: idx_sic_shift; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sic_shift; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_sic_shift ON public.shift_inventory_counts USING btree (shift_id);
 
 
 --
--- Name: idx_users_email; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_users_email; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_users_email ON public.users USING btree (email) WHERE (email IS NOT NULL);
 
 
 --
--- Name: idx_users_org; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_users_org; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE INDEX idx_users_org ON public.users USING btree (org_id);
 
 
 --
--- Name: orders_idempotency_key_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: orders_idempotency_key_idx; Type: INDEX; Schema: public; Owner: rue
 --
 
 CREATE UNIQUE INDEX orders_idempotency_key_idx ON public.orders USING btree (idempotency_key) WHERE (idempotency_key IS NOT NULL);
 
 
 --
--- Name: orders orders_set_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: orders orders_set_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER orders_set_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: addon_item_ingredients trg_addon_item_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: addon_item_ingredients trg_addon_item_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_addon_item_ingredients_updated_at BEFORE UPDATE ON public.addon_item_ingredients FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: addon_items trg_addon_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: addon_items trg_addon_items_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_addon_items_updated_at BEFORE UPDATE ON public.addon_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: branch_inventory trg_branch_inventory_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: branch_inventory trg_branch_inventory_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_branch_inventory_updated_at BEFORE UPDATE ON public.branch_inventory FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: branches trg_branches_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: branches trg_branches_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_branches_updated_at BEFORE UPDATE ON public.branches FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: categories trg_categories_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: categories trg_categories_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_categories_updated_at BEFORE UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: drink_option_ingredient_overrides trg_drink_option_ingredient_overrides_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_drink_option_ingredient_overrides_updated_at BEFORE UPDATE ON public.drink_option_ingredient_overrides FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
-
-
---
--- Name: menu_item_recipes trg_menu_item_recipes_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: menu_item_recipes trg_menu_item_recipes_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_menu_item_recipes_updated_at BEFORE UPDATE ON public.menu_item_recipes FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: menu_items trg_menu_items_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: menu_items trg_menu_items_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_menu_items_updated_at BEFORE UPDATE ON public.menu_items FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: orders trg_orders_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: menu_item_optional_fields trg_miof_updated_at; Type: TRIGGER; Schema: public; Owner: rue
+--
+
+CREATE TRIGGER trg_miof_updated_at BEFORE UPDATE ON public.menu_item_optional_fields FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: orders trg_orders_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_orders_updated_at BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: org_ingredients trg_org_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: org_ingredients trg_org_ingredients_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_org_ingredients_updated_at BEFORE UPDATE ON public.org_ingredients FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: organizations trg_organizations_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: organizations trg_organizations_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_organizations_updated_at BEFORE UPDATE ON public.organizations FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: shifts trg_shifts_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: shifts trg_shifts_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_shifts_updated_at BEFORE UPDATE ON public.shifts FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: users trg_users_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: users trg_users_updated_at; Type: TRIGGER; Schema: public; Owner: rue
 --
 
 CREATE TRIGGER trg_users_updated_at BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 
 --
--- Name: addon_item_ingredients addon_item_ingredients_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_item_ingredients addon_item_ingredients_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_item_ingredients
@@ -1475,7 +1520,7 @@ ALTER TABLE ONLY public.addon_item_ingredients
 
 
 --
--- Name: addon_item_ingredients addon_item_ingredients_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_item_ingredients addon_item_ingredients_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_item_ingredients
@@ -1483,15 +1528,7 @@ ALTER TABLE ONLY public.addon_item_ingredients
 
 
 --
--- Name: addon_item_ingredients addon_item_ingredients_replaces_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.addon_item_ingredients
-    ADD CONSTRAINT addon_item_ingredients_replaces_org_ingredient_id_fkey FOREIGN KEY (replaces_org_ingredient_id) REFERENCES public.org_ingredients(id);
-
-
---
--- Name: addon_items addon_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: addon_items addon_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.addon_items
@@ -1499,7 +1536,7 @@ ALTER TABLE ONLY public.addon_items
 
 
 --
--- Name: branch_inventory_adjustments branch_inventory_adjustments_adjusted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_adjusted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_adjustments
@@ -1507,7 +1544,7 @@ ALTER TABLE ONLY public.branch_inventory_adjustments
 
 
 --
--- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_adjustments
@@ -1515,7 +1552,7 @@ ALTER TABLE ONLY public.branch_inventory_adjustments
 
 
 --
--- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments branch_inventory_adjustments_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_adjustments
@@ -1523,7 +1560,7 @@ ALTER TABLE ONLY public.branch_inventory_adjustments
 
 
 --
--- Name: branch_inventory branch_inventory_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory branch_inventory_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory
@@ -1531,7 +1568,7 @@ ALTER TABLE ONLY public.branch_inventory
 
 
 --
--- Name: branch_inventory branch_inventory_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory branch_inventory_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory
@@ -1539,7 +1576,7 @@ ALTER TABLE ONLY public.branch_inventory
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_destination_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_destination_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -1547,7 +1584,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_initiated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_initiated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -1555,7 +1592,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -1563,7 +1600,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -1571,7 +1608,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_inventory_transfers branch_inventory_transfers_source_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_transfers branch_inventory_transfers_source_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_transfers
@@ -1579,7 +1616,7 @@ ALTER TABLE ONLY public.branch_inventory_transfers
 
 
 --
--- Name: branch_menu_overrides branch_menu_overrides_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_menu_overrides branch_menu_overrides_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_menu_overrides
@@ -1587,7 +1624,7 @@ ALTER TABLE ONLY public.branch_menu_overrides
 
 
 --
--- Name: branch_menu_overrides branch_menu_overrides_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_menu_overrides branch_menu_overrides_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_menu_overrides
@@ -1595,7 +1632,7 @@ ALTER TABLE ONLY public.branch_menu_overrides
 
 
 --
--- Name: branches branches_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branches branches_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branches
@@ -1603,7 +1640,7 @@ ALTER TABLE ONLY public.branches
 
 
 --
--- Name: categories categories_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: categories categories_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.categories
@@ -1611,7 +1648,7 @@ ALTER TABLE ONLY public.categories
 
 
 --
--- Name: discounts discounts_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: discounts discounts_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.discounts
@@ -1619,55 +1656,7 @@ ALTER TABLE ONLY public.discounts
 
 
 --
--- Name: drink_option_groups drink_option_groups_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_groups
-    ADD CONSTRAINT drink_option_groups_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
-
-
---
--- Name: drink_option_ingredient_overrides drink_option_ingredient_overrid_replaces_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_ingredient_overrides
-    ADD CONSTRAINT drink_option_ingredient_overrid_replaces_org_ingredient_id_fkey FOREIGN KEY (replaces_org_ingredient_id) REFERENCES public.org_ingredients(id);
-
-
---
--- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_drink_option_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_ingredient_overrides
-    ADD CONSTRAINT drink_option_ingredient_overrides_drink_option_item_id_fkey FOREIGN KEY (drink_option_item_id) REFERENCES public.drink_option_items(id) ON DELETE CASCADE;
-
-
---
--- Name: drink_option_ingredient_overrides drink_option_ingredient_overrides_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_ingredient_overrides
-    ADD CONSTRAINT drink_option_ingredient_overrides_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE RESTRICT;
-
-
---
--- Name: drink_option_items drink_option_items_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_items
-    ADD CONSTRAINT drink_option_items_addon_item_id_fkey FOREIGN KEY (addon_item_id) REFERENCES public.addon_items(id) ON DELETE CASCADE;
-
-
---
--- Name: drink_option_items drink_option_items_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.drink_option_items
-    ADD CONSTRAINT drink_option_items_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.drink_option_groups(id) ON DELETE CASCADE;
-
-
---
--- Name: branch_inventory_adjustments fk_bia_transfer; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: branch_inventory_adjustments fk_bia_transfer; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.branch_inventory_adjustments
@@ -1675,7 +1664,7 @@ ALTER TABLE ONLY public.branch_inventory_adjustments
 
 
 --
--- Name: item_sizes item_sizes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: item_sizes item_sizes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.item_sizes
@@ -1683,7 +1672,31 @@ ALTER TABLE ONLY public.item_sizes
 
 
 --
--- Name: menu_item_recipes menu_item_recipes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_item_addon_slots menu_item_addon_slots_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_addon_slots
+    ADD CONSTRAINT menu_item_addon_slots_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: menu_item_optional_fields menu_item_optional_fields_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_optional_fields
+    ADD CONSTRAINT menu_item_optional_fields_menu_item_id_fkey FOREIGN KEY (menu_item_id) REFERENCES public.menu_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: menu_item_optional_fields menu_item_optional_fields_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.menu_item_optional_fields
+    ADD CONSTRAINT menu_item_optional_fields_org_ingredient_id_fkey FOREIGN KEY (org_ingredient_id) REFERENCES public.org_ingredients(id) ON DELETE SET NULL;
+
+
+--
+-- Name: menu_item_recipes menu_item_recipes_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_item_recipes
@@ -1691,7 +1704,7 @@ ALTER TABLE ONLY public.menu_item_recipes
 
 
 --
--- Name: menu_item_recipes menu_item_recipes_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_item_recipes menu_item_recipes_org_ingredient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_item_recipes
@@ -1699,7 +1712,7 @@ ALTER TABLE ONLY public.menu_item_recipes
 
 
 --
--- Name: menu_items menu_items_category_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_items menu_items_category_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_items
@@ -1707,7 +1720,7 @@ ALTER TABLE ONLY public.menu_items
 
 
 --
--- Name: menu_items menu_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: menu_items menu_items_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.menu_items
@@ -1715,7 +1728,7 @@ ALTER TABLE ONLY public.menu_items
 
 
 --
--- Name: order_item_addons order_item_addons_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: order_item_addons order_item_addons_addon_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_item_addons
@@ -1723,7 +1736,7 @@ ALTER TABLE ONLY public.order_item_addons
 
 
 --
--- Name: order_item_addons order_item_addons_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: order_item_addons order_item_addons_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_item_addons
@@ -1731,7 +1744,23 @@ ALTER TABLE ONLY public.order_item_addons
 
 
 --
--- Name: order_items order_items_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: order_item_optionals order_item_optionals_optional_field_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.order_item_optionals
+    ADD CONSTRAINT order_item_optionals_optional_field_id_fkey FOREIGN KEY (optional_field_id) REFERENCES public.menu_item_optional_fields(id) ON DELETE SET NULL;
+
+
+--
+-- Name: order_item_optionals order_item_optionals_order_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
+--
+
+ALTER TABLE ONLY public.order_item_optionals
+    ADD CONSTRAINT order_item_optionals_order_item_id_fkey FOREIGN KEY (order_item_id) REFERENCES public.order_items(id) ON DELETE CASCADE;
+
+
+--
+-- Name: order_items order_items_menu_item_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_items
@@ -1739,7 +1768,7 @@ ALTER TABLE ONLY public.order_items
 
 
 --
--- Name: order_items order_items_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: order_items order_items_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_items
@@ -1747,7 +1776,7 @@ ALTER TABLE ONLY public.order_items
 
 
 --
--- Name: order_payments order_payments_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: order_payments order_payments_order_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.order_payments
@@ -1755,7 +1784,7 @@ ALTER TABLE ONLY public.order_payments
 
 
 --
--- Name: orders orders_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1763,7 +1792,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: orders orders_discount_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_discount_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1771,7 +1800,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: orders orders_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1779,7 +1808,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: orders orders_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1787,7 +1816,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: orders orders_voided_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: orders orders_voided_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.orders
@@ -1795,7 +1824,7 @@ ALTER TABLE ONLY public.orders
 
 
 --
--- Name: org_ingredients org_ingredients_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: org_ingredients org_ingredients_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.org_ingredients
@@ -1803,7 +1832,7 @@ ALTER TABLE ONLY public.org_ingredients
 
 
 --
--- Name: permissions permissions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: permissions permissions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.permissions
@@ -1811,7 +1840,7 @@ ALTER TABLE ONLY public.permissions
 
 
 --
--- Name: shift_cash_movements shift_cash_movements_moved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_cash_movements shift_cash_movements_moved_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_cash_movements
@@ -1819,7 +1848,7 @@ ALTER TABLE ONLY public.shift_cash_movements
 
 
 --
--- Name: shift_cash_movements shift_cash_movements_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_cash_movements shift_cash_movements_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_cash_movements
@@ -1827,7 +1856,7 @@ ALTER TABLE ONLY public.shift_cash_movements
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_branch_inventory_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
@@ -1835,7 +1864,7 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_counted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_counted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
@@ -1843,7 +1872,7 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shift_inventory_counts shift_inventory_counts_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shift_inventory_counts shift_inventory_counts_shift_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shift_inventory_counts
@@ -1851,7 +1880,7 @@ ALTER TABLE ONLY public.shift_inventory_counts
 
 
 --
--- Name: shifts shifts_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shifts shifts_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shifts
@@ -1859,7 +1888,7 @@ ALTER TABLE ONLY public.shifts
 
 
 --
--- Name: shifts shifts_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shifts shifts_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shifts
@@ -1867,7 +1896,7 @@ ALTER TABLE ONLY public.shifts
 
 
 --
--- Name: shifts shifts_force_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shifts shifts_force_closed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shifts
@@ -1875,7 +1904,7 @@ ALTER TABLE ONLY public.shifts
 
 
 --
--- Name: shifts shifts_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shifts shifts_teller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.shifts
@@ -1883,7 +1912,7 @@ ALTER TABLE ONLY public.shifts
 
 
 --
--- Name: user_branch_assignments user_branch_assignments_assigned_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: user_branch_assignments user_branch_assignments_assigned_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.user_branch_assignments
@@ -1891,7 +1920,7 @@ ALTER TABLE ONLY public.user_branch_assignments
 
 
 --
--- Name: user_branch_assignments user_branch_assignments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: user_branch_assignments user_branch_assignments_branch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.user_branch_assignments
@@ -1899,7 +1928,7 @@ ALTER TABLE ONLY public.user_branch_assignments
 
 
 --
--- Name: user_branch_assignments user_branch_assignments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: user_branch_assignments user_branch_assignments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.user_branch_assignments
@@ -1907,7 +1936,7 @@ ALTER TABLE ONLY public.user_branch_assignments
 
 
 --
--- Name: users users_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: users users_org_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: rue
 --
 
 ALTER TABLE ONLY public.users
@@ -1918,5 +1947,4 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ucOGpbHfaZfKsWsTvQLpGdJeaTHJGvxmzRPhf21z16qkEfzNkE483LhR2Vy046o
-
+\unrestrict higYn0IhbnlLjYjlQJIcbi5gX6oLuF0sGP0QwBwtmGZyBUXcdKQQi4Qa89cL7qf

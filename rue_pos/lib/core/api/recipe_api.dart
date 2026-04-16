@@ -15,21 +15,20 @@ class RecipeIngredient {
     required this.source,
   });
 
-  factory RecipeIngredient.fromJson(Map<String, dynamic> j) =>
-      RecipeIngredient(
-        name:     j['ingredient_name'] as String,
-        unit:     j['unit']            as String,
+  factory RecipeIngredient.fromJson(Map<String, dynamic> j) => RecipeIngredient(
+        name: j['ingredient_name'] as String,
+        unit: j['unit'] as String,
         quantity: (j['quantity'] as num).toDouble(),
-        source:   j['source']          as String,
+        source: j['source'] as String,
       );
 
-  bool get isBase     => source == 'drink_recipe';
-  bool get isAddon    => source == 'addon';
+  bool get isBase => source == 'drink_recipe';
+  bool get isAddon => source == 'addon';
   bool get isOptional => source.startsWith('optional');
 
   String get sourceLabel {
-    if (isBase)     return 'base';
-    if (isAddon)    return 'addon';
+    if (isBase) return 'base';
+    if (isAddon) return 'addon';
     if (isOptional) {
       final parts = source.split(':');
       return parts.length > 1 ? parts[1] : 'optional';
@@ -43,9 +42,9 @@ class RecipeApi {
   RecipeApi(this._c);
 
   Future<List<RecipeIngredient>> preview({
-    required String             menuItemId,
-    String?                     sizeLabel,
-    required List<SelectedAddon>    addons,
+    required String menuItemId,
+    String? sizeLabel,
+    required List<SelectedAddon> addons,
     required List<SelectedOptional> optionals,
   }) async {
     final res = await _c.dio.post('/orders/preview-recipe', data: {
@@ -56,8 +55,11 @@ class RecipeApi {
           .toList(),
       'optional_field_ids': optionals.map((o) => o.optionalFieldId).toList(),
     });
+
+    // Safely cast the list, then safely convert the inner maps
     return (res.data as List)
-        .map((e) => RecipeIngredient.fromJson(e as Map<String, dynamic>))
+        .map((e) =>
+            RecipeIngredient.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
   }
 }

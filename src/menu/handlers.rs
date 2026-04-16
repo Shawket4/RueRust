@@ -63,6 +63,7 @@ pub struct AddonItem {
     pub display_order: i32,
     pub created_at:    DateTime<Utc>,
     pub updated_at:    DateTime<Utc>,
+    pub primary_ingredient_id: Option<Uuid>,
 }
 
 // ── Addon Slot models ─────────────────────────────────────────
@@ -567,11 +568,12 @@ pub async fn list_addon_items(
 
     let rows = match &query.addon_type {
         Some(t) => sqlx::query_as::<_, AddonItem>(
-            "SELECT id, org_id, name, type as addon_type, default_price,
-                    is_active, display_order, created_at, updated_at
-             FROM addon_items
-             WHERE org_id = $1 AND type = $2
-             ORDER BY type ASC, display_order ASC",
+            "SELECT a.id, a.org_id, a.name, a.type as addon_type, a.default_price,
+                    a.is_active, a.display_order, a.created_at, a.updated_at,
+                    (SELECT org_ingredient_id FROM addon_item_ingredients WHERE addon_item_id = a.id LIMIT 1) as primary_ingredient_id
+             FROM addon_items a
+             WHERE a.org_id = $1 AND a.type = $2
+             ORDER BY a.type ASC, a.display_order ASC",
         )
         .bind(query.org_id)
         .bind(t)
@@ -579,11 +581,12 @@ pub async fn list_addon_items(
         .await?,
 
         None => sqlx::query_as::<_, AddonItem>(
-            "SELECT id, org_id, name, type as addon_type, default_price,
-                    is_active, display_order, created_at, updated_at
-             FROM addon_items
-             WHERE org_id = $1
-             ORDER BY type ASC, display_order ASC",
+            "SELECT a.id, a.org_id, a.name, a.type as addon_type, a.default_price,
+                    a.is_active, a.display_order, a.created_at, a.updated_at,
+                    (SELECT org_ingredient_id FROM addon_item_ingredients WHERE addon_item_id = a.id LIMIT 1) as primary_ingredient_id
+             FROM addon_items a
+             WHERE a.org_id = $1
+             ORDER BY a.type ASC, a.display_order ASC",
         )
         .bind(query.org_id)
         .fetch_all(pool.get_ref())

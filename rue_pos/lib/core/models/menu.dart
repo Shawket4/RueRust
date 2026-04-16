@@ -55,6 +55,7 @@ class AddonItem {
   final int    defaultPrice;
   final bool   isActive;
   final int    displayOrder;
+  final String? primaryIngredientId;
 
   const AddonItem({
     required this.id,
@@ -63,21 +64,24 @@ class AddonItem {
     required this.defaultPrice,
     required this.isActive,
     required this.displayOrder,
+    this.primaryIngredientId,
   });
 
   factory AddonItem.fromJson(Map<String, dynamic> j) => AddonItem(
-    id:           j['id']            as String,
-    name:         j['name']          as String,
-    addonType:    j['addon_type']     as String,
-    defaultPrice: (j['default_price'] ?? 0) as int,
-    isActive:     (j['is_active']     ?? true) as bool,
-    displayOrder: (j['display_order'] ?? 0) as int,
+    id:                   j['id']                     as String,
+    name:                 j['name']                   as String,
+    addonType:            j['addon_type']             as String,
+    defaultPrice:         (j['default_price'] ?? 0)   as int,
+    isActive:             (j['is_active']     ?? true) as bool,
+    displayOrder:         (j['display_order'] ?? 0)   as int,
+    primaryIngredientId:  j['primary_ingredient_id']  as String?,
   );
 
   Map<String, dynamic> toJson() => {
     'id': id, 'name': name, 'addon_type': addonType,
     'default_price': defaultPrice, 'is_active': isActive,
     'display_order': displayOrder,
+    'primary_ingredient_id': primaryIngredientId,
   };
 }
 

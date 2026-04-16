@@ -77,6 +77,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     }
 
     _loadOptionalFields();
+    _loadBaseRecipeAndSelectMilk();
 
     // Pre-populate from existing cart item when editing
     if (_isEdit) {
@@ -299,6 +300,36 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     } catch (_) {
       if (mounted) setState(() => _optionalFieldsLoading = false);
     }
+  }
+
+  Future<void> _loadBaseRecipeAndSelectMilk() async {
+    if (_isEdit) return;
+
+    try {
+      final recipe = await ref.read(recipeApiProvider).preview(
+            menuItemId: widget.item.id,
+            sizeLabel: _selectedSize,
+            addons: [],
+            optionals: [],
+          );
+      if (!mounted) return;
+
+      final baseMilk = recipe.where((i) => i.isBase && i.category == 'milk').firstOrNull;
+      if (baseMilk != null && baseMilk.orgIngredientId != null) {
+        final allAddons = ref.read(menuProvider).allAddons;
+        final defaultMilkAddon = allAddons.where((a) =>
+            a.addonType == 'milk_type' &&
+            a.isActive &&
+            a.primaryIngredientId == baseMilk.orgIngredientId).firstOrNull;
+
+        if (defaultMilkAddon != null && _extrasSingle['milk_type'] == null) {
+          setState(() {
+            _extrasSingle['milk_type'] = defaultMilkAddon.id;
+            _clearRecipe();
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   List<SelectedOptional> _buildSelectedOptionals() {

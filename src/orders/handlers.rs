@@ -410,7 +410,28 @@ pub async fn create_order(
             };
 
             if let Some(cat) = target_category {
-                if let Some((repl_id, _, repl_name, repl_unit)) = addon_rows.first() {
+                // Find the base recipe's ingredient for this category
+                let base_ing_id = deductions.iter()
+                    .find(|d| d.source == "drink_recipe" && d.category == cat)
+                    .and_then(|d| d.org_ingredient_id);
+
+                // Find the addon's ingredient
+                let addon_ing_id = addon_rows.first()
+                    .and_then(|(id, _, _, _)| *id);
+
+                // If both point to the same org_ingredient → this IS the base, not a swap
+                let is_base = base_ing_id.is_some()
+                    && addon_ing_id.is_some()
+                    && base_ing_id == addon_ing_id;
+
+                if is_base {
+                    // No charge — the drink already uses this ingredient as its base
+                    if let Some(last) = resolved_addons.last_mut() {
+                        last.unit_price = 0;
+                    }
+                    // Don't touch deductions — recipe already has the right ingredient
+                } else if let Some((repl_id, _, repl_name, repl_unit)) = addon_rows.first() {
+                    // Real swap — replace base ingredient, keep surcharge price
                     let mut swapped = false;
                     for ded in deductions.iter_mut() {
                         if ded.source == "drink_recipe" && ded.category == cat {
@@ -419,7 +440,6 @@ pub async fn create_order(
                             ded.unit = repl_unit.clone();
                             ded.source = format!("addon_swap:{}", addon_name);
                             swapped = true;
-                            // Do not break, swap all matching category deductions just in case
                         }
                     }
                     if !swapped {
@@ -946,6 +966,7 @@ pub struct PreviewRecipeRequest {
 
 #[derive(Serialize, Clone)]
 pub struct PreviewIngredient {
+    pub org_ingredient_id: Option<Uuid>,
     pub ingredient_name: String,
     pub unit:            String,
     pub quantity:        f64,
@@ -996,8 +1017,8 @@ pub async fn preview_recipe(
             .await?
         };
 
-    for (_, qty, name, unit, category) in recipe_rows {
-        result.push(PreviewIngredient { ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into(), category });
+    for (ing_id, qty, name, unit, category) in recipe_rows {
+        result.push(PreviewIngredient { org_ingredient_id: ing_id, ingredient_name: name, unit, quantity: qty, source: "drink_recipe".into(), category });
     }
 
     // Addons
@@ -1027,20 +1048,37 @@ pub async fn preview_recipe(
         };
 
         if let Some(cat) = target_category {
-            if let Some((_, _, repl_name, repl_unit)) = rows.first() {
-                for r in result.iter_mut() {
-                    if r.source == "drink_recipe" && r.category == cat {
-                        r.ingredient_name = repl_name.clone();
-                        r.unit = repl_unit.clone();
-                        r.source = format!("addon_swap:{}", addon_name);
+            // Find the base recipe's ingredient for this category
+            let base_ing_id = result.iter()
+                .find(|r| r.source == "drink_recipe" && r.category == cat)
+                .and_then(|r| r.org_ingredient_id);
+
+            // Find the addon's ingredient
+            let addon_ing_id = rows.first()
+                .and_then(|(id, _, _, _)| *id);
+
+            // If both match → this IS the base, not a swap — skip
+            let is_base = base_ing_id.is_some()
+                && addon_ing_id.is_some()
+                && base_ing_id == addon_ing_id;
+
+            if !is_base {
+                if let Some((_, _, repl_name, repl_unit)) = rows.first() {
+                    for r in result.iter_mut() {
+                        if r.source == "drink_recipe" && r.category == cat {
+                            r.ingredient_name = repl_name.clone();
+                            r.unit = repl_unit.clone();
+                            r.source = format!("addon_swap:{}", addon_name);
+                        }
                     }
                 }
             }
             continue;
         }
 
-        for (_, qty, name, unit) in rows {
+        for (ing_id, qty, name, unit) in rows {
             result.push(PreviewIngredient {
+                org_ingredient_id: ing_id,
                 ingredient_name: name,
                 unit,
                 quantity: qty * addon_qty,
@@ -1065,6 +1103,7 @@ pub async fn preview_recipe(
     
         if let Some((fname, Some(qty), Some(ing_name), Some(ing_unit))) = row_result {
             result.push(PreviewIngredient {
+                org_ingredient_id: None,
                 ingredient_name: ing_name,
                 unit:            ing_unit,
                 quantity:        qty,

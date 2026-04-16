@@ -431,7 +431,30 @@ pub async fn create_order(
                     }
                     // Don't touch deductions — recipe already has the right ingredient
                 } else if let Some((repl_id, _, repl_name, repl_unit)) = addon_rows.first() {
-                    // Real swap — replace base ingredient, keep surcharge price
+                    // Real swap — calculate price difference
+                    let base_addon_price: i32 = if let Some(base_id) = base_ing_id {
+                        sqlx::query_scalar(
+                            "SELECT COALESCE(MAX(a.default_price), 0)
+                             FROM addon_items a
+                             JOIN addon_item_ingredients i ON i.addon_item_id = a.id
+                             WHERE i.org_ingredient_id = $1 AND a.type = $2"
+                        )
+                        .bind(base_id)
+                        .bind(addon_type.as_str())
+                        .fetch_optional(pool.get_ref())
+                        .await?
+                        .flatten()
+                        .unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    let new_price = (default_price - base_addon_price).max(0);
+                    if let Some(last) = resolved_addons.last_mut() {
+                        last.unit_price = new_price;
+                    }
+
+                    // Replace base ingredient
                     let mut swapped = false;
                     for ded in deductions.iter_mut() {
                         if ded.source == "drink_recipe" && ded.category == cat {

@@ -55,6 +55,9 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   final Map<String, Map<String, int>> _extras = {};
   // Unslotted single-select extras: addonType → addonItemId (e.g. milk_type)
   final Map<String, String> _extrasSingle = {};
+  
+  // Base prices for swap addons (milk_type, coffee_type) so we only charge the difference
+  final Map<String, int> _baseSwapPrices = {};
 
   /// Types that should be single-select (pick one, no qty stepper)
   static const _singleSelectTypes = {'milk_type'};
@@ -133,26 +136,35 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     final allAddons = ref.read(menuProvider).allAddons;
     int t = 0;
 
+    int adjustedPrice(AddonItem a) {
+      if (a.addonType == 'milk_type' || a.addonType == 'coffee_type') {
+        final base = _baseSwapPrices[a.addonType] ?? 0;
+        final diff = a.defaultPrice - base;
+        return diff > 0 ? diff : 0;
+      }
+      return a.defaultPrice;
+    }
+
     for (final aId in _single.values) {
       final matches = allAddons.where((a) => a.id == aId);
-      if (matches.isNotEmpty) t += matches.first.defaultPrice;
+      if (matches.isNotEmpty) t += adjustedPrice(matches.first);
     }
     for (final qtyMap in _multi.values) {
       for (final entry in qtyMap.entries) {
         final matches = allAddons.where((a) => a.id == entry.key);
-        if (matches.isNotEmpty) t += matches.first.defaultPrice * entry.value;
+        if (matches.isNotEmpty) t += adjustedPrice(matches.first) * entry.value;
       }
     }
     for (final typeMap in _extras.values) {
       for (final entry in typeMap.entries) {
         final matches = allAddons.where((a) => a.id == entry.key);
-        if (matches.isNotEmpty) t += matches.first.defaultPrice * entry.value;
+        if (matches.isNotEmpty) t += adjustedPrice(matches.first) * entry.value;
       }
     }
     // Single-select unslotted types (e.g. milk_type) — always qty 1
     for (final aId in _extrasSingle.values) {
       final matches = allAddons.where((a) => a.id == aId);
-      if (matches.isNotEmpty) t += matches.first.defaultPrice;
+      if (matches.isNotEmpty) t += adjustedPrice(matches.first);
     }
     return t;
   }
@@ -322,10 +334,13 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
             a.isActive &&
             a.primaryIngredientId == baseMilk.orgIngredientId).firstOrNull;
 
-        if (defaultMilkAddon != null && _extrasSingle['milk_type'] == null) {
+        if (defaultMilkAddon != null) {
           setState(() {
-            _extrasSingle['milk_type'] = defaultMilkAddon.id;
-            _clearRecipe();
+            _baseSwapPrices['milk_type'] = defaultMilkAddon.defaultPrice;
+            if (_extrasSingle['milk_type'] == null) {
+              _extrasSingle['milk_type'] = defaultMilkAddon.id;
+              _clearRecipe();
+            }
           });
         }
       }
@@ -454,6 +469,26 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     // Sort addon slots without mutating original list
     final sortedSlots = widget.item.addonSlots.toList()
       ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+
+    List<AddonItem> getItemsWithAdjustedPrice(String type) {
+      final list = (byType[type] ?? []).where((a) => a.isActive).toList();
+      if (type == 'milk_type' || type == 'coffee_type') {
+        final base = _baseSwapPrices[type] ?? 0;
+        return list.map((a) {
+          final diff = a.defaultPrice - base;
+          return AddonItem(
+            id: a.id,
+            name: a.name,
+            addonType: a.addonType,
+            defaultPrice: diff > 0 ? diff : 0,
+            isActive: a.isActive,
+            displayOrder: a.displayOrder,
+            primaryIngredientId: a.primaryIngredientId,
+          );
+        }).toList();
+      }
+      return list;
+    }
 
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
@@ -589,9 +624,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                   isRequired: s.isRequired,
                   isMulti: (s.maxSelections ?? 2) > 1,
                   maxSelections: s.maxSelections,
-                  items: (byType[s.addonType] ?? [])
-                      .where((a) => a.isActive)
-                      .toList(),
+                  items: getItemsWithAdjustedPrice(s.addonType),
                   selectedSingle: _single[s.id],
                   selectedMulti: _multi[s.id] ?? {},
                   onToggleSingle: (aId) =>
@@ -614,9 +647,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                     isRequired: false,
                     isMulti: false,
                     maxSelections: null,
-                    items: (byType[addonType] ?? [])
-                        .where((a) => a.isActive)
-                        .toList(),
+                    items: getItemsWithAdjustedPrice(addonType),
                     selectedSingle: _extrasSingle[addonType],
                     selectedMulti: const {},
                     onToggleSingle: (aId) =>
@@ -632,9 +663,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
                     isRequired: false,
                     isMulti: true,
                     maxSelections: null,
-                    items: (byType[addonType] ?? [])
-                        .where((a) => a.isActive)
-                        .toList(),
+                    items: getItemsWithAdjustedPrice(addonType),
                     selectedSingle: null,
                     selectedMulti: _extras[addonType] ?? {},
                     onToggleSingle: (_) {},

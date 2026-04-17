@@ -108,9 +108,10 @@ pub struct AddonOverride {
 #[derive(Debug, Serialize)]
 pub struct MenuItemFull {
     #[serde(flatten)]
-    pub item:        MenuItem,
-    pub sizes:       Vec<ItemSize>,
-    pub addon_slots: Vec<AddonSlot>,
+    pub item:            MenuItem,
+    pub sizes:           Vec<ItemSize>,
+    pub addon_slots:     Vec<AddonSlot>,
+    pub optional_fields: Vec<OptionalField>,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -394,7 +395,8 @@ pub async fn list_menu_items(
         for item in items {
             let sizes = fetch_sizes(pool.get_ref(), item.id).await?;
             let addon_slots = fetch_addon_slots(pool.get_ref(), item.id).await?;
-            result.push(MenuItemFull { item, sizes, addon_slots });
+            let optional_fields = fetch_optional_fields(pool.get_ref(), item.id).await?;
+            result.push(MenuItemFull { item, sizes, addon_slots, optional_fields });
         }
         return Ok(HttpResponse::Ok().json(result));
     }
@@ -415,8 +417,9 @@ pub async fn get_menu_item(
 
     let sizes       = fetch_sizes(pool.get_ref(), *id).await?;
     let addon_slots = fetch_addon_slots(pool.get_ref(), *id).await?;
+    let optional_fields = fetch_optional_fields(pool.get_ref(), *id).await?;
 
-    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, addon_slots }))
+    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, addon_slots, optional_fields }))
 }
 
 pub async fn create_menu_item(
@@ -454,8 +457,9 @@ pub async fn create_menu_item(
 
     Ok(HttpResponse::Created().json(MenuItemFull {
         item,
-        sizes:       vec![],
-        addon_slots: vec![],
+        sizes:           vec![],
+        addon_slots:     vec![],
+        optional_fields: vec![],
     }))
 }
 
@@ -1320,6 +1324,24 @@ async fn fetch_addon_slots(
          FROM menu_item_addon_slots
          WHERE menu_item_id = $1
          ORDER BY display_order ASC",
+    )
+    .bind(item_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn fetch_optional_fields(
+    pool:    &PgPool,
+    item_id: Uuid,
+) -> Result<Vec<OptionalField>, AppError> {
+    Ok(sqlx::query_as::<_, OptionalField>(
+        "SELECT id, menu_item_id, name, price,
+                org_ingredient_id, ingredient_name, ingredient_unit,
+                quantity_used, size_label::text,
+                display_order, is_active, created_at, updated_at
+         FROM menu_item_optional_fields
+         WHERE menu_item_id = $1 AND is_active = true
+         ORDER BY display_order ASC, name ASC",
     )
     .bind(item_id)
     .fetch_all(pool)

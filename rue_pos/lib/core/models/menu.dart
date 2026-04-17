@@ -180,6 +180,14 @@ class OptionalField {
     displayOrder:     (j['display_order']    ?? 0) as int,
     isActive:         (j['is_active']        ?? true) as bool,
   );
+
+  Map<String, dynamic> toJson() => {
+    'id': id, 'menu_item_id': menuItemId, 'name': name,
+    'price': price, 'org_ingredient_id': orgIngredientId,
+    'ingredient_name': ingredientName, 'ingredient_unit': ingredientUnit,
+    'quantity_used': quantityUsed, 'size_label': sizeLabel,
+    'display_order': displayOrder, 'is_active': isActive,
+  };
 }
 
 // ── MenuItem ──────────────────────────────────────────────────
@@ -195,6 +203,8 @@ class MenuItem {
   final int             displayOrder;
   final List<ItemSize>  sizes;
   final List<AddonSlot> addonSlots;
+  final List<OptionalField> optionalFields;
+  final String?         defaultMilkAddonId;
 
   const MenuItem({
     required this.id,
@@ -206,8 +216,10 @@ class MenuItem {
     required this.basePrice,
     required this.isActive,
     required this.displayOrder,
-    this.sizes      = const [],
-    this.addonSlots = const [],
+    this.sizes          = const [],
+    this.addonSlots     = const [],
+    this.optionalFields = const [],
+    this.defaultMilkAddonId,
   });
 
   int priceForSize(String? label) {
@@ -236,6 +248,10 @@ class MenuItem {
     addonSlots: (j['addon_slots'] as List? ?? [])
         .map((s) => AddonSlot.fromJson(s as Map<String, dynamic>))
         .toList(),
+    optionalFields: (j['optional_fields'] as List? ?? [])
+        .map((o) => OptionalField.fromJson(o as Map<String, dynamic>))
+        .toList(),
+    defaultMilkAddonId: j['default_milk_addon_id'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -243,7 +259,9 @@ class MenuItem {
     'name': name, 'description': description, 'image_url': imageUrl,
     'base_price': basePrice, 'is_active': isActive,
     'display_order': displayOrder,
-    'sizes':       sizes.map((s) => s.toJson()).toList(),
-    'addon_slots': addonSlots.map((s) => s.toJson()).toList(),
+    'sizes':         sizes.map((s) => s.toJson()).toList(),
+    'addon_slots':   addonSlots.map((s) => s.toJson()).toList(),
+    'optional_fields': optionalFields.map((o) => o.toJson()).toList(),
+    'default_milk_addon_id': defaultMilkAddonId,
   };
 }

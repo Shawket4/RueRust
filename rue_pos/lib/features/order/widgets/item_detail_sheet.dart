@@ -63,8 +63,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
   static const _singleSelectTypes = {'milk_type'};
 
   // Optional fields state
-  List<OptionalField> _optionalFields = [];
-  bool _optionalFieldsLoading = false;
+  late List<OptionalField> _optionalFields;
   final Set<String> _selectedOptionals = {};
 
   // Recipe preview state
@@ -79,8 +78,8 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
       _selectedSize = widget.item.sizes.first.label;
     }
 
-    _loadOptionalFields();
-    _loadBaseRecipeAndSelectMilk();
+    _optionalFields = widget.item.optionalFields.where((f) => f.isActive).toList();
+    _initBaseMilk();
 
     // Pre-populate from existing cart item when editing
     if (_isEdit) {
@@ -298,51 +297,19 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
     );
   }
 
-  Future<void> _loadOptionalFields() async {
-    setState(() => _optionalFieldsLoading = true);
-    try {
-      final fields =
-          await ref.read(menuApiProvider).optionalFields(widget.item.id);
-      if (mounted) {
-        setState(() {
-          _optionalFields = fields.where((f) => f.isActive).toList();
-          _optionalFieldsLoading = false;
-        });
+  void _initBaseMilk() {
+    final defaultId = widget.item.defaultMilkAddonId;
+    if (defaultId == null) return;
+
+    final allAddons = ref.read(menuProvider).allAddons;
+    final defaultMilkAddon = allAddons.where((a) => a.id == defaultId).firstOrNull;
+
+    if (defaultMilkAddon != null) {
+      _baseSwapPrices['milk_type'] = defaultMilkAddon.defaultPrice;
+      if (!_isEdit && _extrasSingle['milk_type'] == null) {
+        _extrasSingle['milk_type'] = defaultMilkAddon.id;
       }
-    } catch (_) {
-      if (mounted) setState(() => _optionalFieldsLoading = false);
     }
-  }
-
-  Future<void> _loadBaseRecipeAndSelectMilk() async {
-    try {
-      final recipe = await ref.read(recipeApiProvider).preview(
-            menuItemId: widget.item.id,
-            sizeLabel: _selectedSize,
-            addons: [],
-            optionals: [],
-          );
-      if (!mounted) return;
-
-      final baseMilk = recipe.where((i) => i.isBase && i.category == 'milk').firstOrNull;
-      if (baseMilk != null && baseMilk.orgIngredientId != null) {
-        final allAddons = ref.read(menuProvider).allAddons;
-        final defaultMilkAddon = allAddons.where((a) =>
-            a.addonType == 'milk_type' &&
-            a.isActive &&
-            a.primaryIngredientId == baseMilk.orgIngredientId).firstOrNull;
-
-        if (defaultMilkAddon != null) {
-          setState(() {
-            _baseSwapPrices['milk_type'] = defaultMilkAddon.defaultPrice;
-            if (!_isEdit && _extrasSingle['milk_type'] == null) {
-              _extrasSingle['milk_type'] = defaultMilkAddon.id;
-              _clearRecipe();
-            }
-          });
-        }
-      }
-    } catch (_) {}
   }
 
   List<SelectedOptional> _buildSelectedOptionals() {
@@ -655,17 +622,7 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
               ],
 
               // Optionals section immediately after milk
-              if (_optionalFieldsLoading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Center(
-                      child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: AppColors.primary))),
-                )
-              else if (_optionalFields.isNotEmpty) ...[
+              if (_optionalFields.isNotEmpty) ...[
                 OptionalFieldsCard(
                   fields: _optionalFields,
                   selected: _selectedOptionals,

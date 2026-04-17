@@ -143,7 +143,7 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
 
     final counts = _invCtrs.entries
         .map((e) => {
-              'branch_inventory_id': e.key,   // was 'inventory_item_id' — renamed in v2 schema
+              'branch_inventory_id': e.key,
               'actual_stock':        double.tryParse(e.value.text) ?? 0.0,
             })
         .toList();
@@ -178,7 +178,8 @@ class _CloseShiftScreenState extends ConsumerState<CloseShiftScreen> {
   @override
   Widget build(BuildContext context) {
     final shift    = ref.watch(shiftProvider).shift;
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
 
     return Scaffold(
       backgroundColor: AppColors.bg,

@@ -64,7 +64,8 @@ class AuthNotifier extends Notifier<AuthState> {
     return const AuthState();
   }
 
-  // ── Startup restore ────────────────────────────────────────────────────────
+  void clearError() => state = state.copyWith(clearError: true); // Task 1.8
+
   Future<void> init() async {
     state = state.copyWith(isLoading: true);
     final session = await ref.read(authRepositoryProvider).restoreSession();
@@ -75,7 +76,6 @@ class AuthNotifier extends Notifier<AuthState> {
     await _hydrateAfterAuth(session.user, emitLoading: false);
   }
 
-  // ── Login ──────────────────────────────────────────────────────────────────
   Future<String?> login({required String name, required String pin}) async {
     state = state.copyWith(
       isLoading: true,
@@ -90,18 +90,16 @@ class AuthNotifier extends Notifier<AuthState> {
           await _hydrateAfterAuth(session.user, emitLoading: true);
       return blockError;
     } catch (e) {
-      final msg = _friendly(e);
+      final msg = friendlyError(e); // Task 4.2
       state = state.copyWith(isLoading: false, error: msg);
       return msg;
     }
   }
 
-  // ── Post-auth hydration + shift guard ─────────────────────────────────────
   Future<String?> _hydrateAfterAuth(User user,
       {required bool emitLoading}) async {
     if (emitLoading) state = state.copyWith(isLoading: true);
 
-    // 1. Load branch
     Branch? branch;
     if (user.branchId != null) {
       try {
@@ -116,7 +114,6 @@ class AuthNotifier extends Notifier<AuthState> {
       }
     }
 
-    // 2. Shift ownership guard
     if (user.branchId != null) {
       try {
         final preFill =
@@ -126,7 +123,6 @@ class AuthNotifier extends Notifier<AuthState> {
         if (openShift != null &&
             openShift.isOpen &&
             openShift.tellerId != user.id) {
-          // Another teller's shift is open — block login
           await ref.read(authRepositoryProvider).logout();
           final msg = 'Branch has an open shift belonging to '
               '"${openShift.tellerName}". '
@@ -140,7 +136,6 @@ class AuthNotifier extends Notifier<AuthState> {
           return msg;
         }
 
-        // Cache the open shift if it belongs to this user
         if (openShift != null) {
           await ref
               .read(storageServiceProvider)
@@ -151,7 +146,6 @@ class AuthNotifier extends Notifier<AuthState> {
       }
     }
 
-    // 3. All good — set authenticated state
     state = state.copyWith(
       isLoading: false,
       user: user,
@@ -163,7 +157,6 @@ class AuthNotifier extends Notifier<AuthState> {
     return null;
   }
 
-  // ── Logout guard ───────────────────────────────────────────────────────────
   Future<bool> canLogout() async {
     final branchId = state.user?.branchId;
     if (branchId == null) return true;
@@ -185,20 +178,10 @@ class AuthNotifier extends Notifier<AuthState> {
     state = const AuthState(isLoading: false);
   }
 
-  void _forceLogout({required SessionExpiry expiry}) {
-    ref.read(authRepositoryProvider).logout();
+  // Task 1.7: Await logout
+  Future<void> _forceLogout({required SessionExpiry expiry}) async {
+    await ref.read(authRepositoryProvider).logout();
     state = AuthState(isLoading: false, sessionExpiry: expiry);
-  }
-
-  String _friendly(Object e) {
-    final s = e.toString().toLowerCase();
-    if (s.contains('401') || s.contains('invalid')) {
-      return 'Invalid name or PIN — please try again';
-    }
-    if (s.contains('network') || s.contains('connection')) {
-      return 'No internet connection';
-    }
-    return 'Something went wrong — please try again';
   }
 }
 

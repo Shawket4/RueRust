@@ -5,8 +5,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/orgs")
             .wrap(JwtMiddleware)
-            .route("",        web::post().to(handlers::create_org))
-            .route("",        web::get().to(handlers::list_orgs))
-            .route("/{id}",   web::get().to(handlers::get_org)),
+            .route("",      web::post().to(handlers::create_org))
+            .route("",      web::get().to(handlers::list_orgs))
+            .route("/{id}", web::get().to(handlers::get_org))
+            .route("/{id}", web::patch().to(handlers::update_org))
+            .route("/{id}", web::delete().to(handlers::delete_org)),
     );
 }

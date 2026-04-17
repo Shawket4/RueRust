@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/api/order_api.dart';
@@ -7,6 +8,8 @@ import '../../core/models/pending_action.dart';
 import '../../core/services/connectivity_service.dart';
 import '../../core/services/offline_queue.dart';
 import '../../core/theme/app_theme.dart';
+import '../../shared/widgets/app_toggle.dart';
+import '../../shared/widgets/responsive_sheet.dart';
 
 class VoidOrderSheet extends ConsumerStatefulWidget {
   final Order order;
@@ -16,9 +19,8 @@ class VoidOrderSheet extends ConsumerStatefulWidget {
 
   static Future<void> show(
       BuildContext ctx, Order order, void Function(Order) onVoided) =>
-      showModalBottomSheet(
-          context: ctx, isScrollControlled: true,
-          backgroundColor: Colors.transparent,
+      ResponsiveSheet.show(
+          context: ctx,
           builder: (_) => VoidOrderSheet(order: order, onVoided: onVoided));
 
   @override
@@ -27,6 +29,7 @@ class VoidOrderSheet extends ConsumerStatefulWidget {
 
 class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
   String? _reason;
+  final _otherCtrl = TextEditingController(); 
   bool    _restore = true, _loading = false;
   String? _error;
 
@@ -37,38 +40,54 @@ class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
     ('other',            'Other'),
   ];
 
+  @override
+  void dispose() {
+    _otherCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _submit() async {
+    HapticFeedback.mediumImpact(); 
+
     if (_reason == null) {
       setState(() => _error = 'Please select a reason');
       return;
     }
+    
+    String finalReason = _reason!;
+    if (_reason == 'other') {
+      final otherText = _otherCtrl.text.trim();
+      if (otherText.isEmpty) {
+        setState(() => _error = 'Please specify the other reason');
+        return;
+      }
+      finalReason = 'other: $otherText';
+    }
+
     setState(() { _loading = true; _error = null; });
     final isOnline = ConnectivityService.instance.isOnline;
     final now      = DateTime.now();
 
     try {
       if (isOnline) {
-        // Online: void immediately
         final updated = await ref.read(orderApiProvider).voidOrder(
           widget.order.id,
-          reason:           _reason!,
+          reason:           finalReason,
           restoreInventory: _restore,
           voidedAt:         now,
         );
         if (mounted) { Navigator.pop(context); widget.onVoided(updated); }
       } else {
-        // Offline: queue the void and update local state optimistically
         await ref.read(offlineQueueProvider.notifier).enqueueVoid(
           PendingVoidOrder(
             localId:          const Uuid().v4(),
             createdAt:        now,
             orderId:          widget.order.id,
-            reason:           _reason!,
+            reason:           finalReason,
             restoreInventory: _restore,
             voidedAt:         now,
           ),
         );
-        // Create an optimistic voided order for the UI
         final optimistic = Order(
           id:             widget.order.id,
           branchId:       widget.order.branchId,
@@ -86,7 +105,7 @@ class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
           totalAmount:    widget.order.totalAmount,
           customerName:   widget.order.customerName,
           notes:          widget.order.notes,
-          voidReason:     _reason,
+          voidReason:     finalReason,
           createdAt:      widget.order.createdAt,
           items:          widget.order.items,
         );
@@ -127,10 +146,40 @@ class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
         const SizedBox(height: 8),
         ...(_reasons.map((r) => RadioListTile<String>(
           value: r.$1, groupValue: _reason,
-          onChanged: (v) => setState(() => _reason = v),
+          onChanged: (v) => setState(() {
+            _reason = v;
+            _error = null;
+          }),
           title: Text(r.$2, style: cairo(fontSize: 14)),
           contentPadding: EdgeInsets.zero, dense: true,
+          activeColor: AppColors.danger,
         ))),
+        
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          child: _reason == 'other' 
+            ? Padding(
+                padding: const EdgeInsets.only(top: 8, left: 32, right: 16),
+                child: TextField(
+                  controller: _otherCtrl,
+                  style: cairo(fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: 'Specify reason...',
+                    hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.xs),
+                        borderSide: const BorderSide(color: AppColors.border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.xs),
+                        borderSide: const BorderSide(color: AppColors.danger)),
+                  ),
+                ),
+              )
+            : const SizedBox.shrink(),
+        ),
+
         const SizedBox(height: 12), const Divider(), const SizedBox(height: 12),
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,9 +190,10 @@ class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
             Text('Return ingredients to stock',
                 style: cairo(fontSize: 12, color: AppColors.textSecondary)),
           ])),
-          Switch(value: _restore,
-              onChanged: (v) => setState(() => _restore = v),
-              activeColor: AppColors.primary),
+          // Using custom AppToggle
+          AppToggle(
+              value: _restore,
+              onChanged: (v) => setState(() => _restore = v)),
         ]),
         if (_error != null) ...[
           const SizedBox(height: 12),

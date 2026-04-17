@@ -12,6 +12,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/formatting.dart';
 import '../../shared/widgets/app_button.dart';
 import '../../shared/widgets/card_container.dart';
+import '../../shared/widgets/sync_status_banner.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -37,7 +38,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  /// Logout guard: if shift is open, force close-shift first.
   Future<void> _onSignOut() async {
     final canLeave = await ref.read(authProvider.notifier).canLogout();
     if (!mounted) return;
@@ -80,7 +80,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final user = ref.watch(authProvider).user!;
     final shiftSt = ref.watch(shiftProvider);
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -143,7 +144,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-// ── Open Shift View ────────────────────────────────────────────────────────────
 class _OpenShiftView extends ConsumerWidget {
   final Shift shift;
   final ShiftState shiftState;
@@ -185,28 +185,28 @@ class _OpenShiftView extends ConsumerWidget {
           ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Task 3.1: Use shared banner
           if (!isOnline)
-            const _Banner(
-                icon: Icons.wifi_off_rounded,
-                text:
-                    'Offline — cached data shown. Orders queue until online.'),
+            const SyncStatusBanner(
+              variant: SyncBannerVariant.offline,
+              text: 'Offline — cached data shown. Orders queue until online.'
+            ),
           if (isOnline && history.fromCache)
-            const _Banner(
-                icon: Icons.history_rounded,
-                text: 'Showing cached stats — tap refresh to update.'),
+            const SyncStatusBanner(
+              variant: SyncBannerVariant.offline,
+              text: 'Showing cached stats — tap refresh to update.'
+            ),
           if (isOnline && sync.orderCount > 0)
-            _Banner(
-                icon: Icons.sync_rounded,
-                animate: true,
-                text:
-                    'Syncing ${sync.orderCount} offline order${sync.orderCount == 1 ? "" : "s"}…'),
+            SyncStatusBanner(
+              variant: SyncBannerVariant.syncing,
+              text: 'Syncing ${sync.orderCount} offline order${sync.orderCount == 1 ? "" : "s"}…'
+            ),
           if (sync.hasStuck)
-            _Banner(
-                icon: Icons.warning_amber_rounded,
-                warn: true,
-                text:
-                    '${sync.stuckCount} order${sync.stuckCount == 1 ? "" : "s"} '
-                    'failed to sync — check connection or discard.'),
+            SyncStatusBanner(
+              variant: SyncBannerVariant.stuck,
+              text: '${sync.stuckCount} order${sync.stuckCount == 1 ? "" : "s"} failed to sync — check connection or discard.'
+            ),
+            
           Row(children: [
             _StatusPill(),
             const Spacer(),
@@ -273,27 +273,29 @@ class _OpenShiftView extends ConsumerWidget {
             Expanded(
                 child: _CardBtn(
               label: 'Cash',
-                    icon: Icons.payments_outlined,
-                    isTablet: isTablet,
-                    onTap: () => CashMovementSheet.show(
-                      context,
-                      shiftId: shift.id,
-                      onSuccess: onRefresh,
-                    ))),
+              icon: Icons.payments_outlined,
+              isTablet: isTablet,
+              onTap: () => CashMovementSheet.show(
+                context,
+                shiftId: shift.id,
+                onSuccess: onRefresh,
+              ))), // Task 2.3: Remove tooltip/disabled check so offline works
             const SizedBox(width: 8),
             Expanded(
-                child: _CardBtn(
-              label: 'Close',
-              icon: Icons.lock_outline_rounded,
-              danger: true,
-              isTablet: isTablet,
-              onTap: !isOnline
-                  ? () => ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text('Internet required to close shift'),
-                          backgroundColor: Color(0xFF856404)))
-                  : () => _confirmClose(context),
-            )),
+                // Task 2.4: Added Tooltip 
+                child: Tooltip(
+                  message: !isOnline ? 'Internet connection required to close shift.' : '',
+                  child: _CardBtn(
+                                label: 'Close',
+                                icon: Icons.lock_outline_rounded,
+                                danger: true,
+                                isTablet: isTablet,
+                                disabled: !isOnline,
+                                onTap: !isOnline
+                                    ? () {}
+                                    : () => _confirmClose(context),
+                              ),
+                )),
           ]),
         ]),
       ),
@@ -328,7 +330,6 @@ class _OpenShiftView extends ConsumerWidget {
       );
 }
 
-// ── No Shift View ──────────────────────────────────────────────────────────────
 class _NoShiftView extends StatelessWidget {
   final int suggested;
   final bool isTablet;
@@ -400,7 +401,6 @@ class _NoShiftView extends StatelessWidget {
       );
 }
 
-// ── Shared small widgets ────────────────────────────────────────────────────────
 class _SignOutBtn extends StatelessWidget {
   final VoidCallback onTap;
   const _SignOutBtn({required this.onTap});
@@ -418,45 +418,6 @@ class _SignOutBtn extends StatelessWidget {
           child: const Icon(Icons.logout_rounded,
               size: 15, color: AppColors.textSecondary),
         ),
-      );
-}
-
-class _Banner extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final bool animate, warn;
-  const _Banner(
-      {required this.icon,
-      required this.text,
-      this.animate = false,
-      this.warn = false});
-  @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: warn
-              ? Colors.orange.withOpacity(0.25)
-              : Colors.white.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(children: [
-          animate
-              ? SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      color: warn ? Colors.orange : Colors.white70))
-              : Icon(icon,
-                  size: 13, color: warn ? Colors.orange : Colors.white70),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text(text,
-                  style: cairo(
-                      fontSize: 11,
-                      color: warn ? Colors.orange : Colors.white70))),
-        ]),
       );
 }
 
@@ -537,35 +498,49 @@ class _CardBtn extends StatelessWidget {
   final String label;
   final IconData icon;
   final VoidCallback onTap;
-  final bool danger, isTablet;
+  final bool danger, isTablet, disabled;
   const _CardBtn(
       {required this.label,
       required this.icon,
       required this.onTap,
       this.danger = false,
-      this.isTablet = false});
+      this.isTablet = false,
+      this.disabled = false});
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
+  Widget build(BuildContext context) {
+    final bgColor = disabled 
+        ? Colors.white.withOpacity(0.4) 
+        : danger 
+            ? Colors.white.withOpacity(0.12) 
+            : Colors.white;
+    final fgColor = disabled 
+        ? Colors.black38
+        : danger 
+            ? Colors.white 
+            : AppColors.primary;
+
+    return GestureDetector(
+        onTap: disabled ? null : onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           padding: EdgeInsets.symmetric(vertical: isTablet ? 14 : 11),
           decoration: BoxDecoration(
-              color: danger ? Colors.white.withOpacity(0.12) : Colors.white,
+              color: bgColor,
               borderRadius: BorderRadius.circular(14)),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon,
                 size: isTablet ? 18 : 16,
-                color: danger ? Colors.white : AppColors.primary),
+                color: fgColor),
             const SizedBox(height: 4),
             Text(label,
                 style: cairo(
                     fontSize: isTablet ? 12 : 11,
                     fontWeight: FontWeight.w700,
-                    color: danger ? Colors.white : AppColors.primary)),
+                    color: fgColor)),
           ]),
         ),
       );
+  }
 }
 
 class _ErrorBanner extends StatelessWidget {

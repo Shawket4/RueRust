@@ -1,5 +1,5 @@
-// ─── pending_orders_screen.dart ───────────────────────────────────────────────
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/models/pending_action.dart';
@@ -13,7 +13,8 @@ class PendingOrdersScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final queue = ref.watch(offlineQueueProvider);
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -60,7 +61,6 @@ class PendingOrdersScreen extends ConsumerWidget {
                       color: AppColors.textSecondary)),
             ]))
           : Column(children: [
-              // Summary bar
               Container(
                 color: Colors.white,
                 padding: EdgeInsets.symmetric(
@@ -82,6 +82,10 @@ class PendingOrdersScreen extends ConsumerWidget {
                     const SizedBox(width: 8),
                     _Chip('${queue.voidCount} voids', AppColors.danger),
                   ],
+                  if (queue.cashCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _Chip('${queue.cashCount} cash', AppColors.success),
+                  ],
                   if (queue.hasStuck) ...[
                     const SizedBox(width: 8),
                     _Chip('${queue.stuckCount} stuck', AppColors.danger),
@@ -89,23 +93,6 @@ class PendingOrdersScreen extends ConsumerWidget {
                 ]),
               ),
               Container(height: 1, color: AppColors.border),
-
-              if (queue.lastError != null)
-                Container(
-                  width: double.infinity,
-                  color: AppColors.danger.withOpacity(0.06),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  child: Row(children: [
-                    const Icon(Icons.error_outline_rounded,
-                        size: 14, color: AppColors.danger),
-                    const SizedBox(width: 8),
-                    Expanded(
-                        child: Text(queue.lastError!,
-                            style:
-                                cairo(fontSize: 12, color: AppColors.danger))),
-                  ]),
-                ),
 
               Expanded(
                 child: ListView.builder(
@@ -183,6 +170,7 @@ class _ActionTile extends StatelessWidget {
           'Void Order',
           AppColors.danger
         ),
+      PendingCashMovement() => (Icons.payments_outlined, 'Cash Movement', AppColors.success),
       _ => (Icons.help_outline_rounded, 'Unknown', AppColors.textMuted),
     };
 
@@ -195,6 +183,8 @@ class _ActionTile extends StatelessWidget {
         'Closing cash: ${egp((action as PendingShiftClose).closingCash)}',
       PendingVoidOrder() =>
         'Reason: ${(action as PendingVoidOrder).reason.replaceAll("_", " ")}',
+      PendingCashMovement() =>
+        '${(action as PendingCashMovement).amount > 0 ? "Cash In" : "Cash Out"}: ${egp((action as PendingCashMovement).amount.abs())}',
       _ => '',
     };
 
@@ -229,6 +219,15 @@ class _ActionTile extends StatelessWidget {
                 style: cairo(fontSize: 12, color: AppColors.textSecondary)),
           Text(dateTime(action.createdAt),
               style: cairo(fontSize: 11, color: AppColors.textMuted)),
+          
+          // Task 3.5: Per-action inline error message
+          if (action.lastError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('Error: ${action.lastError}',
+                  style: cairo(fontSize: 11, color: AppColors.danger, fontWeight: FontWeight.w500)),
+            ),
+
           if (isStuck)
             Text('Failed ${action.retryCount} times — tap Retry to try again',
                 style: cairo(fontSize: 11, color: AppColors.danger)),
@@ -272,6 +271,7 @@ class _ActionTile extends StatelessWidget {
                     style: cairo(color: AppColors.textSecondary))),
             TextButton(
               onPressed: () {
+                HapticFeedback.mediumImpact(); // Task 3.4
                 Navigator.pop(ctx);
                 onDiscard();
               },

@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/api/shift_api.dart';
 import '../../core/api/client.dart';
+import '../../core/models/pending_action.dart';
+import '../../core/services/connectivity_service.dart';
+import '../../core/services/offline_queue.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/formatting.dart';
+import '../../shared/widgets/responsive_sheet.dart';
 
 class CashMovementSheet extends ConsumerStatefulWidget {
   final String shiftId;
@@ -16,15 +20,14 @@ class CashMovementSheet extends ConsumerStatefulWidget {
     this.onSuccess,
   });
 
+  // Task 3.2: Use ResponsiveSheet
   static Future<void> show(
     BuildContext context, {
     required String shiftId,
     void Function()? onSuccess,
   }) =>
-      showModalBottomSheet(
+      ResponsiveSheet.show(
         context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
         builder: (_) => CashMovementSheet(
           shiftId: shiftId,
           onSuccess: onSuccess,
@@ -62,15 +65,29 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
 
     setState(() { _loading = true; _error = null; });
 
-    try {
-      final piastres = (raw * 100).round();
-      final signed   = _isIn ? piastres : -piastres;
+    final isOnline = ref.read(isOnlineProvider);
+    final piastres = (raw * 100).round();
+    final signed   = _isIn ? piastres : -piastres;
 
-      await ref.read(shiftApiProvider).addCashMovement(
-        widget.shiftId,
-        signed,
-        _noteCtrl.text.trim(),
-      );
+    try {
+      if (isOnline) {
+        await ref.read(shiftApiProvider).addCashMovement(
+          widget.shiftId,
+          signed,
+          _noteCtrl.text.trim(),
+        );
+      } else {
+        // Task 2.3: Offline Queueing
+        await ref.read(offlineQueueProvider.notifier).enqueueCashMovement(
+          PendingCashMovement(
+            localId: const Uuid().v4(),
+            createdAt: DateTime.now(),
+            shiftId: widget.shiftId,
+            amount: signed,
+            note: _noteCtrl.text.trim(),
+          )
+        );
+      }
 
       if (mounted) {
         Navigator.pop(context);
@@ -78,7 +95,7 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
       }
     } catch (e) {
       setState(() {
-        _error   = friendlyError(e);
+        _error   = friendlyError(e); // Task 4.2
         _loading = false;
       });
     }
@@ -87,6 +104,7 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
+    final isOnline = ref.watch(isOnlineProvider);
 
     return Container(
       decoration: BoxDecoration(
@@ -112,6 +130,10 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
 
           Text('Cash Movement',
               style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          if (!isOnline)
+            Text('Offline — will be queued and applied when connected',
+                style: cairo(fontSize: 12, color: AppColors.warning)),
           const SizedBox(height: 18),
 
           // Direction toggle
@@ -220,7 +242,7 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
                           : Icons.remove_circle_outline_rounded,
                           size: 18, color: Colors.white),
                       const SizedBox(width: 8),
-                      Text(_isIn ? 'Record Cash In' : 'Record Cash Out',
+                      Text(isOnline ? (_isIn ? 'Record Cash In' : 'Record Cash Out') : 'Queue Offline',
                           style: cairo(fontSize: 15, fontWeight: FontWeight.w700,
                               color: Colors.white)),
                     ]),

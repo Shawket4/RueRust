@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 
 class PinPad extends StatelessWidget {
@@ -24,11 +25,10 @@ class PinPad extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
     final keySize = isTablet ? 76.0 : 68.0;
 
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      // ── PIN dots ──────────────────────────────────────────────────────────
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: List.generate(maxLength, (i) {
@@ -53,7 +53,6 @@ class PinPad extends StatelessWidget {
       ),
       const SizedBox(height: 32),
 
-      // ── Keys ──────────────────────────────────────────────────────────────
       ..._rows.map((row) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(
@@ -68,7 +67,10 @@ class PinPad extends StatelessWidget {
                 return _Key(
                   label: k,
                   size: keySize,
-                  onTap: () => k == '⌫' ? onBackspace() : onDigit(k),
+                  onTap: () {
+                    HapticFeedback.lightImpact(); // Task 3.4
+                    k == '⌫' ? onBackspace() : onDigit(k);
+                  },
                   isBack: k == '⌫',
                 );
               }).toList(),

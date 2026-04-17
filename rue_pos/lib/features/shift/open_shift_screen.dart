@@ -71,7 +71,8 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
     final isOnline = ref.watch(isOnlineProvider);
     final suggested =
         ref.watch(shiftProvider.select((s) => s.suggestedOpeningCash));
@@ -99,7 +100,6 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ── Title ────────────────────────────────────────────────────
                     Row(children: [
                       Container(
                           width: 44,
@@ -129,7 +129,6 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
 
                     const SizedBox(height: 28),
 
-                    // ── Suggestion chip ──────────────────────────────────────────
                     if (suggested > 0)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 18),
@@ -154,7 +153,6 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
                         ),
                       ),
 
-                    // ── Label ────────────────────────────────────────────────────
                     Text('OPENING CASH',
                         style: cairo(
                             fontSize: 10,
@@ -163,7 +161,6 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
                             letterSpacing: 1.2)),
                     const SizedBox(height: 10),
 
-                    // ── Big number input ─────────────────────────────────────────
                     TextField(
                       controller: _ctrl,
                       autofocus: true,
@@ -196,7 +193,6 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
                     const Divider(color: AppColors.borderLight, height: 24),
                     const SizedBox(height: 4),
 
-                    // ── Error ────────────────────────────────────────────────────
                     AnimatedSize(
                       duration: const Duration(milliseconds: 200),
                       curve: Curves.easeOut,
@@ -216,21 +212,13 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
                           : const SizedBox.shrink(),
                     ),
 
-                    // ── Offline notice ───────────────────────────────────────────
-                    if (!isOnline)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 14),
-                        child: _OfflineNotice(
-                            text: 'Internet required to open a shift.'),
-                      ),
-
-                    // ── CTA ──────────────────────────────────────────────────────
+                    // Task 2.1: Removed the !isOnline gate on the onTap for offline-open to work seamlessly.
                     AppButton(
                       label: 'Open Shift',
                       loading: _loading,
                       width: double.infinity,
                       icon: Icons.play_arrow_rounded,
-                      onTap: (!isOnline || _loading) ? null : _open,
+                      onTap: _loading ? null : _open,
                     ),
                   ]),
             ),
@@ -239,26 +227,4 @@ class _OpenShiftScreenState extends ConsumerState<OpenShiftScreen> {
       ),
     );
   }
-}
-
-class _OfflineNotice extends StatelessWidget {
-  final String text;
-  const _OfflineNotice({required this.text});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-            color: const Color(0xFFFFF3CD),
-            borderRadius: BorderRadius.circular(AppRadius.xs),
-            border: Border.all(color: const Color(0xFFFFD700))),
-        child: Row(children: [
-          const Icon(Icons.wifi_off_rounded,
-              size: 14, color: Color(0xFF856404)),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text(text,
-                  style: cairo(fontSize: 12, color: const Color(0xFF856404)))),
-        ]),
-      );
 }

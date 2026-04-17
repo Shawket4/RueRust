@@ -38,10 +38,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   void _digit(String d) {
     if (_loading || _pin.length >= _max) return;
     setState(() => _pin += d);
-    // Clear error when user starts typing again
+    // Task 1.8: clearError helper
     if (ref.read(authProvider).error != null) {
-      ref.read(authProvider.notifier).state =
-          ref.read(authProvider).copyWith(clearError: true);
+      ref.read(authProvider.notifier).clearError();
     }
     if (_pin.length == _max) _submit();
   }
@@ -56,7 +55,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     if (name.isEmpty) {
       _shakeCtrl.forward(from: 0);
       setState(() => _pin = '');
-      // Set error via notifier state so it persists
       ref.read(authProvider.notifier).state =
           ref.read(authProvider).copyWith(error: 'Please enter your name');
       return;
@@ -91,11 +89,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     final expiry = ref.watch(authProvider.select((s) => s.sessionExpiry));
     final blockedBy = ref.watch(authProvider.select((s) => s.blockedByName));
     final authError = ref.watch(authProvider.select((s) => s.error));
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7: Device-type based sizing
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
 
-    // Show error from AuthState (survives router rebuilds)
     final displayError = expiry == SessionExpiry.blockedByOtherShift
-        ? null // shown in banner instead
+        ? null
         : authError;
 
     return Scaffold(
@@ -126,7 +124,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 380),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            // ── Logo ────────────────────────────────────────────────────────
             Image.asset('assets/TheRue.png', height: 48),
             const SizedBox(height: 8),
             Text(
@@ -139,7 +136,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             ),
             const SizedBox(height: 32),
 
-            // ── Session banners ──────────────────────────────────────────────
             if (expiry == SessionExpiry.expired)
               _InfoBanner(
                 icon: Icons.lock_clock_outlined,
@@ -157,7 +153,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 bold: true,
               ),
 
-            // ── Divider ──────────────────────────────────────────────────────
             Row(children: [
               const Expanded(child: Divider(color: AppColors.borderLight)),
               Padding(
@@ -173,7 +168,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             ]),
             const SizedBox(height: 24),
 
-            // ── Name field ───────────────────────────────────────────────────
             AnimatedBuilder(
               animation: _shakeAnim,
               builder: (_, child) => Transform.translate(
@@ -183,10 +177,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                 enabled: !_loading,
                 textCapitalization: TextCapitalization.words,
                 onChanged: (_) {
-                  // Clear error when user edits name
+                  // Task 1.8: clearError
                   if (ref.read(authProvider).error != null) {
-                    ref.read(authProvider.notifier).state =
-                        ref.read(authProvider).copyWith(clearError: true);
+                    ref.read(authProvider.notifier).clearError();
                   }
                 },
                 style: cairo(fontSize: 15),
@@ -213,7 +206,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
             ),
             const SizedBox(height: 32),
 
-            // ── PIN pad ──────────────────────────────────────────────────────
             AnimatedBuilder(
               animation: _shakeAnim,
               builder: (_, child) => Transform.translate(
@@ -226,7 +218,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               ),
             ),
 
-            // ── Error ────────────────────────────────────────────────────────
             AnimatedSize(
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOut,
@@ -269,7 +260,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 }
 
-// ── Info Banner ────────────────────────────────────────────────────────────────
 class _InfoBanner extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -307,7 +297,6 @@ class _InfoBanner extends StatelessWidget {
       );
 }
 
-// ── Tablet split layout ────────────────────────────────────────────────────────
 class _TabletLayout extends StatelessWidget {
   final Widget form;
   const _TabletLayout({required this.form});

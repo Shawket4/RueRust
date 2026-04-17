@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:rue_pos/core/api/client.dart';
-import 'package:rue_pos/core/models/pending_action.dart';
 import 'package:uuid/uuid.dart';
+import '../../../core/api/client.dart';
 import '../../../core/api/order_api.dart';
-import '../../../core/api/discount_api.dart';
-import '../../../core/models/discount.dart';
 import '../../../core/models/cart.dart';
+import '../../../core/models/discount.dart';
+import '../../../core/models/order.dart';
+import '../../../core/models/pending_action.dart';
 import '../../../core/providers/auth_notifier.dart';
 import '../../../core/providers/cart_notifier.dart';
 import '../../../core/providers/discount_notifier.dart';
@@ -18,20 +18,18 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatting.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/label_value.dart';
+import '../../../shared/widgets/responsive_sheet.dart';
+import '../../../shared/widgets/sync_status_banner.dart';
 import '../helpers/payment_helpers.dart';
 import 'receipt_sheet.dart';
 import 'shared_widgets.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CHECKOUT SHEET
-// ─────────────────────────────────────────────────────────────────────────────
 class CheckoutSheet extends ConsumerStatefulWidget {
   const CheckoutSheet({super.key});
 
-  static void show(BuildContext ctx) => showModalBottomSheet(
+  // Task 3.2: Use ResponsiveSheet
+  static Future<void> show(BuildContext ctx) => ResponsiveSheet.show(
       context: ctx,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
       builder: (_) => const CheckoutSheet());
 
   @override
@@ -43,18 +41,14 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   String? _error;
   final _customerCtrl = TextEditingController();
 
-  // Discount
   Discount? _selectedDiscount;
 
-  // Cash tendered
   final _tenderedCtrl = TextEditingController();
   bool _showTendered = false;
 
-  // Tip
   final _tipCtrl = TextEditingController();
   String _tipPaymentMethod = 'cash';
 
-  // Split payment
   bool _isSplit = false;
   final Map<String, TextEditingController> _splitCtrs = {};
   final Set<String> _activeSplitMethods = {};
@@ -193,8 +187,9 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         : cart.payment;
 
     if (!isOnline) {
+      final localId = const Uuid().v4();
       await queue.enqueueOrder(PendingOrder(
-        localId: const Uuid().v4(),
+        localId: localId,
         branchId: shift.branchId,
         shiftId: shift.id,
         paymentMethod: paymentMethod,
@@ -205,16 +200,72 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
         amountTendered: tendered,
         tipAmount: tip,
         tipPaymentMethod: tipMethod,
-        paymentSplits: splits?.map((s) => s.toApiJson()).toList(),
+        paymentSplits: splits,
         items: cart.items,
         orderedAt: DateTime.now(),
         createdAt: DateTime.now(),
       ));
+
+      // Task 1.5: Optimistic offline order
+      final optimistic = Order(
+        id: localId,
+        branchId: shift.branchId,
+        shiftId: shift.id,
+        tellerId: ref.read(authProvider).user!.id,
+        tellerName: ref.read(authProvider).user!.name,
+        orderNumber: -1,
+        status: 'pending_sync',
+        paymentMethod: paymentMethod,
+        subtotal: cart.subtotal,
+        discountType: discountType,
+        discountValue: discountValue ?? 0,
+        discountAmount: cart.discountAmount,
+        taxAmount: 0,
+        totalAmount: cart.total,
+        customerName: customer,
+        notes: cart.notes,
+        amountTendered: tendered,
+        tipAmount: tip,
+        tipPaymentMethod: tipMethod,
+        discountId: discountId,
+        createdAt: DateTime.now(),
+        items: cart.items.map((ci) => OrderItem(
+          id: const Uuid().v4(),
+          itemName: ci.itemName,
+          sizeLabel: ci.sizeLabel,
+          unitPrice: ci.unitPrice,
+          quantity: ci.quantity,
+          lineTotal: ci.lineTotal,
+          addons: ci.addons.map((a) => OrderItemAddon(
+            id: const Uuid().v4(),
+            orderItemId: '',
+            addonItemId: a.addonItemId,
+            addonName: a.name,
+            unitPrice: a.priceModifier,
+            quantity: a.quantity,
+            lineTotal: a.priceModifier * a.quantity,
+          )).toList(),
+          optionals: ci.optionals.map((o) => OrderItemOptional(
+            id: const Uuid().v4(),
+            orderItemId: '',
+            optionalFieldId: o.optionalFieldId,
+            fieldName: o.name,
+            price: o.price,
+          )).toList(),
+        )).toList(),
+      );
+      ref.read(orderHistoryProvider.notifier).addOrder(optimistic);
+
+      final total = cart.total;
       ref.read(cartProvider.notifier).clear();
+      
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Order saved offline — will sync when connected')));
+        ReceiptSheet.show(context,
+            order: optimistic,
+            total: total,
+            changeGiven:
+                tendered != null ? (tendered - total).clamp(0, 999999) : null);
       }
       return;
     }
@@ -248,8 +299,9 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       }
     } catch (e) {
       if (isNetworkError(e)) {
+        final localId = const Uuid().v4();
         await queue.enqueueOrder(PendingOrder(
-          localId: const Uuid().v4(),
+          localId: localId,
           branchId: shift.branchId,
           shiftId: shift.id,
           paymentMethod: paymentMethod,
@@ -260,16 +312,64 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
           amountTendered: tendered,
           tipAmount: tip,
           tipPaymentMethod: tipMethod,
-          paymentSplits: splits?.map((s) => s.toApiJson()).toList(),
+          paymentSplits: splits,
           items: cart.items,
           createdAt: DateTime.now(),
           orderedAt: DateTime.now(),
         ));
+
+        // Task 1.5: Optimistic offline order
+        final optimistic = Order(
+          id: localId,
+          branchId: shift.branchId,
+          shiftId: shift.id,
+          tellerId: ref.read(authProvider).user!.id,
+          tellerName: ref.read(authProvider).user!.name,
+          orderNumber: -1,
+          status: 'pending_sync',
+          paymentMethod: paymentMethod,
+          subtotal: cart.subtotal,
+          discountType: discountType,
+          discountValue: discountValue ?? 0,
+          discountAmount: cart.discountAmount,
+          taxAmount: 0,
+          totalAmount: cart.total,
+          customerName: customer,
+          notes: cart.notes,
+          amountTendered: tendered,
+          tipAmount: tip,
+          tipPaymentMethod: tipMethod,
+          discountId: discountId,
+          createdAt: DateTime.now(),
+          items: cart.items.map((ci) => OrderItem(
+            id: const Uuid().v4(),
+            itemName: ci.itemName,
+            sizeLabel: ci.sizeLabel,
+            unitPrice: ci.unitPrice,
+            quantity: ci.quantity,
+            lineTotal: ci.lineTotal,
+            addons: ci.addons.map((a) => OrderItemAddon(
+              id: const Uuid().v4(),
+              orderItemId: '',
+              addonItemId: a.addonItemId,
+              addonName: a.name,
+              unitPrice: a.priceModifier,
+              quantity: a.quantity,
+              lineTotal: a.priceModifier * a.quantity,
+            )).toList(),
+          )).toList(),
+        );
+        ref.read(orderHistoryProvider.notifier).addOrder(optimistic);
+
+        final total = cart.total;
         ref.read(cartProvider.notifier).clear();
         if (mounted) {
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Connection lost — order saved offline')));
+          ReceiptSheet.show(context,
+            order: optimistic,
+            total: total,
+            changeGiven:
+                tendered != null ? (tendered - total).clamp(0, 999999) : null);
         }
       } else {
         setState(() {
@@ -284,6 +384,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   Widget build(BuildContext context) {
     final cart = ref.watch(cartProvider);
     final discountState = ref.watch(discountProvider);
+    final isOnline = ref.watch(isOnlineProvider);
     final mq = MediaQuery.of(context);
     final maxH = mq.size.height - mq.padding.top - 16;
 
@@ -294,7 +395,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Drag handle
           Padding(
             padding: const EdgeInsets.only(top: 12, bottom: 4),
             child: Center(
@@ -306,7 +406,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                         borderRadius: BorderRadius.circular(2)))),
           ),
 
-          // Sticky header
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
             child: Row(children: [
@@ -338,7 +437,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
           ),
           Container(height: 1, color: AppColors.border),
 
-          // Scrollable body
           Flexible(
             child: SingleChildScrollView(
               padding:
@@ -347,6 +445,13 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Task 2.2: Show offline status
+                  if (!isOnline)
+                    const SyncStatusBanner(
+                      variant: SyncBannerVariant.offline,
+                      text: 'Offline — order will sync when reconnected.'
+                    ),
+
                   _SummaryCard(cart: cart),
                   const SizedBox(height: 20),
 
@@ -439,7 +544,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                     ],
                   ],
 
-                  // Tip section
                   const SizedBox(height: 20),
                   _TipSection(
                     tipCtrl: _tipCtrl,
@@ -450,7 +554,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                     onAmountChanged: () => setState(() {}),
                   ),
 
-                  // Error banner
                   AnimatedSize(
                     duration: const Duration(milliseconds: 200),
                     child: _error != null
@@ -483,7 +586,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
             ),
           ),
 
-          // Place Order
           Container(
             padding: EdgeInsets.fromLTRB(24, 12, 24, mq.padding.bottom + 16),
             decoration: const BoxDecoration(
@@ -503,10 +605,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  CHECKOUT SUB-WIDGETS
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _SummaryCard extends StatelessWidget {
   final CartState cart;
@@ -605,13 +703,14 @@ class _SinglePaymentGrid extends StatelessWidget {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (ctx, constraints) {
         final btnW = (constraints.maxWidth - 8) / 2;
+        // Task 4.1: Use new enum logic
         return Wrap(
           spacing: 8,
           runSpacing: 8,
-          children: kPaymentMethods.map((m) {
-            final sel = selected == m.value;
+          children: PaymentMethod.values.where((m) => m != PaymentMethod.mixed).map((m) {
+            final sel = selected == m.wireFormat;
             return GestureDetector(
-              onTap: () => onSelect(m.value),
+              onTap: () => onSelect(m.wireFormat),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 width: btnW,
@@ -740,8 +839,6 @@ class _TipSection extends StatelessWidget {
   final void Function(String) onMethodChanged;
   final VoidCallback onAmountChanged;
 
-  static const _methods = ['cash', 'card', 'talabat_online', 'talabat_cash'];
-
   const _TipSection({
     required this.tipCtrl,
     required this.tipPaymentMethod,
@@ -788,14 +885,15 @@ class _TipSection extends StatelessWidget {
               ),
           ]),
           const SizedBox(height: 12),
+          // Task 4.1: Enum usage
           Wrap(
             spacing: 6,
             runSpacing: 6,
-            children: _methods.map((method) {
-              final sel = tipPaymentMethod == method;
-              final color = methodColor(method);
+            children: PaymentMethod.values.where((m) => m != PaymentMethod.mixed).map((method) {
+              final sel = tipPaymentMethod == method.wireFormat;
+              final color = method.color;
               return GestureDetector(
-                onTap: () => onMethodChanged(method),
+                onTap: () => onMethodChanged(method.wireFormat),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 140),
                   padding:
@@ -813,7 +911,7 @@ class _TipSection extends StatelessWidget {
                           size: 11, color: Colors.white),
                       const SizedBox(width: 4)
                     ],
-                    Text(methodLabel(method),
+                    Text(method.label,
                         style: cairo(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -860,8 +958,6 @@ class _SplitPaymentSection extends StatelessWidget {
   final int? parsedTip;
   final String tipPaymentMethod;
 
-  static const _methods = ['cash', 'card', 'talabat_online', 'talabat_cash'];
-
   const _SplitPaymentSection({
     required this.activeMethods,
     required this.splitCtrs,
@@ -889,14 +985,15 @@ class _SplitPaymentSection extends StatelessWidget {
         children: [
           const FieldLabel('SELECT METHODS USED'),
           const SizedBox(height: 10),
+          // Task 4.1: Enum usage
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: _methods.map((method) {
-              final color = methodColor(method);
-              final active = activeMethods.contains(method);
+            children: PaymentMethod.values.where((m) => m != PaymentMethod.mixed).map((method) {
+              final color = method.color;
+              final active = activeMethods.contains(method.wireFormat);
               return GestureDetector(
-                onTap: () => onToggleMethod(method),
+                onTap: () => onToggleMethod(method.wireFormat),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   padding:
@@ -916,7 +1013,7 @@ class _SplitPaymentSection extends StatelessWidget {
                         size: 14,
                         color: active ? Colors.white : color),
                     const SizedBox(width: 6),
-                    Text(methodLabel(method),
+                    Text(method.label,
                         style: cairo(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
@@ -932,7 +1029,8 @@ class _SplitPaymentSection extends StatelessWidget {
             const FieldLabel('ENTER AMOUNTS'),
             const SizedBox(height: 10),
             ...activeMethods.map((method) {
-              final color = methodColor(method);
+              final pm = PaymentMethod.fromWire(method);
+              final color = pm.color;
               final ctrl = splitCtrs[method];
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -946,7 +1044,7 @@ class _SplitPaymentSection extends StatelessWidget {
                             decoration: BoxDecoration(
                                 color: color, shape: BoxShape.circle)),
                         const SizedBox(width: 6),
-                        Text(methodLabel(method),
+                        Text(pm.label,
                             style: cairo(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w700,
@@ -991,11 +1089,10 @@ class _SplitPaymentSection extends StatelessWidget {
               );
             }),
 
-            // Balance indicator
             Builder(builder: (context) {
               final splits = _buildSplits();
               final entered = splits.fold(0, (s, p) => s + p.amount);
-              final isCashTip = isCashMethod(tipPaymentMethod);
+              final isCashTip = PaymentMethod.fromWire(tipPaymentMethod).isCash;
               final tipOffset =
                   (isCashTip && parsedTip != null) ? parsedTip! : 0;
               final diff = cartTotal - entered - tipOffset;

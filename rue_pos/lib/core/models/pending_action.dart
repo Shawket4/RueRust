@@ -3,25 +3,27 @@ import 'cart.dart';
 // ---------------------------------------------------------------------------
 // Action types
 // ---------------------------------------------------------------------------
-enum PendingActionType { shiftOpen, order, shiftClose, voidOrder }
+enum PendingActionType { shiftOpen, order, shiftClose, voidOrder, cashMovement }
 
 // ---------------------------------------------------------------------------
 // Base class
 // ---------------------------------------------------------------------------
 abstract class PendingAction {
-  final String localId; // UUID — used as idempotency key
+  final String localId; 
   final PendingActionType type;
   final DateTime createdAt;
   final int retryCount;
+  final String? lastError; 
 
   const PendingAction({
     required this.localId,
     required this.type,
     required this.createdAt,
     this.retryCount = 0,
+    this.lastError,
   });
 
-  PendingAction withIncrementedRetry();
+  PendingAction withIncrementedRetry(String error);
   PendingAction withResetRetry();
   Map<String, dynamic> toJson();
 
@@ -32,6 +34,7 @@ abstract class PendingAction {
       PendingActionType.order => PendingOrder.fromJson(j),
       PendingActionType.shiftClose => PendingShiftClose.fromJson(j),
       PendingActionType.voidOrder => PendingVoidOrder.fromJson(j),
+      PendingActionType.cashMovement => PendingCashMovement.fromJson(j),
     };
   }
 }
@@ -41,7 +44,7 @@ abstract class PendingAction {
 // ---------------------------------------------------------------------------
 class PendingShiftOpen extends PendingAction {
   final String branchId;
-  final String shiftId; // client-generated UUID — becomes the real ID
+  final String shiftId; 
   final int openingCash;
   final DateTime openedAt;
 
@@ -49,6 +52,7 @@ class PendingShiftOpen extends PendingAction {
     required super.localId,
     required super.createdAt,
     super.retryCount,
+    super.lastError,
     required this.branchId,
     required this.shiftId,
     required this.openingCash,
@@ -56,42 +60,30 @@ class PendingShiftOpen extends PendingAction {
   }) : super(type: PendingActionType.shiftOpen);
 
   @override
-  PendingShiftOpen withIncrementedRetry() => PendingShiftOpen(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        openingCash: openingCash,
-        openedAt: openedAt,
-        retryCount: retryCount + 1,
+  PendingShiftOpen withIncrementedRetry(String error) => PendingShiftOpen(
+        localId: localId, createdAt: createdAt, branchId: branchId,
+        shiftId: shiftId, openingCash: openingCash, openedAt: openedAt,
+        retryCount: retryCount + 1, lastError: error,
       );
 
   @override
   PendingShiftOpen withResetRetry() => PendingShiftOpen(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        openingCash: openingCash,
-        openedAt: openedAt,
+        localId: localId, createdAt: createdAt, branchId: branchId,
+        shiftId: shiftId, openingCash: openingCash, openedAt: openedAt,
       );
 
   @override
   Map<String, dynamic> toJson() => {
-        'local_id': localId,
-        'type': type.name,
-        'created_at': createdAt.toUtc().toIso8601String(),
-        'retry_count': retryCount,
-        'branch_id': branchId,
-        'shift_id': shiftId,
-        'opening_cash': openingCash,
-        'opened_at': openedAt.toUtc().toIso8601String(),
+        'local_id': localId, 'type': type.name, 'created_at': createdAt.toUtc().toIso8601String(),
+        'retry_count': retryCount, 'last_error': lastError, 'branch_id': branchId,
+        'shift_id': shiftId, 'opening_cash': openingCash, 'opened_at': openedAt.toUtc().toIso8601String(),
       };
 
   factory PendingShiftOpen.fromJson(Map<String, dynamic> j) => PendingShiftOpen(
         localId: j['local_id'] as String,
         createdAt: DateTime.parse(j['created_at'] as String),
         retryCount: (j['retry_count'] as int?) ?? 0,
+        lastError: j['last_error'] as String?,
         branchId: j['branch_id'] as String,
         shiftId: j['shift_id'] as String,
         openingCash: j['opening_cash'] as int,
@@ -109,11 +101,11 @@ class PendingOrder extends PendingAction {
   final String? customerName;
   final String? discountType;
   final int? discountValue;
-  final String? discountId; // Item 6
-  final int? amountTendered; // Item 2
-  final int? tipAmount; // Item 2
+  final String? discountId; 
+  final int? amountTendered; 
+  final int? tipAmount; 
   final String? tipPaymentMethod;
-  final List<Map<String, dynamic>>? paymentSplits; // Item 7
+  final List<PaymentSplit>? paymentSplits; 
   final List<CartItem> items;
   final DateTime orderedAt;
 
@@ -121,6 +113,7 @@ class PendingOrder extends PendingAction {
     required super.localId,
     required super.createdAt,
     super.retryCount,
+    super.lastError,
     required this.branchId,
     required this.shiftId,
     required this.paymentMethod,
@@ -137,61 +130,31 @@ class PendingOrder extends PendingAction {
   }) : super(type: PendingActionType.order);
 
   @override
-  PendingOrder withIncrementedRetry() => PendingOrder(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        paymentMethod: paymentMethod,
-        customerName: customerName,
-        discountType: discountType,
-        discountValue: discountValue,
-        discountId: discountId,
-        amountTendered: amountTendered,
-        tipAmount: tipAmount,
-        tipPaymentMethod: tipPaymentMethod,
-        paymentSplits: paymentSplits,
-        items: items,
-        orderedAt: orderedAt,
-        retryCount: retryCount + 1,
+  PendingOrder withIncrementedRetry(String error) => PendingOrder(
+        localId: localId, createdAt: createdAt, branchId: branchId, shiftId: shiftId,
+        paymentMethod: paymentMethod, customerName: customerName, discountType: discountType,
+        discountValue: discountValue, discountId: discountId, amountTendered: amountTendered,
+        tipAmount: tipAmount, tipPaymentMethod: tipPaymentMethod, paymentSplits: paymentSplits,
+        items: items, orderedAt: orderedAt, retryCount: retryCount + 1, lastError: error,
       );
 
   @override
   PendingOrder withResetRetry() => PendingOrder(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        paymentMethod: paymentMethod,
-        customerName: customerName,
-        discountType: discountType,
-        discountValue: discountValue,
-        discountId: discountId,
-        amountTendered: amountTendered,
-        tipAmount: tipAmount,
-        tipPaymentMethod: tipPaymentMethod,
-        paymentSplits: paymentSplits,
-        items: items,
-        orderedAt: orderedAt,
+        localId: localId, createdAt: createdAt, branchId: branchId, shiftId: shiftId,
+        paymentMethod: paymentMethod, customerName: customerName, discountType: discountType,
+        discountValue: discountValue, discountId: discountId, amountTendered: amountTendered,
+        tipAmount: tipAmount, tipPaymentMethod: tipPaymentMethod, paymentSplits: paymentSplits,
+        items: items, orderedAt: orderedAt,
       );
 
   @override
   Map<String, dynamic> toJson() => {
-        'local_id': localId,
-        'type': type.name,
-        'created_at': createdAt.toUtc().toIso8601String(),
-        'retry_count': retryCount,
-        'branch_id': branchId,
-        'shift_id': shiftId,
-        'payment_method': paymentMethod,
-        'customer_name': customerName,
-        'discount_type': discountType,
-        'discount_value': discountValue,
-        'discount_id': discountId,
-        'amount_tendered': amountTendered,
-        'tip_amount': tipAmount,
-        'tip_payment_method': tipPaymentMethod,
-        if (paymentSplits != null) 'payment_splits': paymentSplits,
+        'local_id': localId, 'type': type.name, 'created_at': createdAt.toUtc().toIso8601String(),
+        'retry_count': retryCount, 'last_error': lastError, 'branch_id': branchId, 'shift_id': shiftId,
+        'payment_method': paymentMethod, 'customer_name': customerName, 'discount_type': discountType,
+        'discount_value': discountValue, 'discount_id': discountId, 'amount_tendered': amountTendered,
+        'tip_amount': tipAmount, 'tip_payment_method': tipPaymentMethod,
+        if (paymentSplits != null) 'payment_splits': paymentSplits!.map((s) => s.toApiJson()).toList(),
         'ordered_at': orderedAt.toUtc().toIso8601String(),
         'items': items.map((i) => i.toStorageJson()).toList(),
       };
@@ -200,6 +163,7 @@ class PendingOrder extends PendingAction {
         localId: j['local_id'] as String,
         createdAt: DateTime.parse(j['created_at'] as String),
         retryCount: (j['retry_count'] as int?) ?? 0,
+        lastError: j['last_error'] as String?,
         branchId: (j['branch_id'] as String?) ?? '',
         shiftId: j['shift_id'] as String,
         paymentMethod: j['payment_method'] as String,
@@ -210,13 +174,11 @@ class PendingOrder extends PendingAction {
         amountTendered: j['amount_tendered'] as int?,
         tipAmount: j['tip_amount'] as int?,
         tipPaymentMethod: j['tip_payment_method'] as String?,
-        paymentSplits:
-            (j['payment_splits'] as List?)?.cast<Map<String, dynamic>>(),
-        orderedAt: DateTime.parse(
-            (j['ordered_at'] as String?) ?? j['created_at'] as String),
-        items: (j['items'] as List)
-            .map((i) => CartItem.fromStorageJson(i as Map<String, dynamic>))
+        paymentSplits: (j['payment_splits'] as List?)
+            ?.map((s) => PaymentSplit(method: s['method'], amount: s['amount']))
             .toList(),
+        orderedAt: DateTime.parse((j['ordered_at'] as String?) ?? j['created_at'] as String),
+        items: (j['items'] as List).map((i) => CartItem.fromStorageJson(i as Map<String, dynamic>)).toList(),
       );
 }
 
@@ -235,6 +197,7 @@ class PendingShiftClose extends PendingAction {
     required super.localId,
     required super.createdAt,
     super.retryCount,
+    super.lastError,
     required this.branchId,
     required this.shiftId,
     required this.closingCash,
@@ -244,41 +207,23 @@ class PendingShiftClose extends PendingAction {
   }) : super(type: PendingActionType.shiftClose);
 
   @override
-  PendingShiftClose withIncrementedRetry() => PendingShiftClose(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        closingCash: closingCash,
-        cashNote: cashNote,
-        inventoryCounts: inventoryCounts,
-        closedAt: closedAt,
-        retryCount: retryCount + 1,
+  PendingShiftClose withIncrementedRetry(String error) => PendingShiftClose(
+        localId: localId, createdAt: createdAt, branchId: branchId, shiftId: shiftId,
+        closingCash: closingCash, cashNote: cashNote, inventoryCounts: inventoryCounts,
+        closedAt: closedAt, retryCount: retryCount + 1, lastError: error,
       );
 
   @override
   PendingShiftClose withResetRetry() => PendingShiftClose(
-        localId: localId,
-        createdAt: createdAt,
-        branchId: branchId,
-        shiftId: shiftId,
-        closingCash: closingCash,
-        cashNote: cashNote,
-        inventoryCounts: inventoryCounts,
-        closedAt: closedAt,
+        localId: localId, createdAt: createdAt, branchId: branchId, shiftId: shiftId,
+        closingCash: closingCash, cashNote: cashNote, inventoryCounts: inventoryCounts, closedAt: closedAt,
       );
 
   @override
   Map<String, dynamic> toJson() => {
-        'local_id': localId,
-        'type': type.name,
-        'created_at': createdAt.toUtc().toIso8601String(),
-        'retry_count': retryCount,
-        'branch_id': branchId,
-        'shift_id': shiftId,
-        'closing_cash': closingCash,
-        'cash_note': cashNote,
-        'inventory_counts': inventoryCounts,
+        'local_id': localId, 'type': type.name, 'created_at': createdAt.toUtc().toIso8601String(),
+        'retry_count': retryCount, 'last_error': lastError, 'branch_id': branchId, 'shift_id': shiftId,
+        'closing_cash': closingCash, 'cash_note': cashNote, 'inventory_counts': inventoryCounts,
         'closed_at': closedAt.toUtc().toIso8601String(),
       };
 
@@ -287,12 +232,12 @@ class PendingShiftClose extends PendingAction {
         localId: j['local_id'] as String,
         createdAt: DateTime.parse(j['created_at'] as String),
         retryCount: (j['retry_count'] as int?) ?? 0,
+        lastError: j['last_error'] as String?,
         branchId: j['branch_id'] as String,
         shiftId: j['shift_id'] as String,
         closingCash: j['closing_cash'] as int,
         cashNote: j['cash_note'] as String?,
-        inventoryCounts:
-            (j['inventory_counts'] as List).cast<Map<String, dynamic>>(),
+        inventoryCounts: (j['inventory_counts'] as List).cast<Map<String, dynamic>>(),
         closedAt: DateTime.parse(j['closed_at'] as String),
       );
 }
@@ -310,6 +255,7 @@ class PendingVoidOrder extends PendingAction {
     required super.localId,
     required super.createdAt,
     super.retryCount,
+    super.lastError,
     required this.orderId,
     required this.reason,
     required this.restoreInventory,
@@ -317,45 +263,78 @@ class PendingVoidOrder extends PendingAction {
   }) : super(type: PendingActionType.voidOrder);
 
   @override
-  PendingVoidOrder withIncrementedRetry() => PendingVoidOrder(
-        localId: localId,
-        createdAt: createdAt,
-        orderId: orderId,
-        reason: reason,
-        restoreInventory: restoreInventory,
-        voidedAt: voidedAt,
-        retryCount: retryCount + 1,
+  PendingVoidOrder withIncrementedRetry(String error) => PendingVoidOrder(
+        localId: localId, createdAt: createdAt, orderId: orderId, reason: reason,
+        restoreInventory: restoreInventory, voidedAt: voidedAt, retryCount: retryCount + 1, lastError: error,
       );
 
   @override
   PendingVoidOrder withResetRetry() => PendingVoidOrder(
-        localId: localId,
-        createdAt: createdAt,
-        orderId: orderId,
-        reason: reason,
-        restoreInventory: restoreInventory,
-        voidedAt: voidedAt,
+        localId: localId, createdAt: createdAt, orderId: orderId, reason: reason,
+        restoreInventory: restoreInventory, voidedAt: voidedAt,
       );
 
   @override
   Map<String, dynamic> toJson() => {
-        'local_id': localId,
-        'type': type.name,
-        'created_at': createdAt.toUtc().toIso8601String(),
-        'retry_count': retryCount,
-        'order_id': orderId,
-        'reason': reason,
-        'restore_inventory': restoreInventory,
-        'voided_at': voidedAt.toUtc().toIso8601String(),
+        'local_id': localId, 'type': type.name, 'created_at': createdAt.toUtc().toIso8601String(),
+        'retry_count': retryCount, 'last_error': lastError, 'order_id': orderId, 'reason': reason,
+        'restore_inventory': restoreInventory, 'voided_at': voidedAt.toUtc().toIso8601String(),
       };
 
   factory PendingVoidOrder.fromJson(Map<String, dynamic> j) => PendingVoidOrder(
         localId: j['local_id'] as String,
         createdAt: DateTime.parse(j['created_at'] as String),
         retryCount: (j['retry_count'] as int?) ?? 0,
+        lastError: j['last_error'] as String?,
         orderId: j['order_id'] as String,
         reason: j['reason'] as String,
         restoreInventory: (j['restore_inventory'] as bool?) ?? false,
         voidedAt: DateTime.parse(j['voided_at'] as String),
+      );
+}
+
+// ---------------------------------------------------------------------------
+// Cash Movement (Task 2.3)
+// ---------------------------------------------------------------------------
+class PendingCashMovement extends PendingAction {
+  final String shiftId;
+  final int amount;
+  final String note;
+
+  const PendingCashMovement({
+    required super.localId,
+    required super.createdAt,
+    super.retryCount,
+    super.lastError,
+    required this.shiftId,
+    required this.amount,
+    required this.note,
+  }) : super(type: PendingActionType.cashMovement);
+
+  @override
+  PendingCashMovement withIncrementedRetry(String error) => PendingCashMovement(
+        localId: localId, createdAt: createdAt, shiftId: shiftId, amount: amount,
+        note: note, retryCount: retryCount + 1, lastError: error,
+      );
+
+  @override
+  PendingCashMovement withResetRetry() => PendingCashMovement(
+        localId: localId, createdAt: createdAt, shiftId: shiftId, amount: amount, note: note,
+      );
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'local_id': localId, 'type': type.name, 'created_at': createdAt.toUtc().toIso8601String(),
+        'retry_count': retryCount, 'last_error': lastError, 'shift_id': shiftId, 'amount': amount, 'note': note,
+      };
+
+  factory PendingCashMovement.fromJson(Map<String, dynamic> j) => PendingCashMovement(
+        localId: j['local_id'] as String,
+        createdAt: DateTime.parse(j['created_at'] as String),
+        retryCount: (j['retry_count'] as int?) ?? 0,
+        lastError: j['last_error'] as String?,
+        shiftId: j['shift_id'] as String,
+        amount: j['amount'] as int,
+        note: j['note'] as String,
       );
 }

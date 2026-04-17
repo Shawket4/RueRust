@@ -56,23 +56,39 @@ class OrderHistoryNotifier extends Notifier<OrderHistoryState> {
 
   Future<void> refresh(String shiftId) => loadForShift(shiftId, force: true);
 
-  /// Called after a successful order placement (online or synced offline).
   void addOrder(Order order) {
     if (state.orders.any((o) => o.id == order.id)) return;
     final updated = [order, ...state.orders];
     state = state.copyWith(orders: updated);
     if (state.shiftId != null) {
+      // Task 1.1: Pass the updated list directly, let repository save it without prepending
       ref
           .read(orderRepositoryProvider)
-          .appendOrderToCache(state.shiftId!, order, state.orders);
+          .saveOrdersToCache(state.shiftId!, updated);
+    }
+  }
+
+  // Task 1.5: Replace optimistic order
+  void replaceOrder(String localId, Order synced) {
+    final idx = state.orders.indexWhere((o) => o.id == localId);
+    if (idx >= 0) {
+      final updated = List<Order>.of(state.orders);
+      updated[idx] = synced;
+      state = state.copyWith(orders: updated);
+      if (state.shiftId != null) {
+        ref.read(orderRepositoryProvider).saveOrdersToCache(state.shiftId!, updated);
+      }
+    } else {
+      addOrder(synced);
     }
   }
 
   void updateOrder(Order updated) {
-    state = state.copyWith(
-      orders:
-          state.orders.map((o) => o.id == updated.id ? updated : o).toList(),
-    );
+    final newOrders = state.orders.map((o) => o.id == updated.id ? updated : o).toList();
+    state = state.copyWith(orders: newOrders);
+    if (state.shiftId != null) {
+        ref.read(orderRepositoryProvider).saveOrdersToCache(state.shiftId!, newOrders);
+    }
   }
 
   void clear() => state = const OrderHistoryState();

@@ -13,10 +13,8 @@ import '../../core/utils/formatting.dart';
 import '../../shared/widgets/error_banner.dart';
 import '../../shared/widgets/label_value.dart';
 import 'void_order_sheet.dart';
+import 'helpers/payment_helpers.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
 class OrderHistoryScreen extends ConsumerStatefulWidget {
   const OrderHistoryScreen({super.key});
 
@@ -43,7 +41,7 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   Widget build(BuildContext context) {
     final history = ref.watch(orderHistoryProvider);
     final shift = ref.watch(shiftProvider).shift;
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -92,9 +90,6 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ORDER LIST
-// ─────────────────────────────────────────────────────────────────────────────
 class _OrderList extends StatelessWidget {
   final List<Order> orders;
   final bool isTablet;
@@ -112,7 +107,6 @@ class _OrderList extends StatelessWidget {
         .fold(0, (s, o) => s + o.totalAmount);
 
     return Column(children: [
-      // Summary bar
       Container(
         color: Colors.white,
         padding:
@@ -190,9 +184,6 @@ class _StatChip extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ORDER TILE
-// ─────────────────────────────────────────────────────────────────────────────
 class _OrderTile extends ConsumerStatefulWidget {
   final Order order;
   const _OrderTile({required this.order});
@@ -222,7 +213,7 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
   }
 
   void _show(Order o) {
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -240,6 +231,7 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
   Widget build(BuildContext context) {
     final o = widget.order;
     final isVoided = o.status == 'voided';
+    final isPending = o.status == 'pending_sync';
 
     return GestureDetector(
       onTap: _onTap,
@@ -257,7 +249,6 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
           Padding(
             padding: const EdgeInsets.all(14),
             child: Row(children: [
-              // Order number badge
               Container(
                 width: 48,
                 height: 48,
@@ -267,7 +258,9 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
                         : AppColors.primary.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(AppRadius.sm)),
                 alignment: Alignment.center,
-                child: Text('#${o.orderNumber}',
+                child: isPending 
+                    ? const Icon(Icons.sync_rounded, color: AppColors.primary, size: 20)
+                    : Text('#${o.orderNumber}',
                     style: cairo(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -286,6 +279,10 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
                       if (isVoided) ...[
                         const SizedBox(width: 6),
                         const _VoidedBadge(),
+                      ],
+                      if (isPending) ...[
+                        const SizedBox(width: 6),
+                        const _PendingSyncBadge(),
                       ],
                       const Spacer(),
                       Text(timeShort(o.createdAt),
@@ -316,7 +313,6 @@ class _OrderTileState extends ConsumerState<_OrderTile> {
             ]),
           ),
 
-          // Loading overlay
           if (_loading)
             Positioned.fill(
                 child: Container(
@@ -343,25 +339,9 @@ class _PaymentBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = switch (method) {
-      'cash' => 'Cash',
-      'card' => 'Card',
-      'digital_wallet' => 'Wallet',
-      'mixed' => 'Mixed',
-      'talabat_online' => 'Talabat Online',
-      'talabat_cash' => 'Talabat Cash',
-      _ => method[0].toUpperCase() + method.substring(1),
-    };
+    final label = methodLabel(method);
+    final color = methodColor(method);
 
-    final color = switch (method) {
-      'cash' => const Color(0xFF059669),
-      'card' => const Color(0xFF7C3AED),
-      'digital_wallet' => const Color(0xFF0EA5E9),
-      'mixed' => AppColors.primary,
-      'talabat_online' => const Color(0xFFFF6B00),
-      'talabat_cash' => const Color(0xFFFF6B00),
-      _ => AppColors.primary,
-    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -394,9 +374,23 @@ class _VoidedBadge extends StatelessWidget {
               letterSpacing: 0.3)));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ORDER DETAIL SHEET
-// ─────────────────────────────────────────────────────────────────────────────
+class _PendingSyncBadge extends StatelessWidget {
+  const _PendingSyncBadge();
+
+  @override
+  Widget build(BuildContext context) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+          color: AppColors.warning.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(AppRadius.xs)),
+      child: Text('PENDING SYNC',
+          style: cairo(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppColors.warning,
+              letterSpacing: 0.3)));
+}
+
 class _OrderDetailSheet extends ConsumerStatefulWidget {
   final Order order;
   const _OrderDetailSheet({required this.order});
@@ -451,6 +445,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
   Widget build(BuildContext context) {
     final order = _order;
     final isVoided = order.status == 'voided';
+    final isPending = order.status == 'pending_sync';
 
     return Container(
       constraints:
@@ -458,7 +453,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
       decoration: BoxDecoration(
           color: Colors.white, borderRadius: AppRadius.sheetRadius),
       child: Column(children: [
-        // Handle
         Padding(
             padding: const EdgeInsets.only(top: 12),
             child: Center(
@@ -469,7 +463,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                         color: AppColors.border,
                         borderRadius: BorderRadius.circular(2))))),
 
-        // Header
         Padding(
           padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -478,12 +471,16 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                   Row(children: [
-                    Text('Order #${order.orderNumber}',
+                    Text(isPending ? 'Pending Order' : 'Order #${order.orderNumber}',
                         style:
                             cairo(fontSize: 18, fontWeight: FontWeight.w800)),
                     if (isVoided) ...[
                       const SizedBox(width: 8),
                       const _VoidedBadge(),
+                    ],
+                    if (isPending) ...[
+                      const SizedBox(width: 8),
+                      const _PendingSyncBadge(),
                     ],
                   ]),
                   const SizedBox(height: 3),
@@ -496,7 +493,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                         style: cairo(fontSize: 11, color: AppColors.textMuted)),
                   ],
                 ])),
-            if (!isVoided) ...[
+            if (!isVoided && !isPending) ...[
               _printing
                   ? const Padding(
                       padding: EdgeInsets.all(8),
@@ -519,6 +516,12 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                   color: AppColors.danger,
                   onTap: () => VoidOrderSheet.show(context, order, _onVoided)),
             ],
+            if (isPending)
+               _SheetAction(
+                  icon: Icons.cancel_outlined,
+                  label: 'Void',
+                  color: AppColors.danger,
+                  onTap: () => VoidOrderSheet.show(context, order, _onVoided)),
           ]),
         ),
 
@@ -528,7 +531,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
             child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           children: [
-            // Items
             _SectionCard(
               child: order.items.isEmpty
                   ? Text('No item details available',
@@ -548,7 +550,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
 
             const SizedBox(height: 12),
 
-            // Totals
             _SectionCard(
               child: Column(children: [
                 LabelValue('Subtotal', egp(order.subtotal)),
@@ -582,11 +583,10 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
 
             const SizedBox(height: 12),
 
-            // Meta
             _SectionCard(
               child: Column(children: [
                 _MetaRow(Icons.payments_outlined, 'Payment',
-                    _paymentLabel(order.paymentMethod)),
+                    methodLabel(order.paymentMethod)),
                 if (order.customerName != null) ...[
                   const SizedBox(height: 10),
                   _MetaRow(Icons.person_outline_rounded, 'Customer',
@@ -608,26 +608,18 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
     );
   }
 
-  String _paymentLabel(String method) => switch (method) {
-        'cash' => 'Cash',
-        'card' => 'Card',
-        'digital_wallet' => 'Digital Wallet',
-        'mixed' => 'Mixed',
-        'talabat_online' => 'Talabat Online',
-        'talabat_cash' => 'Talabat Cash',
-        _ => method,
-      };
-
-  String _voidReasonLabel(String r) => switch (r) {
+  String _voidReasonLabel(String r) {
+    if (r.startsWith('other: ')) return r.substring(7);
+    return switch (r) {
         'customer_request' => 'Customer request',
         'wrong_order' => 'Wrong order',
         'quality_issue' => 'Quality issue',
         'other' => 'Other',
         _ => r,
       };
+  }
 }
 
-// ── Shared sheet widgets ───────────────────────────────────────────────────────
 class _SectionCard extends StatelessWidget {
   final Widget child;
   const _SectionCard({required this.child});
@@ -754,7 +746,6 @@ class _MetaRow extends StatelessWidget {
       ]);
 }
 
-// ── Placeholder ────────────────────────────────────────────────────────────────
 class _Placeholder extends StatelessWidget {
   final IconData icon;
   final String message;

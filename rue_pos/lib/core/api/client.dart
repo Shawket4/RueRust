@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../config/api_config.dart';
 
 String? _currentToken;
 void setAuthToken(String? token) => _currentToken = token;
@@ -13,7 +14,7 @@ class DioClient {
 
   DioClient() {
     _dio = Dio(BaseOptions(
-      baseUrl:        'https://rue-pos.ddns.net/api',
+      baseUrl:        kApiBaseUrl,
       connectTimeout: const Duration(seconds: 10),
       sendTimeout:    const Duration(seconds: 20),
       receiveTimeout: const Duration(seconds: 20),
@@ -28,17 +29,7 @@ class DioClient {
         handler.next(options);
       },
       onResponse: (response, handler) {
-        if (response.data is Map &&
-            (response.data as Map).containsKey('error') &&
-            response.statusCode == 200) {
-          handler.reject(DioException(
-            requestOptions: response.requestOptions,
-            response: response,
-            message: (response.data as Map)['error']?.toString(),
-          ));
-        } else {
-          handler.next(response);
-        }
+        handler.next(response);
       },
       onError: (err, handler) {
         if (err.response?.statusCode == 401) {

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-// ─── Brand colours — unchanged ────────────────────────────────────────────────
 class AppColors {
   static const primary = Color(0xFF1a56db);
   static const secondary = Color(0xFF3b28cc);
@@ -9,26 +8,21 @@ class AppColors {
   static const danger = Color(0xFFDC2626);
   static const warning = Color(0xFFD97706);
 
-  // Surfaces
   static const bg = Color(0xFFF2F3F7);
   static const surface = Colors.white;
-  // Borders
   static const border = Color(0xFFE5E7EB);
   static const borderLight = Color(0xFFF3F4F6);
 
-  // Text
   static const textPrimary = Color(0xFF111827);
   static const textSecondary = Color(0xFF6B7280);
   static const textMuted = Color(0xFF9CA3AF);
 
-  // Semantic tints (same hue, just opacity helpers)
   static Color primaryTint(double opacity) => primary.withOpacity(opacity);
   static Color successTint(double opacity) => success.withOpacity(opacity);
   static Color dangerTint(double opacity) => danger.withOpacity(opacity);
   static Color warningTint(double opacity) => warning.withOpacity(opacity);
 }
 
-// ─── Cairo helper ─────────────────────────────────────────────────────────────
 TextStyle cairo({
   double fontSize = 14,
   FontWeight fontWeight = FontWeight.w400,
@@ -46,9 +40,7 @@ TextStyle cairo({
       decoration: decoration,
     );
 
-// ─── Elevation helpers (warm-tinted shadows, no colour change) ─────────────────
 class AppShadows {
-  /// Tight card shadow — subtle lift
   static List<BoxShadow> get card => [
         BoxShadow(
           color: const Color(0xFF111827).withOpacity(0.05),
@@ -62,7 +54,6 @@ class AppShadows {
         ),
       ];
 
-  /// Medium — action panels, floating elements
   static List<BoxShadow> get md => [
         BoxShadow(
           color: const Color(0xFF111827).withOpacity(0.08),
@@ -76,7 +67,6 @@ class AppShadows {
         ),
       ];
 
-  /// Primary glow — buttons, selected states (brand colour tint only)
   static List<BoxShadow> primaryGlow() => [
         BoxShadow(
           color: AppColors.primary.withOpacity(0.22),
@@ -86,7 +76,6 @@ class AppShadows {
       ];
 }
 
-// ─── Radius constants ─────────────────────────────────────────────────────────
 class AppRadius {
   static const double xs = 8;
   static const double sm = 12;
@@ -101,17 +90,6 @@ class AppRadius {
       const BorderRadius.vertical(top: Radius.circular(xl));
 }
 
-// ─── Spacing ──────────────────────────────────────────────────────────────────
-class AppSpacing {
-  static const double xs = 4;
-  static const double sm = 8;
-  static const double md = 16;
-  static const double lg = 24;
-  static const double xl = 32;
-  static const double xxl = 48;
-}
-
-// ─── Theme ────────────────────────────────────────────────────────────────────
 class AppTheme {
   static ThemeData get light {
     final base = GoogleFonts.cairoTextTheme();
@@ -202,23 +180,14 @@ class AppTheme {
         contentTextStyle: GoogleFonts.cairo(
             fontSize: 14, color: AppColors.textSecondary, height: 1.5),
       ),
+      
+      // Modern Toast SnackBar styling
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: AppColors.textPrimary,
-        contentTextStyle: GoogleFonts.cairo(fontSize: 13, color: Colors.white),
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.sm)),
-      ),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected)
-                ? Colors.white
-                : AppColors.textMuted),
-        trackColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected)
-                ? AppColors.primary
-                : AppColors.border),
-        trackOutlineColor: WidgetStateProperty.all(Colors.transparent),
+        backgroundColor: const Color(0xFF1F2937), // Elegant dark gray
+        contentTextStyle: GoogleFonts.cairo(fontSize: 14, color: Colors.white, fontWeight: FontWeight.w500),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 6,
       ),
     );
   }

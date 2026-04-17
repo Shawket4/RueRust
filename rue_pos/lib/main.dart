@@ -51,23 +51,19 @@ class _AppState extends ConsumerState<_App> {
       final history      = ref.read(orderHistoryProvider.notifier);
       final shiftNotif   = ref.read(shiftProvider.notifier);
 
-      // Wire up sync callbacks
-      queue.onOrderSynced      = history.addOrder;
+      // Task 1.5: Wire up optimistic replacement
+      queue.onOrderSynced      = (order, localId) => history.replaceOrder(localId, order);
       queue.onVoidSynced       = history.updateOrder;
       queue.onShiftOpenSynced  = (shift) {
-        // If the shift that just synced matches our local shift, update state
         final current = ref.read(shiftProvider).shift;
         if (current != null && current.id == shift.id) {
-          // Replace local shift with real synced shift
           shiftNotif.state = shiftNotif.state.copyWith(
             shift:        shift,
             isLocalShift: false,
           );
         }
       };
-      queue.onShiftCloseSynced = (_) {
-        // Shift close synced — nothing extra needed, shift already cleared locally
-      };
+      queue.onShiftCloseSynced = (_) {};
 
       queue.init();
     });

@@ -41,13 +41,14 @@ class OrderRepository {
 
   Future<Order> get(String id) => _api.get(id);
 
+  // Task 1.2: Remove force unwrapping on reason
   Future<Order> voidOrder(String id,
           {String? reason, bool restoreInventory = false}) =>
-      _api.voidOrder(id, reason: reason!, restoreInventory: restoreInventory);
+      _api.voidOrder(id, reason: reason ?? 'No reason provided', restoreInventory: restoreInventory);
 
-  void appendOrderToCache(String shiftId, Order order, List<Order> current) {
-    final updated = [order, ...current];
-    _storage.saveOrders(shiftId, updated.map((o) => o.toJson()).toList());
+  // Task 1.1: Replace append with save since the notifier handles the list merging
+  void saveOrdersToCache(String shiftId, List<Order> current) {
+    _storage.saveOrders(shiftId, current.map((o) => o.toJson()).toList());
   }
 }
 

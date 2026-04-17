@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import '../api/client.dart';
 import '../models/inventory.dart';
 import '../models/pending_action.dart';
 import '../models/shift.dart';
@@ -7,6 +8,7 @@ import '../repositories/shift_repository.dart';
 import '../services/connectivity_service.dart';
 import '../services/offline_queue.dart';
 import '../storage/storage_service.dart';
+import 'auth_notifier.dart';
 
 class ShiftState {
   final bool               isLoading;
@@ -17,7 +19,6 @@ class ShiftState {
   final bool               systemCashLoading;
   final String?            error;
   final bool               fromCache;
-  /// True if the current shift was opened offline and not yet synced.
   final bool               isLocalShift;
 
   const ShiftState({
@@ -77,7 +78,6 @@ class ShiftNotifier extends Notifier<ShiftState> {
         clearShift:           preFill.openShift == null,
       );
     } catch (_) {
-      // Try cache
       final cached = ref.read(storageServiceProvider).loadShift(branchId);
       if (cached != null) {
         state = state.copyWith(
@@ -93,7 +93,6 @@ class ShiftNotifier extends Notifier<ShiftState> {
     }
   }
 
-  /// Open shift. Works offline — generates local UUID and queues.
   Future<bool> openShift(String branchId, int openingCash) async {
     state = state.copyWith(isLoading: true, clearError: true);
     final isOnline = ConnectivityService.instance.isOnline;
@@ -106,29 +105,34 @@ class ShiftNotifier extends Notifier<ShiftState> {
             isLoading: false, shift: shift, isLocalShift: false);
         return true;
       } catch (e) {
-        state = state.copyWith(isLoading: false, error: _friendly(e));
+        state = state.copyWith(isLoading: false, error: friendlyError(e)); // Task 4.2
         return false;
       }
     }
 
     // ── OFFLINE ──────────────────────────────────────────────
+    // Task 1.3: Stamp offline shifts
+    final user = ref.read(authProvider).user;
+    if (user == null) {
+      state = state.copyWith(isLoading: false, error: 'User not authenticated');
+      return false;
+    }
+
     final shiftId  = const Uuid().v4();
     final now      = DateTime.now();
     final localShift = Shift(
       id:           shiftId,
       branchId:     branchId,
-      tellerId:     '',        // filled on sync
-      tellerName:   '',
+      tellerId:     user.id,
+      tellerName:   user.name,
       status:       'open',
       openingCash:  openingCash,
       openedAt:     now,
     );
 
-    // Persist locally so the app continues to work
     await ref.read(storageServiceProvider)
         .saveShift(branchId, localShift.toJson());
 
-    // Enqueue for sync
     await ref.read(offlineQueueProvider.notifier).enqueueShiftOpen(
       PendingShiftOpen(
         localId:     const Uuid().v4(),
@@ -145,7 +149,6 @@ class ShiftNotifier extends Notifier<ShiftState> {
     return true;
   }
 
-  /// Close shift. Works offline — queues the close payload.
   Future<bool> closeShift({
     required String branchId,
     required int    closingCash,
@@ -154,48 +157,32 @@ class ShiftNotifier extends Notifier<ShiftState> {
   }) async {
     if (state.shift == null) return false;
     state = state.copyWith(isLoading: true, clearError: true);
+    
+    // Task 2.1: strictly online action
     final isOnline = ConnectivityService.instance.isOnline;
-    final shiftId  = state.shift!.id;
-    final now      = DateTime.now();
-
-    if (isOnline) {
-      try {
-        await ref.read(shiftRepositoryProvider).closeShift(
-          shiftId,
-          branchId:        branchId,
-          closingCash:     closingCash,
-          note:            note,
-          inventoryCounts: inventoryCounts,
-        );
-        await ref.read(storageServiceProvider).removeShift(branchId);
-        state = state.copyWith(
-            isLoading: false, clearShift: true, systemCash: 0);
-        return true;
-      } catch (e) {
-        state = state.copyWith(isLoading: false, error: _friendly(e));
-        return false;
-      }
+    if (!isOnline) {
+      state = state.copyWith(isLoading: false, error: 'Internet required to close shift');
+      return false;
     }
 
-    // ── OFFLINE ──────────────────────────────────────────────
-    await ref.read(offlineQueueProvider.notifier).enqueueShiftClose(
-      PendingShiftClose(
-        localId:         const Uuid().v4(),
-        createdAt:       now,
-        branchId:        branchId,
-        shiftId:         shiftId,
-        closingCash:     closingCash,
-        cashNote:        note,
-        inventoryCounts: inventoryCounts,
-        closedAt:        now,
-      ),
-    );
+    final shiftId  = state.shift!.id;
 
-    // Mark shift as closed locally
-    await ref.read(storageServiceProvider).removeShift(branchId);
-    state = state.copyWith(
-        isLoading: false, clearShift: true, systemCash: 0);
-    return true;
+    try {
+      await ref.read(shiftRepositoryProvider).closeShift(
+        shiftId,
+        branchId:        branchId,
+        closingCash:     closingCash,
+        note:            note,
+        inventoryCounts: inventoryCounts,
+      );
+      await ref.read(storageServiceProvider).removeShift(branchId);
+      state = state.copyWith(
+          isLoading: false, clearShift: true, systemCash: 0);
+      return true;
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: friendlyError(e)); // Task 4.2
+      return false;
+    }
   }
 
   Future<void> loadSystemCash() async {
@@ -215,14 +202,6 @@ class ShiftNotifier extends Notifier<ShiftState> {
     final items = await ref.read(shiftRepositoryProvider)
         .getInventory(branchId);
     state = state.copyWith(inventory: items);
-  }
-
-  String _friendly(Object e) {
-    final s = e.toString();
-    if (s.contains('409')) return 'A shift is already open for this branch';
-    if (s.contains('404')) return 'Shift not found';
-    if (s.contains('401')) return 'Session expired — please sign in again';
-    return 'Something went wrong — please try again';
   }
 }
 

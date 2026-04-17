@@ -8,9 +8,6 @@ import '../../../core/utils/formatting.dart';
 import 'menu_card.dart';
 import 'shared_widgets.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MENU GRID
-// ─────────────────────────────────────────────────────────────────────────────
 class MenuGrid extends ConsumerWidget {
   const MenuGrid({super.key});
 
@@ -43,7 +40,8 @@ class MenuGrid extends ConsumerWidget {
 
   Widget _grid(int count, Widget Function(BuildContext, int) builder) =>
       LayoutBuilder(builder: (ctx, constraints) {
-        final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
+        // Improved responsive grid math
+        final cols = (constraints.maxWidth / 160).floor().clamp(2, 6);
         final extent = constraints.maxWidth / cols;
         return GridView.builder(
           padding: const EdgeInsets.all(12),
@@ -51,7 +49,7 @@ class MenuGrid extends ConsumerWidget {
             crossAxisCount: cols,
             mainAxisSpacing: 10,
             crossAxisSpacing: 10,
-            childAspectRatio: extent / (extent * 1.3),
+            childAspectRatio: extent / (extent * 1.22), 
           ),
           itemCount: count,
           itemBuilder: builder,
@@ -59,9 +57,6 @@ class MenuGrid extends ConsumerWidget {
       });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  SEARCH RESULTS
-// ─────────────────────────────────────────────────────────────────────────────
 class SearchResults extends ConsumerWidget {
   final String query;
   const SearchResults({required this.query, super.key});
@@ -92,7 +87,7 @@ class SearchResults extends ConsumerWidget {
     }
 
     return LayoutBuilder(builder: (ctx, constraints) {
-      final cols = (constraints.maxWidth / 160).floor().clamp(2, 5);
+      final cols = (constraints.maxWidth / 160).floor().clamp(2, 6);
       final extent = constraints.maxWidth / cols;
       return GridView.builder(
         padding: const EdgeInsets.all(12),
@@ -100,7 +95,7 @@ class SearchResults extends ConsumerWidget {
           crossAxisCount: cols,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: extent / (extent * 1.3),
+          childAspectRatio: extent / (extent * 1.22),
         ),
         itemCount: found.length,
         itemBuilder: (_, i) => MenuCard(item: found[i]),

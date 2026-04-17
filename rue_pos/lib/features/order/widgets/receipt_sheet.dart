@@ -8,11 +8,9 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatting.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/label_value.dart';
+import '../../../shared/widgets/responsive_sheet.dart';
 import '../helpers/payment_helpers.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  RECEIPT SHEET
-// ─────────────────────────────────────────────────────────────────────────────
 class ReceiptSheet extends ConsumerStatefulWidget {
   final Order order;
   final int total;
@@ -20,11 +18,11 @@ class ReceiptSheet extends ConsumerStatefulWidget {
   const ReceiptSheet(
       {super.key, required this.order, required this.total, this.changeGiven});
 
-  static void show(BuildContext ctx,
+  // Task 3.2: ResponsiveSheet
+  static Future<void> show(BuildContext ctx,
           {required Order order, required int total, int? changeGiven}) =>
-      showModalBottomSheet(
+      ResponsiveSheet.show(
           context: ctx,
-          backgroundColor: Colors.transparent,
           builder: (_) => ReceiptSheet(
               order: order, total: total, changeGiven: changeGiven));
 
@@ -57,11 +55,12 @@ class _ReceiptSheetState extends ConsumerState<ReceiptSheet> {
         brand: branch.printerBrand!,
         order: widget.order,
         branchName: branch.name);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _printing = false;
         _printError = err;
       });
+    }
   }
 
   @override

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/auth_notifier.dart';
@@ -9,9 +10,6 @@ import 'widgets/category_rail.dart';
 import 'widgets/menu_grid.dart';
 import 'widgets/cart_panel.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  ORDER SCREEN — slim orchestrator
-// ─────────────────────────────────────────────────────────────────────────────
 class OrderScreen extends ConsumerStatefulWidget {
   const OrderScreen({super.key});
   @override
@@ -21,6 +19,7 @@ class OrderScreen extends ConsumerStatefulWidget {
 class _OrderScreenState extends ConsumerState<OrderScreen> {
   final _searchCtrl = TextEditingController();
   String _query = '';
+  Timer? _debounce;
 
   @override
   void initState() {
@@ -32,19 +31,29 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         ref.read(discountProvider.notifier).load(orgId);
       }
     });
-    _searchCtrl.addListener(
-        () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));
+
+    // Task 3.3: Debounce menu search
+    _searchCtrl.addListener(() {
+      if (_debounce?.isActive ?? false) _debounce!.cancel();
+      _debounce = Timer(const Duration(milliseconds: 180), () {
+        if (mounted) {
+          setState(() => _query = _searchCtrl.text.trim().toLowerCase());
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _debounce?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isTablet = MediaQuery.of(context).size.width >= 768;
+    // Task 3.7
+    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
     return Scaffold(
       backgroundColor: AppColors.bg,
       floatingActionButton: isTablet ? null : const MobileCartFab(),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lottie/lottie.dart';
 import '../../../core/providers/cart_notifier.dart';
@@ -6,13 +7,11 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatting.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/label_value.dart';
+import '../../../shared/widgets/responsive_sheet.dart';
 import 'cart_row.dart';
 import 'checkout_sheet.dart';
 import 'shared_widgets.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART PANEL (tablet sidebar)
-// ─────────────────────────────────────────────────────────────────────────────
 class CartPanel extends ConsumerWidget {
   const CartPanel({super.key});
 
@@ -95,6 +94,7 @@ class CartPanel extends ConsumerWidget {
                         style: cairo(color: AppColors.textSecondary))),
                 TextButton(
                     onPressed: () {
+                      HapticFeedback.mediumImpact();
                       Navigator.pop(ctx);
                       ref.read(cartProvider.notifier).clear();
                     },
@@ -107,9 +107,6 @@ class CartPanel extends ConsumerWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  EMPTY CART
-// ─────────────────────────────────────────────────────────────────────────────
 class _EmptyCart extends StatelessWidget {
   const _EmptyCart();
   @override
@@ -133,9 +130,6 @@ class _EmptyCart extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  CART FOOTER
-// ─────────────────────────────────────────────────────────────────────────────
 class CartFooter extends ConsumerWidget {
   const CartFooter({super.key});
 
@@ -186,9 +180,6 @@ class CartFooter extends ConsumerWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  MOBILE CART FAB + SHEET
-// ─────────────────────────────────────────────────────────────────────────────
 class MobileCartFab extends ConsumerWidget {
   const MobileCartFab({super.key});
 
@@ -212,10 +203,8 @@ class MobileCartFab extends ConsumerWidget {
 class _MobileCartSheet extends ConsumerWidget {
   const _MobileCartSheet();
 
-  static void show(BuildContext ctx) => showModalBottomSheet(
+  static void show(BuildContext ctx) => ResponsiveSheet.show(
         context: ctx,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
         builder: (_) => const _MobileCartSheet(),
       );
 
@@ -249,6 +238,7 @@ class _MobileCartSheet extends ConsumerWidget {
             if (!cart.isEmpty)
               GestureDetector(
                 onTap: () {
+                  HapticFeedback.mediumImpact();
                   ref.read(cartProvider.notifier).clear();
                   Navigator.pop(context);
                 },

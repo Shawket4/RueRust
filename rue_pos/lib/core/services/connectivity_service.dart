@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../config/api_config.dart';
 
 class ConnectivityService {
   ConnectivityService._();
@@ -17,27 +18,23 @@ class ConnectivityService {
   Timer? _pingTimer;
 
   final _dio = Dio(BaseOptions(
-    baseUrl: 'https://rue-pos.ddns.net/api',
+    baseUrl: kApiBaseUrl,
     connectTimeout: const Duration(seconds: 5),
     receiveTimeout: const Duration(seconds: 5),
   ));
 
   Future<void> init() async {
-    // Initial check
     await _checkReal();
 
-    // Listen to interface changes
     _sub = Connectivity().onConnectivityChanged.listen((results) {
       final hasInterface = results.any((r) => r != ConnectivityResult.none);
       if (!hasInterface) {
         _emit(false);
       } else {
-        // Interface came up — verify with real ping
         _checkReal();
       }
     });
 
-    // Ping every 10 seconds as fallback
     _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _checkReal();
     });
@@ -47,7 +44,6 @@ class ConnectivityService {
     try {
       await _dio.get('/health',
           options: Options(
-            // Don't use auth token for ping
             headers: {},
             sendTimeout: const Duration(seconds: 4),
             receiveTimeout: const Duration(seconds: 4),

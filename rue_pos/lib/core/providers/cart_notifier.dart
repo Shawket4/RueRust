@@ -2,6 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/cart.dart';
 
 class CartNotifier extends Notifier<CartState> {
+  CartItem? _lastRemovedItem;
+  int? _lastRemovedIndex;
+
   @override
   CartState build() => CartState.empty;
 
@@ -23,8 +26,22 @@ class CartNotifier extends Notifier<CartState> {
   }
 
   void removeAt(int index) {
+    _lastRemovedItem = state.items[index];
+    _lastRemovedIndex = index;
     final updated = List<CartItem>.of(state.items)..removeAt(index);
     state = state.copyWith(items: updated);
+  }
+
+  // Task 3.6: Restore method
+  void restoreLastRemoved() {
+    if (_lastRemovedItem == null || _lastRemovedIndex == null) return;
+    
+    final safeIndex = _lastRemovedIndex!.clamp(0, state.items.length);
+    final updated = List<CartItem>.of(state.items)..insert(safeIndex, _lastRemovedItem!);
+    state = state.copyWith(items: updated);
+    
+    _lastRemovedItem = null;
+    _lastRemovedIndex = null;
   }
 
   void setQty(int index, int qty) {
@@ -72,7 +89,11 @@ class CartNotifier extends Notifier<CartState> {
   void clearSplits() =>
       state = state.copyWith(clearSplits: true, payment: 'cash');
 
-  void clear() => state = CartState.empty;
+  void clear() {
+    _lastRemovedItem = null;
+    _lastRemovedIndex = null;
+    state = CartState.empty;
+  }
 }
 
 final cartProvider =

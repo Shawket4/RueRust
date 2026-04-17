@@ -9,6 +9,7 @@ import '../../../core/models/discount.dart';
 import '../../../core/models/cart.dart';
 import '../../../core/providers/auth_notifier.dart';
 import '../../../core/providers/cart_notifier.dart';
+import '../../../core/providers/discount_notifier.dart';
 import '../../../core/providers/order_history_notifier.dart';
 import '../../../core/providers/shift_notifier.dart';
 import '../../../core/services/connectivity_service.dart';
@@ -44,8 +45,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
 
   // Discount
   Discount? _selectedDiscount;
-  List<Discount> _discounts = [];
-  bool _discountsLoaded = false;
 
   // Cash tendered
   final _tenderedCtrl = TextEditingController();
@@ -63,7 +62,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   @override
   void initState() {
     super.initState();
-    _loadDiscounts();
     final cart = ref.read(cartProvider);
     _showTendered = cart.payment == 'cash' || cart.payment == 'talabat_cash';
   }
@@ -77,21 +75,6 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
       c.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _loadDiscounts() async {
-    final orgId = ref.read(authProvider).user?.orgId;
-    if (orgId == null) return;
-    try {
-      final list = await ref.read(discountApiProvider).list(orgId);
-      if (mounted)
-        setState(() {
-          _discounts = list;
-          _discountsLoaded = true;
-        });
-    } catch (_) {
-      if (mounted) setState(() => _discountsLoaded = true);
-    }
   }
 
   void _toggleSplitMethod(String method) {
@@ -300,6 +283,7 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
   @override
   Widget build(BuildContext context) {
     final cart = ref.watch(cartProvider);
+    final discountState = ref.watch(discountProvider);
     final mq = MediaQuery.of(context);
     final maxH = mq.size.height - mq.padding.top - 16;
 
@@ -382,11 +366,11 @@ class _CheckoutSheetState extends ConsumerState<CheckoutSheet> {
                   ),
                   const SizedBox(height: 20),
 
-                  if (_discountsLoaded && _discounts.isNotEmpty) ...[
+                  if (!discountState.isLoading && discountState.items.isNotEmpty) ...[
                     const FieldLabel('DISCOUNT (OPTIONAL)'),
                     const SizedBox(height: 8),
                     _DiscountPicker(
-                      discounts: _discounts,
+                      discounts: discountState.items,
                       selected: _selectedDiscount,
                       onSelect: (d) {
                         setState(() => _selectedDiscount = d);

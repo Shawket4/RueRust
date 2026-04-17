@@ -40,6 +40,7 @@ pub struct MenuItem {
     pub created_at:    DateTime<Utc>,
     pub updated_at:    DateTime<Utc>,
     pub deleted_at:    Option<DateTime<Utc>>,
+    pub default_milk_addon_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -346,7 +347,16 @@ pub async fn list_menu_items(
         Some(cat_id) => sqlx::query_as::<_, MenuItem>(
             "SELECT id, org_id, category_id, name, description, image_url,
                     base_price, is_active, display_order,
-                    created_at, updated_at, deleted_at
+                    created_at, updated_at, deleted_at,
+                    (
+                        SELECT a.id::text
+                        FROM menu_item_recipes r
+                        JOIN addon_item_ingredients ai ON ai.org_ingredient_id = r.org_ingredient_id
+                        JOIN addon_items a ON a.id = ai.addon_item_id
+                        WHERE r.menu_item_id = menu_items.id
+                          AND a.type = 'milk_type'
+                        LIMIT 1
+                    ) AS default_milk_addon_id
              FROM menu_items
              WHERE org_id = $1 AND deleted_at IS NULL AND category_id = $2
              ORDER BY display_order ASC, name ASC",
@@ -359,7 +369,16 @@ pub async fn list_menu_items(
         None => sqlx::query_as::<_, MenuItem>(
             "SELECT id, org_id, category_id, name, description, image_url,
                     base_price, is_active, display_order,
-                    created_at, updated_at, deleted_at
+                    created_at, updated_at, deleted_at,
+                    (
+                        SELECT a.id::text
+                        FROM menu_item_recipes r
+                        JOIN addon_item_ingredients ai ON ai.org_ingredient_id = r.org_ingredient_id
+                        JOIN addon_items a ON a.id = ai.addon_item_id
+                        WHERE r.menu_item_id = menu_items.id
+                          AND a.type = 'milk_type'
+                        LIMIT 1
+                    ) AS default_milk_addon_id
              FROM menu_items
              WHERE org_id = $1 AND deleted_at IS NULL
              ORDER BY display_order ASC, name ASC",
@@ -415,7 +434,8 @@ pub async fn create_menu_item(
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, org_id, category_id, name, description, image_url,
                    base_price, is_active, display_order,
-                   created_at, updated_at, deleted_at",
+                   created_at, updated_at, deleted_at,
+                   NULL AS default_milk_addon_id",
     )
     .bind(body.org_id)
     .bind(body.category_id)
@@ -463,7 +483,16 @@ pub async fn update_menu_item(
          WHERE id = $1 AND deleted_at IS NULL
          RETURNING id, org_id, category_id, name, description, image_url,
                    base_price, is_active, display_order,
-                   created_at, updated_at, deleted_at",
+                   created_at, updated_at, deleted_at,
+                   (
+                       SELECT a.id::text
+                       FROM menu_item_recipes r
+                       JOIN addon_item_ingredients ai ON ai.org_ingredient_id = r.org_ingredient_id
+                       JOIN addon_items a ON a.id = ai.addon_item_id
+                       WHERE r.menu_item_id = menu_items.id
+                         AND a.type = 'milk_type'
+                       LIMIT 1
+                   ) AS default_milk_addon_id",
     )
     .bind(*id)
     .bind(body.category_id)
@@ -1237,7 +1266,16 @@ async fn fetch_menu_item(pool: &PgPool, id: Uuid) -> Result<MenuItem, AppError> 
     sqlx::query_as::<_, MenuItem>(
         "SELECT id, org_id, category_id, name, description, image_url,
                 base_price, is_active, display_order,
-                created_at, updated_at, deleted_at
+                created_at, updated_at, deleted_at,
+                (
+                    SELECT a.id::text
+                    FROM menu_item_recipes r
+                    JOIN addon_item_ingredients ai ON ai.org_ingredient_id = r.org_ingredient_id
+                    JOIN addon_items a ON a.id = ai.addon_item_id
+                    WHERE r.menu_item_id = menu_items.id
+                      AND a.type = 'milk_type'
+                    LIMIT 1
+                ) AS default_milk_addon_id
          FROM menu_items
          WHERE id = $1 AND deleted_at IS NULL",
     )

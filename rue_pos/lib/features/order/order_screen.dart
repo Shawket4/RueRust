@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/auth_notifier.dart';
 import '../../core/providers/menu_notifier.dart';
+import '../../core/providers/discount_notifier.dart';
 import '../../core/theme/app_theme.dart';
 import 'widgets/top_bar.dart';
 import 'widgets/category_rail.dart';
@@ -26,7 +27,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final orgId = ref.read(authProvider).user?.orgId;
-      if (orgId != null) ref.read(menuProvider.notifier).load(orgId);
+      if (orgId != null) {
+        ref.read(menuProvider.notifier).load(orgId);
+        ref.read(discountProvider.notifier).load(orgId);
+      }
     });
     _searchCtrl.addListener(
         () => setState(() => _query = _searchCtrl.text.trim().toLowerCase()));

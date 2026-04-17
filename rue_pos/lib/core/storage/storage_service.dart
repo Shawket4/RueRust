@@ -64,6 +64,17 @@ class StorageService {
     try { return DateTime.parse(raw); } catch (_) { return null; }
   }
 
+  // ── Discounts ──────────────────────────────────────────────────────────────
+  Future<void> saveDiscounts(String orgId, List<Map<String, dynamic>> discounts) =>
+      _prefs.setString('discounts_$orgId', jsonEncode(discounts));
+
+  List<Map<String, dynamic>> loadDiscounts(String orgId) {
+    final raw = _prefs.getString('discounts_$orgId');
+    if (raw == null) return [];
+    try { return (jsonDecode(raw) as List).cast<Map<String, dynamic>>(); }
+    catch (_) { return []; }
+  }
+
   // ── Orders ─────────────────────────────────────────────────────────────────
   Future<void> saveOrders(String shiftId, List<Map<String, dynamic>> orders) =>
       _prefs.setString('orders_$shiftId', jsonEncode(orders));

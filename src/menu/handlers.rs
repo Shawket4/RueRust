@@ -65,6 +65,9 @@ pub struct AddonItem {
     pub created_at:    DateTime<Utc>,
     pub updated_at:    DateTime<Utc>,
     pub primary_ingredient_id: Option<Uuid>,
+    #[serde(default)]
+    #[sqlx(skip)]
+    pub ingredients:   Vec<AddonItemIngredient>,
 }
 
 // ── Addon Slot models ─────────────────────────────────────────
@@ -103,6 +106,24 @@ pub struct AddonOverride {
     pub updated_at:                 DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct MenuItemRecipe {
+    pub org_ingredient_id: Option<Uuid>,
+    pub quantity_used:     sqlx::types::BigDecimal,
+    pub ingredient_name:   String,
+    pub ingredient_unit:   String,
+    pub category:          String,
+    pub size_label:        String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct AddonItemIngredient {
+    pub org_ingredient_id: Option<Uuid>,
+    pub quantity_used:     sqlx::types::BigDecimal,
+    pub ingredient_name:   String,
+    pub ingredient_unit:   String,
+}
+
 // ── MenuItemFull — slots embedded instead of option_groups ────
 
 #[derive(Debug, Serialize)]
@@ -112,6 +133,7 @@ pub struct MenuItemFull {
     pub sizes:           Vec<ItemSize>,
     pub addon_slots:     Vec<AddonSlot>,
     pub optional_fields: Vec<OptionalField>,
+    pub recipes:         Vec<MenuItemRecipe>,
 }
 
 // ── Request types ─────────────────────────────────────────────
@@ -396,7 +418,8 @@ pub async fn list_menu_items(
             let sizes = fetch_sizes(pool.get_ref(), item.id).await?;
             let addon_slots = fetch_addon_slots(pool.get_ref(), item.id).await?;
             let optional_fields = fetch_optional_fields(pool.get_ref(), item.id).await?;
-            result.push(MenuItemFull { item, sizes, addon_slots, optional_fields });
+            let recipes = fetch_item_recipes(pool.get_ref(), item.id).await?;
+            result.push(MenuItemFull { item, sizes, addon_slots, optional_fields, recipes });
         }
         return Ok(HttpResponse::Ok().json(result));
     }
@@ -418,8 +441,9 @@ pub async fn get_menu_item(
     let sizes       = fetch_sizes(pool.get_ref(), *id).await?;
     let addon_slots = fetch_addon_slots(pool.get_ref(), *id).await?;
     let optional_fields = fetch_optional_fields(pool.get_ref(), *id).await?;
+    let recipes = fetch_item_recipes(pool.get_ref(), *id).await?;
 
-    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, addon_slots, optional_fields }))
+    Ok(HttpResponse::Ok().json(MenuItemFull { item, sizes, addon_slots, optional_fields, recipes }))
 }
 
 pub async fn create_menu_item(
@@ -460,6 +484,7 @@ pub async fn create_menu_item(
         sizes:           vec![],
         addon_slots:     vec![],
         optional_fields: vec![],
+        recipes:         vec![],
     }))
 }
 
@@ -599,7 +624,7 @@ pub async fn list_addon_items(
     check_permission(pool.get_ref(), &claims, "menu_items", "read").await?;
     require_same_org(&claims, Some(query.org_id))?;
 
-    let rows = match &query.addon_type {
+    let mut rows = match &query.addon_type {
         Some(t) => sqlx::query_as::<_, AddonItem>(
             "SELECT a.id, a.org_id, a.name, a.type as addon_type, a.default_price,
                     a.is_active, a.display_order, a.created_at, a.updated_at,
@@ -626,6 +651,10 @@ pub async fn list_addon_items(
         .await?,
     };
 
+    for addon in &mut rows {
+        addon.ingredients = fetch_addon_ingredients(pool.get_ref(), addon.id).await?;
+    }
+
     Ok(HttpResponse::Ok().json(rows))
 }
 
@@ -638,11 +667,12 @@ pub async fn create_addon_item(
     check_permission(pool.get_ref(), &claims, "menu_items", "create").await?;
     require_same_org(&claims, Some(body.org_id))?;
 
-    let row = sqlx::query_as::<_, AddonItem>(
+    let mut row = sqlx::query_as::<_, AddonItem>(
         "INSERT INTO addon_items (org_id, name, type, default_price, display_order)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING id, org_id, name, type as addon_type, default_price,
-                   is_active, display_order, created_at, updated_at",
+                   is_active, display_order, created_at, updated_at,
+                   NULL::uuid as primary_ingredient_id",
     )
     .bind(body.org_id)
     .bind(&body.name)
@@ -651,6 +681,8 @@ pub async fn create_addon_item(
     .bind(body.display_order.unwrap_or(0))
     .fetch_one(pool.get_ref())
     .await?;
+
+    row.ingredients = vec![];
 
     Ok(HttpResponse::Created().json(row))
 }
@@ -667,7 +699,7 @@ pub async fn update_addon_item(
     let existing = fetch_addon_item(pool.get_ref(), *id).await?;
     require_same_org(&claims, Some(existing.org_id))?;
 
-    let row = sqlx::query_as::<_, AddonItem>(
+    let mut row = sqlx::query_as::<_, AddonItem>(
         "UPDATE addon_items SET
              name          = COALESCE($2, name),
              type          = COALESCE($3, type),
@@ -676,7 +708,8 @@ pub async fn update_addon_item(
              is_active     = COALESCE($6, is_active)
          WHERE id = $1
          RETURNING id, org_id, name, type as addon_type, default_price,
-                   is_active, display_order, created_at, updated_at",
+                   is_active, display_order, created_at, updated_at,
+                   (SELECT org_ingredient_id FROM addon_item_ingredients WHERE addon_item_id = addon_items.id LIMIT 1) as primary_ingredient_id",
     )
     .bind(*id)
     .bind(&body.name)
@@ -687,6 +720,8 @@ pub async fn update_addon_item(
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Addon item not found".into()))?;
+
+    row.ingredients = fetch_addon_ingredients(pool.get_ref(), *id).await?;
 
     Ok(HttpResponse::Ok().json(row))
 }
@@ -1344,6 +1379,38 @@ async fn fetch_optional_fields(
          ORDER BY display_order ASC, name ASC",
     )
     .bind(item_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn fetch_item_recipes(
+    pool:    &PgPool,
+    item_id: Uuid,
+) -> Result<Vec<MenuItemRecipe>, AppError> {
+    Ok(sqlx::query_as::<_, MenuItemRecipe>(
+        r#"SELECT r.org_ingredient_id, r.quantity_used,
+                  r.ingredient_name, r.ingredient_unit,
+                  COALESCE(i.category, 'general') as category,
+                  r.size_label::text
+           FROM   menu_item_recipes r
+           LEFT JOIN org_ingredients i ON i.id = r.org_ingredient_id
+           WHERE  r.menu_item_id = $1"#,
+    )
+    .bind(item_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn fetch_addon_ingredients(
+    pool:          &PgPool,
+    addon_item_id: Uuid,
+) -> Result<Vec<AddonItemIngredient>, AppError> {
+    Ok(sqlx::query_as::<_, AddonItemIngredient>(
+        "SELECT org_ingredient_id, quantity_used, ingredient_name, ingredient_unit
+         FROM   addon_item_ingredients
+         WHERE  addon_item_id = $1",
+    )
+    .bind(addon_item_id)
     .fetch_all(pool)
     .await?)
 }

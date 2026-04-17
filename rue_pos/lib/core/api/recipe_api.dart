@@ -30,11 +30,16 @@ class RecipeIngredient {
 
   bool get isBase => source == 'drink_recipe';
   bool get isAddon => source == 'addon';
-  bool get isOptional => source.startsWith('optional');
+  bool get isSwap => source.startsWith('addon_swap:');
+  bool get isOptional => source.startsWith('optional:');
 
   String get sourceLabel {
     if (isBase) return 'base';
     if (isAddon) return 'addon';
+    if (isSwap) {
+      final parts = source.split(':');
+      return parts.length > 1 ? parts[1] : 'swap';
+    }
     if (isOptional) {
       final parts = source.split(':');
       return parts.length > 1 ? parts[1] : 'optional';

@@ -32,13 +32,6 @@ class MenuApi {
         .map((a) => AddonItem.fromJson(a as Map<String, dynamic>))
         .toList();
   }
-
-  Future<List<OptionalField>> optionalFields(String menuItemId) async {
-    final res = await _c.dio.get('/menu-items/$menuItemId/optionals');
-    return (res.data as List)
-        .map((o) => OptionalField.fromJson(o as Map<String, dynamic>))
-        .toList();
-  }
 }
 
 final menuApiProvider =

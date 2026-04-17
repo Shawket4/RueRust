@@ -47,6 +47,36 @@ class ItemSize {
   };
 }
 
+// ── AddonItemIngredient ───────────────────────────────────────
+class AddonItemIngredient {
+  final String? orgIngredientId;
+  final double  quantityUsed;
+  final String  ingredientName;
+  final String  ingredientUnit;
+
+  const AddonItemIngredient({
+    this.orgIngredientId,
+    required this.quantityUsed,
+    required this.ingredientName,
+    required this.ingredientUnit,
+  });
+
+  factory AddonItemIngredient.fromJson(Map<String, dynamic> j) =>
+      AddonItemIngredient(
+        orgIngredientId: j['org_ingredient_id'] as String?,
+        quantityUsed:    (j['quantity_used']    as num).toDouble(),
+        ingredientName:  j['ingredient_name']   as String,
+        ingredientUnit:  j['ingredient_unit']   as String,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'org_ingredient_id': orgIngredientId,
+        'quantity_used': quantityUsed,
+        'ingredient_name': ingredientName,
+        'ingredient_unit': ingredientUnit,
+      };
+}
+
 // ── AddonItem ─────────────────────────────────────────────────
 class AddonItem {
   final String id;
@@ -56,6 +86,7 @@ class AddonItem {
   final bool   isActive;
   final int    displayOrder;
   final String? primaryIngredientId;
+  final List<AddonItemIngredient> ingredients;
 
   const AddonItem({
     required this.id,
@@ -65,6 +96,7 @@ class AddonItem {
     required this.isActive,
     required this.displayOrder,
     this.primaryIngredientId,
+    this.ingredients = const [],
   });
 
   factory AddonItem.fromJson(Map<String, dynamic> j) => AddonItem(
@@ -75,6 +107,9 @@ class AddonItem {
     isActive:             (j['is_active']     ?? true) as bool,
     displayOrder:         (j['display_order'] ?? 0)   as int,
     primaryIngredientId:  j['primary_ingredient_id']  as String?,
+    ingredients: (j['ingredients'] as List? ?? [])
+        .map((i) => AddonItemIngredient.fromJson(i as Map<String, dynamic>))
+        .toList(),
   );
 
   Map<String, dynamic> toJson() => {
@@ -82,6 +117,7 @@ class AddonItem {
     'default_price': defaultPrice, 'is_active': isActive,
     'display_order': displayOrder,
     'primary_ingredient_id': primaryIngredientId,
+    'ingredients': ingredients.map((i) => i.toJson()).toList(),
   };
 }
 
@@ -190,6 +226,43 @@ class OptionalField {
   };
 }
 
+// ── MenuItemRecipe ────────────────────────────────────────────
+class MenuItemRecipe {
+  final String? orgIngredientId;
+  final double  quantityUsed;
+  final String  ingredientName;
+  final String  ingredientUnit;
+  final String  category;
+  final String? sizeLabel;
+
+  const MenuItemRecipe({
+    this.orgIngredientId,
+    required this.quantityUsed,
+    required this.ingredientName,
+    required this.ingredientUnit,
+    required this.category,
+    this.sizeLabel,
+  });
+
+  factory MenuItemRecipe.fromJson(Map<String, dynamic> j) => MenuItemRecipe(
+        orgIngredientId: j['org_ingredient_id'] as String?,
+        quantityUsed:    (j['quantity_used']      as num).toDouble(),
+        ingredientName:  j['ingredient_name']     as String,
+        ingredientUnit:  j['ingredient_unit']     as String,
+        category:        j['category']            as String? ?? 'general',
+        sizeLabel:       j['size_label']          as String?,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'org_ingredient_id': orgIngredientId,
+        'quantity_used':     quantityUsed,
+        'ingredient_name':   ingredientName,
+        'ingredient_unit':   ingredientUnit,
+        'category':          category,
+        'size_label':        sizeLabel,
+      };
+}
+
 // ── MenuItem ──────────────────────────────────────────────────
 class MenuItem {
   final String          id;
@@ -204,6 +277,7 @@ class MenuItem {
   final List<ItemSize>  sizes;
   final List<AddonSlot> addonSlots;
   final List<OptionalField> optionalFields;
+  final List<MenuItemRecipe> recipes;
   final String?         defaultMilkAddonId;
 
   const MenuItem({
@@ -219,6 +293,7 @@ class MenuItem {
     this.sizes          = const [],
     this.addonSlots     = const [],
     this.optionalFields = const [],
+    this.recipes        = const [],
     this.defaultMilkAddonId,
   });
 
@@ -251,6 +326,9 @@ class MenuItem {
     optionalFields: (j['optional_fields'] as List? ?? [])
         .map((o) => OptionalField.fromJson(o as Map<String, dynamic>))
         .toList(),
+    recipes: (j['recipes'] as List? ?? [])
+        .map((r) => MenuItemRecipe.fromJson(r as Map<String, dynamic>))
+        .toList(),
     defaultMilkAddonId: j['default_milk_addon_id'] as String?,
   );
 
@@ -262,6 +340,7 @@ class MenuItem {
     'sizes':         sizes.map((s) => s.toJson()).toList(),
     'addon_slots':   addonSlots.map((s) => s.toJson()).toList(),
     'optional_fields': optionalFields.map((o) => o.toJson()).toList(),
+    'recipes':         recipes.map((r) => r.toJson()).toList(),
     'default_milk_addon_id': defaultMilkAddonId,
   };
 }

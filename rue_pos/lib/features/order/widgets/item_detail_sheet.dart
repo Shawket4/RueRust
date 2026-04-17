@@ -10,6 +10,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatting.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../helpers/payment_helpers.dart';
+import '../helpers/recipe_engine.dart';
 import 'addon_card.dart';
 import 'optional_fields_card.dart';
 import 'recipe_sheet.dart';
@@ -287,12 +288,16 @@ class _ItemDetailSheetState extends ConsumerState<ItemDetailSheet> {
       builder: (_) => RecipeSheet(
         itemName: normaliseName(widget.item.name),
         sizeLabel: _selectedSize,
-        fetchRecipe: () => ref.read(recipeApiProvider).preview(
-              menuItemId: widget.item.id,
-              sizeLabel: _selectedSize,
-              addons: _buildSelectedAddons(),
-              optionals: _buildSelectedOptionals(),
-            ),
+        fetchRecipe: () async {
+          final allAddons = ref.read(menuProvider).allAddons;
+          return previewRecipeLocally(
+            menuItem: widget.item,
+            sizeLabel: _selectedSize,
+            addons: _buildSelectedAddons(),
+            selectedOptionals: _buildSelectedOptionals(),
+            allAddons: allAddons,
+          );
+        },
       ),
     );
   }

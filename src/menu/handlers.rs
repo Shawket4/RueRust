@@ -1,6 +1,6 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use sqlx::PgPool;
 use uuid::Uuid;
 use actix_web::HttpMessage;
@@ -168,6 +168,7 @@ pub struct CreateCategoryRequest {
 #[derive(Deserialize)]
 pub struct UpdateCategoryRequest {
     pub name:          Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
     pub image_url:     Option<Option<String>>,
     pub display_order: Option<i32>,
     pub is_active:     Option<bool>,
@@ -189,6 +190,7 @@ pub struct UpdateMenuItemRequest {
     pub category_id:   Option<Uuid>,
     pub name:          Option<String>,
     pub description:   Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
     pub image_url:     Option<Option<String>>,
     pub base_price:    Option<i32>,
     pub display_order: Option<i32>,
@@ -1444,4 +1446,12 @@ async fn fetch_addon_ingredients(
     .bind(addon_item_id)
     .fetch_all(pool)
     .await?)
+}
+
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::deserialize(deserializer).map(Some)
 }

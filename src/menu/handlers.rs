@@ -1327,7 +1327,11 @@ async fn fetch_menu_item(pool: &PgPool, id: Uuid) -> Result<MenuItem, AppError> 
 async fn fetch_addon_item(pool: &PgPool, id: Uuid) -> Result<AddonItem, AppError> {
     sqlx::query_as::<_, AddonItem>(
         "SELECT id, org_id, name, type as addon_type, default_price,
-                is_active, display_order, created_at, updated_at
+                is_active, display_order, created_at, updated_at,
+                (SELECT org_ingredient_id
+                   FROM addon_item_ingredients
+                  WHERE addon_item_id = addon_items.id
+                  LIMIT 1) AS primary_ingredient_id
          FROM addon_items
          WHERE id = $1",
     )

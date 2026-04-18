@@ -135,7 +135,7 @@ fn compress_to_jpeg(raw: &[u8]) -> Result<Vec<u8>, AppError> {
     Err(AppError::Internal)
 }
 
-async fn delete_old_image(old_url: &str, base_url: &str, uploads_dir: &str) {
+pub async fn delete_old_image(old_url: &str, base_url: &str, uploads_dir: &str) {
     let prefix = format!("{}/uploads/", base_url.trim_end_matches('/'));
     if let Some(rel) = old_url.strip_prefix(&prefix) {
         let full = Path::new(uploads_dir).join(rel);

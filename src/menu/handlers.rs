@@ -9,6 +9,7 @@ use crate::{
     auth::{guards::require_same_org, jwt::Claims},
     errors::AppError,
     permissions::checker::check_permission,
+    uploads::handlers::delete_old_image,
 };
 
 // ── Models ────────────────────────────────────────────────────
@@ -167,7 +168,7 @@ pub struct CreateCategoryRequest {
 #[derive(Deserialize)]
 pub struct UpdateCategoryRequest {
     pub name:          Option<String>,
-    pub image_url:     Option<String>,
+    pub image_url:     Option<Option<String>>,
     pub display_order: Option<i32>,
     pub is_active:     Option<bool>,
 }
@@ -188,7 +189,7 @@ pub struct UpdateMenuItemRequest {
     pub category_id:   Option<Uuid>,
     pub name:          Option<String>,
     pub description:   Option<String>,
-    pub image_url:     Option<String>,
+    pub image_url:     Option<Option<String>>,
     pub base_price:    Option<i32>,
     pub display_order: Option<i32>,
     pub is_active:     Option<bool>,
@@ -312,10 +313,13 @@ pub async fn update_category(
     let existing = fetch_category(pool.get_ref(), *id).await?;
     require_same_org(&claims, Some(existing.org_id))?;
 
+    let image_url_is_present = body.image_url.is_some();
+    let image_url_val = body.image_url.as_ref().and_then(|o| o.clone());
+
     let row = sqlx::query_as::<_, Category>(
         "UPDATE categories SET
              name          = COALESCE($2, name),
-             image_url     = COALESCE($3, image_url),
+             image_url     = CASE WHEN $6 THEN $3 ELSE image_url END,
              display_order = COALESCE($4, display_order),
              is_active     = COALESCE($5, is_active)
          WHERE id = $1 AND deleted_at IS NULL
@@ -324,12 +328,22 @@ pub async fn update_category(
     )
     .bind(*id)
     .bind(&body.name)
-    .bind(&body.image_url)
+    .bind(image_url_val)
     .bind(body.display_order)
     .bind(body.is_active)
+    .bind(image_url_is_present)
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Category not found".into()))?;
+
+    // If explicit null, cleanup old image from storage
+    if body.image_url == Some(None) {
+        if let Some(old_url) = existing.image_url {
+            let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
+            let base_url    = std::env::var("UPLOADS_BASE_URL").unwrap_or_default();
+            delete_old_image(&old_url, &base_url, &uploads_dir).await;
+        }
+    }
 
     Ok(HttpResponse::Ok().json(row))
 }
@@ -500,12 +514,15 @@ pub async fn update_menu_item(
     let existing = fetch_menu_item(pool.get_ref(), *id).await?;
     require_same_org(&claims, Some(existing.org_id))?;
 
+    let image_url_is_present = body.image_url.is_some();
+    let image_url_val = body.image_url.as_ref().and_then(|o| o.clone());
+
     let item = sqlx::query_as::<_, MenuItem>(
         "UPDATE menu_items SET
              category_id   = COALESCE($2, category_id),
              name          = COALESCE($3, name),
              description   = COALESCE($4, description),
-             image_url     = COALESCE($5, image_url),
+             image_url     = CASE WHEN $9 THEN $5 ELSE image_url END,
              base_price    = COALESCE($6, base_price),
              display_order = COALESCE($7, display_order),
              is_active     = COALESCE($8, is_active)
@@ -527,13 +544,23 @@ pub async fn update_menu_item(
     .bind(body.category_id)
     .bind(&body.name)
     .bind(&body.description)
-    .bind(&body.image_url)
+    .bind(image_url_val)
     .bind(body.base_price)
     .bind(body.display_order)
     .bind(body.is_active)
+    .bind(image_url_is_present)
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Menu item not found".into()))?;
+
+    // If explicit null, cleanup old image from storage
+    if body.image_url == Some(None) {
+        if let Some(old_url) = existing.image_url {
+            let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
+            let base_url    = std::env::var("UPLOADS_BASE_URL").unwrap_or_default();
+            delete_old_image(&old_url, &base_url, &uploads_dir).await;
+        }
+    }
 
     Ok(HttpResponse::Ok().json(item))
 }

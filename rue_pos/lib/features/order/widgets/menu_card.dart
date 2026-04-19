@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/menu.dart';
+import '../../../core/services/menu_image_cache.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/formatting.dart';
 import '../helpers/category_style.dart';
@@ -71,27 +72,15 @@ class _MenuCardState extends ConsumerState<MenuCard>
             borderRadius: BorderRadius.circular(AppRadius.md),
             child: Column(children: [
               Expanded(
-                  child: Stack(children: [
-                Positioned.fill(
-                    child: hasImage
-                        ? Image.network(item.imageUrl!,
-                            fit: BoxFit.cover,
-                            loadingBuilder: (_, child, prog) =>
-                                prog == null ? child : ImageSkeleton(),
-                            errorBuilder: (_, __, ___) =>
-                                CardBg(style: style))
-                        : CardBg(style: style)),
-                if (!hasImage)
-                  Center(
-                      child: Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                        color: style.iconColor.withOpacity(0.11),
-                        shape: BoxShape.circle),
-                    child: Icon(style.icon, size: 26, color: style.iconColor),
-                  )),
-              ])),
+                child: hasImage
+                    ? MenuImage(
+                        url: item.imageUrl!,
+                        fit: BoxFit.cover,
+                        placeholder: ImageSkeleton(),
+                        errorWidget: MissingItemCard(item: item, style: style),
+                      )
+                    : MissingItemCard(item: item, style: style),
+              ),
               Container(
                 color: Colors.white,
                 padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
@@ -130,18 +119,103 @@ class _MenuCardState extends ConsumerState<MenuCard>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  CARD BACKGROUND (gradient placeholder)
+//  MISSING-IMAGE PLACEHOLDER
+//
+//  Designed to sit next to real product photography without clashing:
+//  neutral cream background matching the real photos' backdrops, a
+//  large thin monogram as the hero, plus a small category pill in the
+//  top-left so category is still readable at a glance.
 // ─────────────────────────────────────────────────────────────────────────────
-class CardBg extends StatelessWidget {
+class MissingItemCard extends StatelessWidget {
+  final MenuItem item;
   final CatStyle style;
-  const CardBg({super.key, required this.style});
+  const MissingItemCard({
+    super.key,
+    required this.item,
+    required this.style,
+  });
+
+  String get _monogram {
+    final cleaned = normaliseName(item.name).trim();
+    if (cleaned.isEmpty) return '?';
+    final words =
+        cleaned.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.length >= 2) {
+      return (words[0][0] + words[1][0]).toUpperCase();
+    }
+    final w = words.first;
+    return w.substring(0, w.length.clamp(1, 2)).toUpperCase();
+  }
+
   @override
-  Widget build(BuildContext context) => Container(
-      decoration: BoxDecoration(
-          gradient: LinearGradient(
-              colors: [style.bgTop, style.bgBottom],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight)));
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFFFBFAF7), Color(0xFFEEEBE6)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Decorative outline circle, hinting at the product shape without
+          // committing to one. Uses the category accent very softly so
+          // coffee cards have a warm ring, matcha cards a green ring, etc.
+          Positioned(
+            right: -36,
+            bottom: -36,
+            child: Container(
+              width: 140,
+              height: 140,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: style.accent.withOpacity(0.14),
+                  width: 3,
+                ),
+              ),
+            ),
+          ),
+
+          // Monogram (item initials). Thin weight + generous size reads as
+          // elegant typography rather than a UI placeholder badge.
+          Center(
+            child: Text(
+              _monogram,
+              style: cairo(
+                fontSize: 52,
+                fontWeight: FontWeight.w200,
+                color: style.accent.withOpacity(0.55),
+                letterSpacing: 1.5,
+                height: 1,
+              ),
+            ),
+          ),
+
+          // Tiny category indicator, top-left. Subtle enough to disappear
+          // behind the monogram visually but still gives an at-a-glance hint.
+          Positioned(
+            top: 10,
+            left: 10,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withOpacity(0.75),
+              ),
+              child: Icon(
+                style.icon,
+                size: 12,
+                color: style.accent.withOpacity(0.7),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

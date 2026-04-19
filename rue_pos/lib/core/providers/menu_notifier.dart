@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/menu.dart';
 import '../repositories/menu_repository.dart';
+import '../services/menu_image_cache.dart';
 import '../storage/storage_service.dart';
 
 class MenuState {
@@ -103,6 +105,34 @@ class MenuNotifier extends Notifier<MenuState> {
             ? menuResult.categories.first.id
             : null,
       );
+
+      // Image cache handling (only on successful FRESH fetches — offline
+      // fallbacks leave the existing disk cache alone so the order screen
+      // keeps working without network).
+      if (!menuResult.fromCache) {
+        final imageCache = ref.read(menuImageCacheProvider);
+
+        // On forced refresh (user-initiated sync) wipe the disk cache so
+        // fresh images are fetched from the server. On a first-time /
+        // background fresh load we keep the disk cache — warmUp just
+        // fills in anything missing.
+        if (force) {
+          await imageCache.invalidate();
+        }
+
+        final urls = <String>{
+          for (final i in menuResult.items)
+            if (i.imageUrl != null && i.imageUrl!.isNotEmpty) i.imageUrl!,
+          for (final c in menuResult.categories)
+            if (c.imageUrl != null && c.imageUrl!.isNotEmpty) c.imageUrl!,
+        };
+        if (urls.isNotEmpty) {
+          // Fire-and-forget so the UI isn't blocked on image downloads.
+          // MenuImage widgets render skeletons until each image lands on
+          // disk, then fade in.
+          unawaited(imageCache.warmUp(urls));
+        }
+      }
     } catch (_) {
       state = state.copyWith(
         isLoading: false,

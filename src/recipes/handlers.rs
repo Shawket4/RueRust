@@ -39,6 +39,7 @@ pub struct UpsertDrinkRecipeRequest {
     pub size_label:        String,
     pub org_ingredient_id: Option<Uuid>,
     pub ingredient_name:   String,
+    #[serde(alias = "unit")]
     pub ingredient_unit:   String,
     pub quantity_used:     f64,
 }
@@ -47,6 +48,7 @@ pub struct UpsertDrinkRecipeRequest {
 pub struct UpsertAddonIngredientRequest {
     pub org_ingredient_id: Option<Uuid>,
     pub ingredient_name:   String,
+    #[serde(alias = "unit")]
     pub ingredient_unit:   String,
     pub quantity_used:     f64,
 }

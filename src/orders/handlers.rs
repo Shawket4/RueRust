@@ -170,12 +170,22 @@ pub struct ListOrdersQuery {
 }
 
 #[derive(Serialize)]
+pub struct OrderSummary {
+    pub revenue:   i64,
+    pub completed: i64,
+    pub voided:    i64,
+    pub discounts: i64,
+    pub tips:      i64,
+}
+
+#[derive(Serialize)]
 pub struct PaginatedOrders {
     pub data:        Vec<Order>,
     pub total:       i64,
     pub page:        i64,
     pub per_page:    i64,
     pub total_pages: i64,
+    pub summary:     OrderSummary,   // ← add this
 }
 
 // ── Deduction helper ──────────────────────────────────────────
@@ -868,6 +878,25 @@ pub async fn list_orders(
         .fetch_one(pool.get_ref())
         .await?;
 
+    let summary_sql = format!(
+        "SELECT
+            COALESCE(SUM(CASE WHEN o.status::text = 'completed' THEN o.total_amount ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN o.status::text = 'completed' THEN 1              ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN o.status::text = 'voided'    THEN 1              ELSE 0 END), 0),
+            COALESCE(SUM(o.discount_amount), 0),
+            COALESCE(SUM(COALESCE(o.tip_amount, 0)), 0)
+         FROM orders o JOIN users u ON u.id = o.teller_id
+         WHERE {} {}",
+        scope_condition, count_filter
+    );
+
+    let (revenue, completed, voided, discounts, tips): (i64, i64, i64, i64, i64) =
+        bind_filters!(sqlx::query_as(&summary_sql).bind(scope_id))
+            .fetch_one(pool.get_ref())
+            .await?;
+
+    let summary = OrderSummary { revenue, completed, voided, discounts, tips };
+
     let data: Vec<Order> = bind_filters!(
         sqlx::query_as::<_, Order>(&data_sql)
             .bind(scope_id)
@@ -879,7 +908,7 @@ pub async fn list_orders(
 
     let total_pages = (total as f64 / per_page as f64).ceil() as i64;
 
-    Ok(HttpResponse::Ok().json(PaginatedOrders { data, total, page, per_page, total_pages }))
+    Ok(HttpResponse::Ok().json(PaginatedOrders { data, total, page, per_page, total_pages, summary }))
 }
 
 // ── GET /orders/:id ───────────────────────────────────────────

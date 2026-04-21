@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    auth::{guards::require_super_admin, jwt::Claims},
+    auth::{guards::{require_super_admin, require_same_org}, jwt::Claims},
     errors::AppError,
     uploads::handlers::delete_old_image,  // reuse your existing helper
 };
@@ -183,7 +183,7 @@ pub async fn get_org(
     org_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
-    require_super_admin(&claims)?;
+    require_same_org(&claims, Some(*org_id))?;
 
     let org = fetch_org(pool.get_ref(), *org_id).await?;
     Ok(HttpResponse::Ok().json(org))

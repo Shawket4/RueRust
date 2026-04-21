@@ -91,7 +91,7 @@ pub async fn upload_menu_item_image(
     })?;
 
     let base      = base_url.trim_end_matches('/');
-    let image_url = format!("{}/uploads/{}/menu-items/{}", base, org_id, filename);
+    let image_url = format!("{}/{}/menu-items/{}", base, org_id, filename);
 
     // 2. Update DB — if this fails, clean up the newly written file
     if let Err(e) = sqlx::query("UPDATE menu_items SET image_url = $1 WHERE id = $2")
@@ -136,7 +136,7 @@ fn compress_to_jpeg(raw: &[u8]) -> Result<Vec<u8>, AppError> {
 }
 
 pub async fn delete_old_image(old_url: &str, base_url: &str, uploads_dir: &str) {
-    let prefix = format!("{}/uploads/", base_url.trim_end_matches('/'));
+    let prefix = format!("{}/", base_url.trim_end_matches('/'));
     if let Some(rel) = old_url.strip_prefix(&prefix) {
         let full = Path::new(uploads_dir).join(rel);
         if full.exists() {

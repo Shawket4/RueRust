@@ -1,4 +1,6 @@
+use actix_multipart::Multipart;
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
+use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -6,6 +8,7 @@ use uuid::Uuid;
 use crate::{
     auth::{guards::require_super_admin, jwt::Claims},
     errors::AppError,
+    uploads::handlers::delete_old_image,  // reuse your existing helper
 };
 
 // ── Models ────────────────────────────────────────────────────
@@ -15,7 +18,7 @@ pub struct Org {
     pub id:             Uuid,
     pub name:           String,
     pub slug:           String,
-    pub logo_url:       Option<String>,
+    pub logo_url:       Option<String>,       // already in DB, now populated
     pub currency_code:  String,
     pub tax_rate:       sqlx::types::BigDecimal,
     pub receipt_footer: Option<String>,
@@ -24,13 +27,15 @@ pub struct Org {
 
 // ── Request types ─────────────────────────────────────────────
 
-#[derive(Deserialize)]
-pub struct CreateOrgRequest {
-    pub name:           String,
-    pub slug:           String,
-    pub currency_code:  Option<String>,
-    pub tax_rate:       Option<f64>,
-    pub receipt_footer: Option<String>,
+// CreateOrgRequest is now consumed from multipart fields, not JSON.
+// We keep this struct for the non-file fields parsed out of the form.
+#[derive(Default)]
+struct CreateOrgFields {
+    name:           Option<String>,
+    slug:           Option<String>,
+    currency_code:  Option<String>,
+    tax_rate:       Option<f64>,
+    receipt_footer: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -41,45 +46,106 @@ pub struct UpdateOrgRequest {
     pub tax_rate:       Option<f64>,
     pub receipt_footer: Option<String>,
     pub is_active:      Option<bool>,
+    // `logo_url: null`  → clear logo
+    // field absent      → leave logo unchanged
+    #[serde(default, deserialize_with = "crate::menu::handlers::deserialize_double_option")]
+    pub logo_url:       Option<Option<String>>,
 }
 
-// ── POST /orgs  (super_admin only) ───────────────────────────
+// ── POST /orgs  (super_admin only, multipart/form-data) ──────
 
 pub async fn create_org(
-    req:  HttpRequest,
-    pool: web::Data<PgPool>,
-    body: web::Json<CreateOrgRequest>,
+    req:     HttpRequest,
+    pool:    web::Data<PgPool>,
+    mut mp:  Multipart,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     require_super_admin(&claims)?;
 
-    // Check slug uniqueness
+    let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
+    let base_url    = std::env::var("UPLOADS_BASE_URL").unwrap_or_default();
+
+    let mut fields    = CreateOrgFields::default();
+    let mut logo_url: Option<String> = None;
+
+    // ── Parse multipart ──────────────────────────────────────
+    while let Some(mut field) = mp.try_next().await.map_err(|e| {
+        AppError::BadRequest(format!("Multipart error: {e}"))
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+
+        match name.as_str() {
+            "logo" => {
+                // Collect bytes
+                let mut bytes = Vec::new();
+                while let Some(chunk) = field.try_next().await.map_err(|e| {
+                    AppError::BadRequest(format!("Upload read error: {e}"))
+                })? {
+                    bytes.extend_from_slice(chunk.as_ref());
+                }
+                if !bytes.is_empty() {
+                    let ct = field
+                        .content_type()
+                        .map(|m| m.to_string())
+                        .unwrap_or_default();
+                    let ext = match ct.as_str() {
+                        "image/png"  => "png",
+                        "image/webp" => "webp",
+                        _            => "jpg",
+                    };
+                    let filename  = format!("{}.{}", Uuid::new_v4(), ext);
+                    let file_path = format!("{}/logos/{}", uploads_dir, filename);
+                    std::fs::create_dir_all(format!("{}/logos", uploads_dir))
+                        .map_err(|_| AppError::Internal)?;
+                    std::fs::write(&file_path, &bytes)
+                        .map_err(|_| AppError::Internal)?;
+                    logo_url = Some(format!("{}/logos/{}", base_url.trim_end_matches('/'), filename));
+                }
+            }
+            "name"           => fields.name           = text_field(&mut field).await?,
+            "slug"           => fields.slug           = text_field(&mut field).await?,
+            "currency_code"  => fields.currency_code  = text_field(&mut field).await?,
+            "tax_rate"       => {
+                if let Some(s) = text_field(&mut field).await? {
+                    fields.tax_rate = s.parse::<f64>().ok();
+                }
+            }
+            "receipt_footer" => fields.receipt_footer = text_field(&mut field).await?,
+            _                => { drain_field(&mut field).await?; }
+        }
+    }
+
+    let name = fields.name.ok_or_else(|| AppError::BadRequest("name is required".into()))?;
+    let slug = fields.slug.ok_or_else(|| AppError::BadRequest("slug is required".into()))?;
+
+    // ── Slug uniqueness ──────────────────────────────────────
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM organizations WHERE slug = $1)"
     )
-    .bind(&body.slug)
+    .bind(&slug)
     .fetch_one(pool.get_ref())
     .await?;
 
     if exists {
-        return Err(AppError::Conflict(format!("Slug '{}' is already taken", body.slug)));
+        return Err(AppError::Conflict(format!("Slug '{}' is already taken", slug)));
     }
 
-    let currency = body.currency_code.as_deref().unwrap_or("EGP");
-    let tax_rate = body.tax_rate.unwrap_or(0.14);
+    let currency = fields.currency_code.as_deref().unwrap_or("EGP");
+    let tax_rate = fields.tax_rate.unwrap_or(0.14);
 
     let org = sqlx::query_as::<_, Org>(
         r#"
-        INSERT INTO organizations (name, slug, currency_code, tax_rate, receipt_footer)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO organizations (name, slug, logo_url, currency_code, tax_rate, receipt_footer)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active
         "#,
     )
-    .bind(&body.name)
-    .bind(&body.slug)
+    .bind(&name)
+    .bind(&slug)
+    .bind(&logo_url)
     .bind(currency)
     .bind(tax_rate)
-    .bind(&body.receipt_footer)
+    .bind(&fields.receipt_footer)
     .fetch_one(pool.get_ref())
     .await?;
 
@@ -112,29 +178,19 @@ pub async fn list_orgs(
 // ── GET /orgs/:id  (super_admin only) ────────────────────────
 
 pub async fn get_org(
-    req:     HttpRequest,
-    pool:    web::Data<PgPool>,
-    org_id:  web::Path<Uuid>,
+    req:    HttpRequest,
+    pool:   web::Data<PgPool>,
+    org_id: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req)?;
     require_super_admin(&claims)?;
 
-    let org = sqlx::query_as::<_, Org>(
-        r#"
-        SELECT id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active
-        FROM organizations
-        WHERE id = $1 AND deleted_at IS NULL
-        "#,
-    )
-    .bind(*org_id)
-    .fetch_optional(pool.get_ref())
-    .await?
-    .ok_or_else(|| AppError::NotFound("Org not found".into()))?;
-
+    let org = fetch_org(pool.get_ref(), *org_id).await?;
     Ok(HttpResponse::Ok().json(org))
 }
 
 // ── PATCH /orgs/:id  (super_admin only) ──────────────────────
+// Still JSON — logo swap uses a dedicated endpoint below.
 
 pub async fn update_org(
     req:    HttpRequest,
@@ -145,7 +201,8 @@ pub async fn update_org(
     let claims = extract_claims(&req)?;
     require_super_admin(&claims)?;
 
-    // If slug is provided, check uniqueness against OTHER orgs
+    let existing = fetch_org(pool.get_ref(), *org_id).await?;
+
     if let Some(slug) = &body.slug {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM organizations WHERE slug = $1 AND id != $2)"
@@ -160,6 +217,13 @@ pub async fn update_org(
         }
     }
 
+    // logo_url field handling — mirrors category/menu-item pattern:
+    //   absent          → leave unchanged  (logo_url_is_present = false)
+    //   null            → clear            (logo_url_val = None, present = true)
+    //   "https://..."   → won't be set via JSON; use PUT /orgs/:id/logo instead
+    let logo_url_is_present = body.logo_url.is_some();
+    let logo_url_val        = body.logo_url.as_ref().and_then(|o| o.clone());
+
     let org = sqlx::query_as::<_, Org>(
         r#"
         UPDATE organizations SET
@@ -169,6 +233,7 @@ pub async fn update_org(
             tax_rate       = COALESCE($5, tax_rate),
             receipt_footer = COALESCE($6, receipt_footer),
             is_active      = COALESCE($7, is_active),
+            logo_url       = CASE WHEN $9 THEN $8 ELSE logo_url END,
             updated_at     = NOW()
         WHERE id = $1 AND deleted_at IS NULL
         RETURNING id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active
@@ -181,9 +246,96 @@ pub async fn update_org(
     .bind(body.tax_rate)
     .bind(&body.receipt_footer)
     .bind(body.is_active)
+    .bind(&logo_url_val)
+    .bind(logo_url_is_present)
     .fetch_optional(pool.get_ref())
     .await?
     .ok_or_else(|| AppError::NotFound("Org not found".into()))?;
+
+    // Clear old logo from disk if explicitly nulled
+    if body.logo_url == Some(None) {
+        if let Some(old_url) = existing.logo_url {
+            let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
+            let base_url    = std::env::var("UPLOADS_BASE_URL").unwrap_or_default();
+            delete_old_image(&old_url, &base_url, &uploads_dir).await;
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(org))
+}
+
+// ── PUT /orgs/:id/logo  (super_admin only, multipart) ────────
+
+pub async fn upload_org_logo(
+    req:    HttpRequest,
+    pool:   web::Data<PgPool>,
+    org_id: web::Path<Uuid>,
+    mut mp: Multipart,
+) -> Result<HttpResponse, AppError> {
+    let claims = extract_claims(&req)?;
+    require_super_admin(&claims)?;
+
+    let existing    = fetch_org(pool.get_ref(), *org_id).await?;
+    let uploads_dir = std::env::var("UPLOADS_DIR").unwrap_or_else(|_| "./uploads".to_string());
+    let base_url    = std::env::var("UPLOADS_BASE_URL").unwrap_or_default();
+
+    let mut new_logo_url: Option<String> = None;
+
+    while let Some(mut field) = mp.try_next().await.map_err(|e| {
+        AppError::BadRequest(format!("Multipart error: {e}"))
+    })? {
+        if field.name().unwrap_or("") != "logo" {
+            drain_field(&mut field).await?;
+            continue;
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = field.try_next().await.map_err(|e| {
+            AppError::BadRequest(format!("Upload read error: {e}"))
+        })? {
+            bytes.extend_from_slice(chunk.as_ref());
+        }
+        if !bytes.is_empty() {
+            let ct  = field.content_type().map(|m| m.to_string()).unwrap_or_default();
+            let ext = match ct.as_str() {
+                "image/png"  => "png",
+                "image/webp" => "webp",
+                _            => "jpg",
+            };
+            let filename  = format!("{}.{}", Uuid::new_v4(), ext);
+            let dir       = format!("{}/logos", uploads_dir);
+            std::fs::create_dir_all(&dir)
+                .map_err(|_| AppError::Internal)?;
+            std::fs::write(format!("{}/{}", dir, filename), &bytes)
+                .map_err(|_| AppError::Internal)?;
+            new_logo_url = Some(format!(
+                "{}/logos/{}",
+                base_url.trim_end_matches('/'),
+                filename,
+            ));
+        }
+    }
+
+    let new_logo_url = new_logo_url
+        .ok_or_else(|| AppError::BadRequest("No logo file received in field 'logo'".into()))?;
+
+    let org = sqlx::query_as::<_, Org>(
+        r#"
+        UPDATE organizations
+        SET logo_url = $2, updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active
+        "#,
+    )
+    .bind(*org_id)
+    .bind(&new_logo_url)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Org not found".into()))?;
+
+    // Delete old logo from disk now that DB is updated
+    if let Some(old_url) = existing.logo_url {
+        delete_old_image(&old_url, &base_url, &uploads_dir).await;
+    }
 
     Ok(HttpResponse::Ok().json(org))
 }
@@ -198,7 +350,6 @@ pub async fn delete_org(
     let claims = extract_claims(&req)?;
     require_super_admin(&claims)?;
 
-    // Soft delete the organization
     let rows_affected = sqlx::query(
         "UPDATE organizations SET deleted_at = NOW(), is_active = false WHERE id = $1 AND deleted_at IS NULL"
     )
@@ -214,11 +365,42 @@ pub async fn delete_org(
     Ok(HttpResponse::NoContent().finish())
 }
 
-// ── Helper ────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────
 
 fn extract_claims(req: &HttpRequest) -> Result<Claims, AppError> {
     req.extensions()
         .get::<Claims>()
         .cloned()
         .ok_or_else(|| AppError::Unauthorized("Missing claims".into()))
+}
+
+async fn fetch_org(pool: &PgPool, id: Uuid) -> Result<Org, AppError> {
+    sqlx::query_as::<_, Org>(
+        "SELECT id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active
+         FROM organizations
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Org not found".into()))
+}
+
+/// Drain and discard a multipart field we don't care about.
+async fn drain_field(field: &mut actix_multipart::Field) -> Result<(), AppError> {
+    while field.try_next().await.map_err(|e| AppError::BadRequest(e.to_string()))?.is_some() {}
+    Ok(())
+}
+
+/// Read a text multipart field into an Option<String>.
+async fn text_field(field: &mut actix_multipart::Field) -> Result<Option<String>, AppError> {
+    let mut buf = Vec::new();
+    while let Some(chunk) = field.try_next().await.map_err(|e| AppError::BadRequest(e.to_string()))? {
+        buf.extend_from_slice(chunk.as_ref());
+    }
+    Ok(if buf.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8(buf).map_err(|_| AppError::BadRequest("Invalid UTF-8 in field".into()))?)
+    })
 }

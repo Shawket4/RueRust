@@ -1,4 +1,5 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -20,7 +21,8 @@ pub struct OrgIngredient {
     pub unit:          String,
     pub category:      String,
     pub description:   Option<String>,
-    pub cost_per_unit: i32,
+    #[serde(with = "rust_decimal::serde::float")]
+    pub cost_per_unit: Decimal,
     pub is_active:     bool,
     pub created_at:    chrono::DateTime<chrono::Utc>,
     pub updated_at:    chrono::DateTime<chrono::Utc>,
@@ -34,7 +36,8 @@ pub struct BranchInventoryItem {
     pub ingredient_name:   String,
     pub unit:              String,
     pub description:       Option<String>,
-    pub cost_per_unit:     i32,
+    #[serde(with = "rust_decimal::serde::float")]
+    pub cost_per_unit:     Decimal,
     pub current_stock:     sqlx::types::BigDecimal,
     pub reorder_threshold: sqlx::types::BigDecimal,
     pub below_reorder:     bool,
@@ -84,7 +87,8 @@ pub struct CreateCatalogItemRequest {
     pub unit:          String,
     pub category:      String,
     pub description:   Option<String>,
-    pub cost_per_unit: Option<i32>,
+    #[serde(with = "rust_decimal::serde::float_option")]
+    pub cost_per_unit: Option<Decimal>,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +97,8 @@ pub struct UpdateCatalogItemRequest {
     pub unit:          Option<String>,
     pub category:      Option<String>,
     pub description:   Option<String>,
-    pub cost_per_unit: Option<i32>,
+    #[serde(with = "rust_decimal::serde::float_option")]
+    pub cost_per_unit: Option<Decimal>,
     pub is_active:     Option<bool>,
 }
 
@@ -194,7 +199,7 @@ pub async fn create_catalog_item(
     .bind(&body.unit)
     .bind(&body.category)
     .bind(&body.description)
-    .bind(body.cost_per_unit.unwrap_or(0))
+    .bind(body.cost_per_unit.unwrap_or(Decimal::ZERO))
     .fetch_one(pool.get_ref())
     .await
     .map_err(|e| {

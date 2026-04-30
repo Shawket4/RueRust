@@ -591,12 +591,10 @@ pub async fn create_order(
 
     let mut tx = pool.get_ref().begin().await?;
 
-    sqlx::query!(
-        "SELECT pg_advisory_xact_lock(hashtext($1::text))",
-        body.shift_id.to_string()
-    )
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(body.shift_id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
     let order_number: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(order_number), 0) + 1 FROM orders WHERE shift_id = $1"
@@ -831,7 +829,9 @@ pub async fn list_orders(
 
     let mut data_filter  = String::new();
     let mut count_filter = String::new();
+    #[allow(unused_assignments)]
     let mut data_idx  = 4i32;
+    #[allow(unused_assignments)]
     let mut count_idx = 2i32;
 
     macro_rules! push_filter {

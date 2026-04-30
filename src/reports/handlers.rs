@@ -1,5 +1,6 @@
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse};
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -127,7 +128,8 @@ pub struct StockRow {
     pub unit:                String,
     pub current_stock:       f64,
     pub reorder_threshold:   f64,
-    pub cost_per_unit:       i32,
+    #[serde(with = "rust_decimal::serde::float")]
+    pub cost_per_unit:       Decimal,
     pub below_reorder:       bool,
 }
 

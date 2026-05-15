@@ -175,7 +175,7 @@ pub struct PublicItemSize {
     pub price_override: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PublicAddonSlot {
     pub id:             Uuid,
     pub addon_type:     String,
@@ -186,7 +186,7 @@ pub struct PublicAddonSlot {
     pub addon_items:    Vec<PublicAddonItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PublicAddonItem {
     pub id:            Uuid,
     pub name:          String,
@@ -1440,6 +1440,44 @@ pub async fn get_public_menu(
     .fetch_all(pool.get_ref())
     .await?;
 
+    // 7. Synthesize "Global" Addon Slots
+    // We group addon items by type and create a slot for each global type (milk_type, coffee_type, extra)
+    let global_types = ["milk_type", "coffee_type", "extra"];
+    let mut global_slots = Vec::new();
+    
+    for g_type in global_types {
+        let items_for_type: Vec<_> = addon_items_all.iter()
+            .filter(|a| a.addon_type == g_type)
+            .map(|a| PublicAddonItem {
+                id: a.id,
+                name: a.name.clone(),
+                default_price: a.default_price,
+            })
+            .collect();
+
+        if !items_for_type.is_empty() {
+            let (label, is_required, min_selections, max_selections) = match g_type {
+                "milk_type"   => (Some("Milk Type".to_string()),   true,  1, Some(1)),
+                "coffee_type" => (Some("Coffee Beans".to_string()), true,  1, Some(1)),
+                "extra"       => (Some("Add-ons".to_string()),      false, 0, None),
+                _ => (None, false, 0, None),
+            };
+
+            // Use a deterministic UUID for global slots to keep IDs stable
+            let slot_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, g_type.as_bytes());
+
+            global_slots.push(PublicAddonSlot {
+                id: slot_id,
+                addon_type: g_type.to_string(),
+                label,
+                is_required,
+                min_selections,
+                max_selections,
+                addon_items: items_for_type,
+            });
+        }
+    }
+
     // Organize into response
     let mut public_categories = Vec::new();
 
@@ -1455,7 +1493,8 @@ pub async fn get_public_menu(
                     price_override: s.price_override,
                 }).collect();
 
-            let item_slots: Vec<_> = slots.iter().filter(|s| s.menu_item_id == item.id)
+            // Item-specific slots (deprecated but kept for compatibility)
+            let mut item_slots: Vec<PublicAddonSlot> = slots.iter().filter(|s| s.menu_item_id == item.id)
                 .map(|s| {
                     let relevant_addons: Vec<_> = addon_items_all.iter()
                         .filter(|a| a.addon_type == s.addon_type)
@@ -1475,6 +1514,13 @@ pub async fn get_public_menu(
                         addon_items: relevant_addons,
                     }
                 }).collect();
+
+            // Add global slots that aren't already explicitly defined for this item
+            for gs in &global_slots {
+                if !item_slots.iter().any(|s| s.addon_type == gs.addon_type) {
+                    item_slots.push(gs.clone());
+                }
+            }
 
             public_items.push(PublicMenuItem {
                 id: item.id,

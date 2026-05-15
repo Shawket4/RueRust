@@ -137,6 +137,62 @@ pub struct MenuItemFull {
     pub recipes:         Vec<MenuItemRecipe>,
 }
 
+// ── Public Menu Models ────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PublicMenuResponse {
+    pub org_id:     Uuid,
+    pub org_name:   String,
+    pub logo_url:   Option<String>,
+    pub categories: Vec<PublicCategory>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicCategory {
+    pub id:            Uuid,
+    pub name:          String,
+    pub image_url:     Option<String>,
+    pub display_order: i32,
+    pub items:         Vec<PublicMenuItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicMenuItem {
+    pub id:            Uuid,
+    pub name:          String,
+    pub description:   Option<String>,
+    pub image_url:     Option<String>,
+    pub base_price:    i32,
+    pub display_order: i32,
+    pub sizes:         Vec<PublicItemSize>,
+    pub addon_slots:   Vec<PublicAddonSlot>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicItemSize {
+    pub id:             Uuid,
+    pub label:          String,
+    pub price_override: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicAddonSlot {
+    pub id:             Uuid,
+    pub addon_type:     String,
+    pub label:          Option<String>,
+    pub is_required:    bool,
+    pub min_selections: i32,
+    pub max_selections: Option<i32>,
+    pub addon_items:    Vec<PublicAddonItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublicAddonItem {
+    pub id:            Uuid,
+    pub name:          String,
+    pub default_price: i32,
+}
+
 // ── Request types ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -1306,6 +1362,147 @@ pub async fn delete_optional_field(
     .await?;
 
     Ok(HttpResponse::NoContent().finish())
+}
+
+// ── Public Menu ───────────────────────────────────────────────
+
+pub async fn get_public_menu(
+    pool:   web::Data<PgPool>,
+    org_id: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let org_id = org_id.into_inner();
+
+    // 1. Fetch Org Info
+    let org_info = sqlx::query_as::<_, crate::orgs::handlers::Org>(
+        "SELECT id, name, slug, logo_url, currency_code, tax_rate, receipt_footer, is_active 
+         FROM organizations 
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(org_id)
+    .fetch_optional(pool.get_ref())
+    .await?
+    .ok_or_else(|| AppError::NotFound("Organization not found".into()))?;
+
+    // 2. Fetch Categories
+    let categories = sqlx::query_as::<_, Category>(
+        "SELECT id, org_id, name, image_url, display_order, is_active, created_at, updated_at, deleted_at 
+         FROM categories 
+         WHERE org_id = $1 AND deleted_at IS NULL AND is_active = true 
+         ORDER BY display_order ASC",
+    )
+    .bind(org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    // 3. Fetch Items
+    let items = sqlx::query_as::<_, MenuItem>(
+        "SELECT id, org_id, category_id, name, description, image_url, base_price, is_active, display_order, 
+                created_at, updated_at, deleted_at, 
+                NULL as default_milk_addon_id 
+         FROM menu_items 
+         WHERE org_id = $1 AND deleted_at IS NULL AND is_active = true 
+         ORDER BY display_order ASC",
+    )
+    .bind(org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    // 4. Fetch Sizes
+    let sizes = sqlx::query_as::<_, ItemSize>(
+        "SELECT s.id, s.menu_item_id, s.label::text, s.price_override, s.display_order, s.is_active 
+         FROM item_sizes s 
+         JOIN menu_items i ON s.menu_item_id = i.id 
+         WHERE i.org_id = $1 AND s.is_active = true",
+    )
+    .bind(org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    // 5. Fetch Addon Slots
+    let slots = sqlx::query_as::<_, AddonSlot>(
+        "SELECT s.id, s.menu_item_id, s.addon_type, s.label, s.is_required, s.min_selections, s.max_selections, s.display_order, s.created_at 
+         FROM menu_item_addon_slots s 
+         JOIN menu_items i ON s.menu_item_id = i.id 
+         WHERE i.org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    // 6. Fetch Addon Items
+    let addon_items_all = sqlx::query_as::<_, AddonItem>(
+        "SELECT id, org_id, name, type as addon_type, default_price, is_active, display_order, created_at, updated_at, 
+                NULL::uuid as primary_ingredient_id 
+         FROM addon_items 
+         WHERE org_id = $1 AND is_active = true",
+    )
+    .bind(org_id)
+    .fetch_all(pool.get_ref())
+    .await?;
+
+    // Organize into response
+    let mut public_categories = Vec::new();
+
+    for cat in categories {
+        let mut public_items = Vec::new();
+        let cat_items: Vec<_> = items.iter().filter(|i| i.category_id == Some(cat.id)).collect();
+
+        for item in cat_items {
+            let item_sizes: Vec<_> = sizes.iter().filter(|s| s.menu_item_id == item.id)
+                .map(|s| PublicItemSize {
+                    id: s.id,
+                    label: s.label.clone(),
+                    price_override: s.price_override,
+                }).collect();
+
+            let item_slots: Vec<_> = slots.iter().filter(|s| s.menu_item_id == item.id)
+                .map(|s| {
+                    let relevant_addons: Vec<_> = addon_items_all.iter()
+                        .filter(|a| a.addon_type == s.addon_type)
+                        .map(|a| PublicAddonItem {
+                            id: a.id,
+                            name: a.name.clone(),
+                            default_price: a.default_price,
+                        }).collect();
+
+                    PublicAddonSlot {
+                        id: s.id,
+                        addon_type: s.addon_type.clone(),
+                        label: s.label.clone(),
+                        is_required: s.is_required,
+                        min_selections: s.min_selections,
+                        max_selections: s.max_selections,
+                        addon_items: relevant_addons,
+                    }
+                }).collect();
+
+            public_items.push(PublicMenuItem {
+                id: item.id,
+                name: item.name.clone(),
+                description: item.description.clone(),
+                image_url: item.image_url.clone(),
+                base_price: item.base_price,
+                display_order: item.display_order,
+                sizes: item_sizes,
+                addon_slots: item_slots,
+            });
+        }
+
+        public_categories.push(PublicCategory {
+            id: cat.id,
+            name: cat.name,
+            image_url: cat.image_url,
+            display_order: cat.display_order,
+            items: public_items,
+        });
+    }
+
+    Ok(HttpResponse::Ok().json(PublicMenuResponse {
+        org_id,
+        org_name: org_info.name,
+        logo_url: org_info.logo_url,
+        categories: public_categories,
+    }))
 }
 
 // ── Helpers ───────────────────────────────────────────────────

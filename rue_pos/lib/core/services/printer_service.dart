@@ -23,9 +23,16 @@ class PrinterService {
     required PrinterBrand brand,
     required Order        order,
     required String       branchName,
+    bool                  kickDrawer = false,
   }) async {
     final pdfBytes = await _buildReceiptPdf(order: order, branchName: branchName);
-    return _send(ip: ip, port: port, brand: brand, pdfBytes: pdfBytes);
+    return _send(
+      ip: ip,
+      port: port,
+      brand: brand,
+      pdfBytes: pdfBytes,
+      kickDrawer: kickDrawer,
+    );
   }
 
   static Future<String?> printShiftReport({
@@ -46,18 +53,42 @@ class PrinterService {
     required int          port,
     required PrinterBrand brand,
     required Uint8List    pdfBytes,
+    bool                  kickDrawer = false,
   }) {
     final cleanIp = ip.split('/').first;
     return switch (brand) {
-      PrinterBrand.star  => _printStar(ip: cleanIp, pdfBytes: pdfBytes),
-      PrinterBrand.epson => _printEpson(ip: cleanIp, port: port, pdfBytes: pdfBytes),
+      PrinterBrand.star  => _printStar(
+          ip: cleanIp,
+          pdfBytes: pdfBytes,
+          kickDrawer: kickDrawer,
+        ),
+      PrinterBrand.epson => _printEpson(
+          ip: cleanIp,
+          port: port,
+          pdfBytes: pdfBytes,
+          kickDrawer: kickDrawer,
+        ),
     };
   }
 
   static Future<String?> _printStar({
     required String    ip,
     required Uint8List pdfBytes,
+    bool               kickDrawer = false,
   }) async {
+    // 1. Kick drawer if requested (Star BEL command: 0x07)
+    if (kickDrawer) {
+      try {
+        final s = await Socket.connect(ip, 9100, timeout: _timeout);
+        s.add(Uint8List.fromList([0x07]));
+        await s.flush();
+        await s.close();
+      } catch (_) {
+        // We don't fail the whole print job if the drawer kick fails
+      }
+    }
+
+    // 2. Print PDF
     try {
       final device    = StarDevice(ip, StarInterfaceType.lan);
       final connected = await StarXpand.instance.connect(device, monitor: false);
@@ -75,14 +106,22 @@ class PrinterService {
     required String    ip,
     required int       port,
     required Uint8List pdfBytes,
+    bool               kickDrawer = false,
   }) async {
     Socket? socket;
     try {
       final page     = await Printing.raster(pdfBytes, dpi: 203).first;
       final png      = await page.toPng();
       final imgBytes = await _pngToEscPos(png, page.width, page.height);
+      
       socket = await Socket.connect(ip, port, timeout: _timeout);
       socket.setOption(SocketOption.tcpNoDelay, true);
+
+      // Kick drawer if requested (ESC/POS: ESC p m t1 t2)
+      if (kickDrawer) {
+        socket.add(Uint8List.fromList([0x1B, 0x70, 0x00, 0x19, 0xFA]));
+      }
+
       socket.add(imgBytes);
       await socket.flush().timeout(_timeout);
       return null;

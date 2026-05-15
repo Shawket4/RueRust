@@ -112,143 +112,145 @@ class _CashMovementSheetState extends ConsumerState<CashMovementSheet> {
         borderRadius: AppRadius.sheetRadius,
       ),
       padding: EdgeInsets.fromLTRB(24, 14, 24, mq.viewInsets.bottom + 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Handle
-          Center(
-            child: Container(
-              width: 36, height: 4,
-              decoration: BoxDecoration(
-                color: AppColors.border,
-                borderRadius: BorderRadius.circular(2),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 18),
-
-          Text('Cash Movement',
-              style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          if (!isOnline)
-            Text('Offline — will be queued and applied when connected',
-                style: cairo(fontSize: 12, color: AppColors.warning)),
-          const SizedBox(height: 18),
-
-          // Direction toggle
-          Row(children: [
-            Expanded(child: _DirectionBtn(
-              label: 'Cash In',
-              icon: Icons.add_circle_outline_rounded,
-              selected: _isIn,
-              color: AppColors.success,
-              onTap: () => setState(() => _isIn = true),
-            )),
-            const SizedBox(width: 10),
-            Expanded(child: _DirectionBtn(
-              label: 'Cash Out',
-              icon: Icons.remove_circle_outline_rounded,
-              selected: !_isIn,
-              color: AppColors.danger,
-              onTap: () => setState(() => _isIn = false),
-            )),
-          ]),
-          const SizedBox(height: 18),
-
-          // Amount
-          Text('AMOUNT',
-              style: cairo(fontSize: 10, fontWeight: FontWeight.w700,
-                  color: AppColors.textMuted, letterSpacing: 1.2)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
-            ],
-            autofocus: true,
-            style: cairo(fontSize: 28, fontWeight: FontWeight.w800),
-            decoration: InputDecoration(
-              prefixText: 'EGP  ',
-              prefixStyle: cairo(fontSize: 18, color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w500),
-              hintText: '0',
-              hintStyle: cairo(fontSize: 28, fontWeight: FontWeight.w800,
-                  color: AppColors.border),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
+            const SizedBox(height: 18),
+  
+            Text('Cash Movement',
+                style: cairo(fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            if (!isOnline)
+              Text('Offline — will be queued and applied when connected',
+                  style: cairo(fontSize: 12, color: AppColors.warning)),
+            const SizedBox(height: 18),
+  
+            // Direction toggle
+            Row(children: [
+              Expanded(child: _DirectionBtn(
+                label: 'Cash In',
+                icon: Icons.add_circle_outline_rounded,
+                selected: _isIn,
+                color: AppColors.success,
+                onTap: () => setState(() => _isIn = true),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: _DirectionBtn(
+                label: 'Cash Out',
+                icon: Icons.remove_circle_outline_rounded,
+                selected: !_isIn,
+                color: AppColors.danger,
+                onTap: () => setState(() => _isIn = false),
+              )),
+            ]),
+            const SizedBox(height: 18),
+  
+            // Amount
+            Text('AMOUNT',
+                style: cairo(fontSize: 10, fontWeight: FontWeight.w700,
+                    color: AppColors.textMuted, letterSpacing: 1.2)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _amountCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
+              ],
+              autofocus: true,
+              style: cairo(fontSize: 28, fontWeight: FontWeight.w800),
+              decoration: InputDecoration(
+                prefixText: 'EGP  ',
+                prefixStyle: cairo(fontSize: 18, color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w500),
+                hintText: '0',
+                hintStyle: cairo(fontSize: 28, fontWeight: FontWeight.w800,
+                    color: AppColors.border),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+              ),
             ),
-          ),
-          const Divider(color: AppColors.borderLight),
-          const SizedBox(height: 12),
-
-          // Note
-          Text('NOTE',
-              style: cairo(fontSize: 10, fontWeight: FontWeight.w700,
-                  color: AppColors.textMuted, letterSpacing: 1.2)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _noteCtrl,
-            style: cairo(fontSize: 15),
-            decoration: InputDecoration(
-              hintText: 'e.g. Safe drop, float top-up…',
-              hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
-              prefixIcon: const Icon(Icons.notes_rounded,
-                  size: 16, color: AppColors.textMuted),
-            ),
-          ),
-
-          // Error
-          if (_error != null) ...[
+            const Divider(color: AppColors.borderLight),
             const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.danger.withOpacity(0.07),
-                borderRadius: BorderRadius.circular(AppRadius.xs),
-                border: Border.all(color: AppColors.danger.withOpacity(0.2)),
+  
+            // Note
+            Text('NOTE',
+                style: cairo(fontSize: 10, fontWeight: FontWeight.w700,
+                    color: AppColors.textMuted, letterSpacing: 1.2)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _noteCtrl,
+              style: cairo(fontSize: 15),
+              decoration: InputDecoration(
+                hintText: 'e.g. Safe drop, float top-up…',
+                hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
+                prefixIcon: const Icon(Icons.notes_rounded,
+                    size: 16, color: AppColors.textMuted),
               ),
-              child: Row(children: [
-                const Icon(Icons.error_outline_rounded,
-                    size: 14, color: AppColors.danger),
-                const SizedBox(width: 8),
-                Text(_error!, style: cairo(fontSize: 13, color: AppColors.danger)),
-              ]),
+            ),
+  
+            // Error
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withOpacity(0.07),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
+                  border: Border.all(color: AppColors.danger.withOpacity(0.2)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.error_outline_rounded,
+                      size: 14, color: AppColors.danger),
+                  const SizedBox(width: 8),
+                  Text(_error!, style: cairo(fontSize: 13, color: AppColors.danger)),
+                ]),
+              ),
+            ],
+            const SizedBox(height: 20),
+  
+            // Submit
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                onPressed: _loading ? null : _submit,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isIn ? AppColors.success : AppColors.danger,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm)),
+                  elevation: 0,
+                ),
+                child: _loading
+                    ? const SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2.5, color: Colors.white))
+                    : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        Icon(_isIn
+                            ? Icons.add_circle_outline_rounded
+                            : Icons.remove_circle_outline_rounded,
+                            size: 18, color: Colors.white),
+                        const SizedBox(width: 8),
+                        Text(isOnline ? (_isIn ? 'Record Cash In' : 'Record Cash Out') : 'Queue Offline',
+                            style: cairo(fontSize: 15, fontWeight: FontWeight.w700,
+                                color: Colors.white)),
+                      ]),
+              ),
             ),
           ],
-          const SizedBox(height: 20),
-
-          // Submit
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: _loading ? null : _submit,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isIn ? AppColors.success : AppColors.danger,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.sm)),
-                elevation: 0,
-              ),
-              child: _loading
-                  ? const SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.5, color: Colors.white))
-                  : Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      Icon(_isIn
-                          ? Icons.add_circle_outline_rounded
-                          : Icons.remove_circle_outline_rounded,
-                          size: 18, color: Colors.white),
-                      const SizedBox(width: 8),
-                      Text(isOnline ? (_isIn ? 'Record Cash In' : 'Record Cash Out') : 'Queue Offline',
-                          style: cairo(fontSize: 15, fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                    ]),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

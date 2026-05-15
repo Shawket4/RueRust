@@ -124,118 +124,120 @@ class _VoidOrderSheetState extends ConsumerState<VoidOrderSheet> {
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       decoration: BoxDecoration(
           color: Colors.white, borderRadius: BorderRadius.circular(24)),
-      child: Column(mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Center(child: Container(width: 36, height: 4,
-            decoration: BoxDecoration(color: AppColors.border,
-                borderRadius: BorderRadius.circular(2)))),
-        const SizedBox(height: 16),
-        Text('Void Order #${widget.order.orderNumber}',
-            style: cairo(fontSize: 18, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        Text(
-          isOnline
-              ? 'This action cannot be undone'
-              : 'Offline — void will be queued and applied when reconnected',
-          style: cairo(fontSize: 13,
-              color: isOnline ? AppColors.textSecondary : AppColors.warning),
-        ),
-        const SizedBox(height: 20),
-        Text('Reason', style: cairo(fontSize: 12, fontWeight: FontWeight.w700,
-            color: AppColors.textMuted, letterSpacing: 0.5)),
-        const SizedBox(height: 8),
-        ...(_reasons.map((r) => RadioListTile<String>(
-          value: r.$1, groupValue: _reason,
-          onChanged: (v) => setState(() {
-            _reason = v;
-            _error = null;
-          }),
-          title: Text(r.$2, style: cairo(fontSize: 14)),
-          contentPadding: EdgeInsets.zero, dense: true,
-          activeColor: AppColors.danger,
-        ))),
-        
-        AnimatedSize(
-          duration: const Duration(milliseconds: 200),
-          child: _reason == 'other' 
-            ? Padding(
-                padding: const EdgeInsets.only(top: 8, left: 32, right: 16),
-                child: TextField(
-                  controller: _otherCtrl,
-                  style: cairo(fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Specify reason...',
-                    hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(AppRadius.xs),
-                        borderSide: const BorderSide(color: AppColors.border)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(AppRadius.xs),
-                        borderSide: const BorderSide(color: AppColors.danger)),
+      child: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Center(child: Container(width: 36, height: 4,
+              decoration: BoxDecoration(color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2)))),
+          const SizedBox(height: 16),
+          Text('Void Order #${widget.order.orderNumber}',
+              style: cairo(fontSize: 18, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          Text(
+            isOnline
+                ? 'This action cannot be undone'
+                : 'Offline — void will be queued and applied when reconnected',
+            style: cairo(fontSize: 13,
+                color: isOnline ? AppColors.textSecondary : AppColors.warning),
+          ),
+          const SizedBox(height: 20),
+          Text('Reason', style: cairo(fontSize: 12, fontWeight: FontWeight.w700,
+              color: AppColors.textMuted, letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          ...(_reasons.map((r) => RadioListTile<String>(
+            value: r.$1, groupValue: _reason,
+            onChanged: (v) => setState(() {
+              _reason = v;
+              _error = null;
+            }),
+            title: Text(r.$2, style: cairo(fontSize: 14)),
+            contentPadding: EdgeInsets.zero, dense: true,
+            activeColor: AppColors.danger,
+          ))),
+          
+          AnimatedSize(
+            duration: const Duration(milliseconds: 200),
+            child: _reason == 'other' 
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 8, left: 32, right: 16),
+                  child: TextField(
+                    controller: _otherCtrl,
+                    style: cairo(fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'Specify reason...',
+                      hintStyle: cairo(fontSize: 14, color: AppColors.textMuted),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.xs),
+                          borderSide: const BorderSide(color: AppColors.border)),
+                      focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.xs),
+                          borderSide: const BorderSide(color: AppColors.danger)),
+                    ),
                   ),
-                ),
-              )
-            : const SizedBox.shrink(),
-        ),
-
-        const SizedBox(height: 12), const Divider(), const SizedBox(height: 12),
-        Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            Text('Restore inventory',
-                style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 2),
-            Text('Return ingredients to stock',
-                style: cairo(fontSize: 12, color: AppColors.textSecondary)),
-          ])),
-          // Using custom AppToggle
-          AppToggle(
-              value: _restore,
-              onChanged: (v) => setState(() => _restore = v)),
+                )
+              : const SizedBox.shrink(),
+          ),
+  
+          const SizedBox(height: 12), const Divider(), const SizedBox(height: 12),
+          Row(children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Text('Restore inventory',
+                  style: cairo(fontSize: 14, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text('Return ingredients to stock',
+                  style: cairo(fontSize: 12, color: AppColors.textSecondary)),
+            ])),
+            // Using custom AppToggle
+            AppToggle(
+                value: _restore,
+                onChanged: (v) => setState(() => _restore = v)),
+          ]),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Container(padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: AppColors.danger.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.danger.withOpacity(0.2))),
+                child: Text(_error!, style: cairo(fontSize: 12, color: AppColors.danger))),
+          ],
+          const SizedBox(height: 20),
+          Row(children: [
+            Expanded(child: OutlinedButton(
+              onPressed: _loading ? null : () => Navigator.pop(context),
+              style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                  side: const BorderSide(color: AppColors.border),
+                  foregroundColor: AppColors.textSecondary),
+              child: Text('Cancel',
+                  style: cairo(fontSize: 14, fontWeight: FontWeight.w600)),
+            )),
+            const SizedBox(width: 12),
+            Expanded(child: ElevatedButton(
+              onPressed: _loading ? null : _submit,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.danger,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                  elevation: 0),
+              child: _loading
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : Text(isOnline ? 'Void Order' : 'Queue Void',
+                      style: cairo(fontSize: 14, fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+            )),
+          ]),
         ]),
-        if (_error != null) ...[
-          const SizedBox(height: 12),
-          Container(padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                  color: AppColors.danger.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.danger.withOpacity(0.2))),
-              child: Text(_error!, style: cairo(fontSize: 12, color: AppColors.danger))),
-        ],
-        const SizedBox(height: 20),
-        Row(children: [
-          Expanded(child: OutlinedButton(
-            onPressed: _loading ? null : () => Navigator.pop(context),
-            style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-                side: const BorderSide(color: AppColors.border),
-                foregroundColor: AppColors.textSecondary),
-            child: Text('Cancel',
-                style: cairo(fontSize: 14, fontWeight: FontWeight.w600)),
-          )),
-          const SizedBox(width: 12),
-          Expanded(child: ElevatedButton(
-            onPressed: _loading ? null : _submit,
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.danger,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-                elevation: 0),
-            child: _loading
-                ? const SizedBox(width: 18, height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : Text(isOnline ? 'Void Order' : 'Queue Void',
-                    style: cairo(fontSize: 14, fontWeight: FontWeight.w700,
-                        color: Colors.white)),
-          )),
-        ]),
-      ]),
+      ),
     );
   }
 }

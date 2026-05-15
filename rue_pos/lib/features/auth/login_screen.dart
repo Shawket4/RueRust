@@ -89,8 +89,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     final expiry = ref.watch(authProvider.select((s) => s.sessionExpiry));
     final blockedBy = ref.watch(authProvider.select((s) => s.blockedByName));
     final authError = ref.watch(authProvider.select((s) => s.error));
-    // Task 3.7: Device-type based sizing
-    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
+    
+    final size = MediaQuery.of(context).size;
+    final isTablet = size.shortestSide >= 600;
+    // Only use side-by-side layout if it's a tablet AND wide enough
+    final useSideBySide = isTablet && size.width >= 900;
 
     final displayError = expiry == SessionExpiry.blockedByOtherShift
         ? null
@@ -98,17 +101,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: isTablet
+      body: useSideBySide
           ? _TabletLayout(
               form: _buildForm(
               expiry: expiry,
               blockedBy: blockedBy,
               displayError: displayError,
+              isWide: true,
             ))
           : _buildForm(
               expiry: expiry,
               blockedBy: blockedBy,
               displayError: displayError,
+              isWide: false,
             ),
     );
   }
@@ -117,12 +122,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     required SessionExpiry expiry,
     required String? blockedBy,
     required String? displayError,
+    required bool isWide,
   }) {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
+          constraints: BoxConstraints(maxWidth: isWide ? 420 : 380),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Image.asset('assets/TheRue.png', height: 48),
             const SizedBox(height: 8),

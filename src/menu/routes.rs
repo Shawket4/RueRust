@@ -37,7 +37,18 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route("/{id}/optionals",              web::get().to(list_optional_fields))
                 .route("/{id}/optionals",              web::post().to(create_optional_field))
                 .route("/{id}/optionals/{field_id}",   web::patch().to(update_optional_field))
-                .route("/{id}/optionals/{field_id}",   web::delete().to(delete_optional_field)),
+                .route("/{id}/optionals/{field_id}",   web::delete().to(delete_optional_field))
+
+                // Addon overrides
+                .route("/{id}/overrides",                web::get().to(list_addon_overrides))
+                .route("/{id}/overrides",                web::post().to(upsert_addon_override))
+                .route("/{id}/overrides/{override_id}",  web::delete().to(delete_addon_override)),
+        )
+
+        // ── Public Menu ───────────────────────────────────────────────────────
+        .service(
+            web::scope("/menu/public")
+                .route("/{org_id}", web::get().to(get_public_menu))
         )
 
         // ── Addon items ───────────────────────────────────────────────────────

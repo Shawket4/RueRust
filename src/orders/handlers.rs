@@ -829,9 +829,7 @@ pub async fn list_orders(
 
     let mut data_filter  = String::new();
     let mut count_filter = String::new();
-    #[allow(unused_assignments)]
-    let mut data_idx  = 4i32;
-    #[allow(unused_assignments)]
+    let mut data_idx  = 2i32;
     let mut count_idx = 2i32;
 
     macro_rules! push_filter {
@@ -853,12 +851,18 @@ pub async fn list_orders(
     push_filter!("o.updated_at >",           query.updated_after);
 
     let data_sql = format!(
-        "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT $2 OFFSET $3",
-        ORDER_SELECT, scope_condition, data_filter
+        "{} WHERE {} {} ORDER BY o.created_at DESC LIMIT ${} OFFSET ${}",
+        ORDER_SELECT, scope_condition, data_filter, data_idx, data_idx + 1
     );
     let count_sql = format!(
         "SELECT COUNT(*) FROM orders o JOIN users u ON u.id = o.teller_id WHERE {} {}",
         scope_condition, count_filter
+    );
+
+    tracing::debug!(
+        data_params = data_idx + 1,
+        count_params = count_idx - 1,
+        "List orders filters constructed"
     );
 
     macro_rules! bind_filters {
@@ -900,9 +904,9 @@ pub async fn list_orders(
     let data: Vec<Order> = bind_filters!(
         sqlx::query_as::<_, Order>(&data_sql)
             .bind(scope_id)
-            .bind(per_page)
-            .bind(offset)
     )
+    .bind(per_page)
+    .bind(offset)
     .fetch_all(pool.get_ref())
     .await?;
 
